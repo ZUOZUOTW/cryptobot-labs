@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 const NAVIGATION_LINKS = [
@@ -10,9 +11,9 @@ const NAVIGATION_LINKS = [
 
 function NavigationLinks() {
   return NAVIGATION_LINKS.map(({ href, label }) => (
-    <a className="site-nav__link" href={href} key={href}>
+    <Link className="site-nav__link" href={href} key={href}>
       {label}
-    </a>
+    </Link>
   ));
 }
 
@@ -25,7 +26,7 @@ export function SiteHeader() {
         跳至主要內容
       </a>
       <div className="site-container site-header__inner">
-        <a className="brand" href="/" aria-label="CryptoBot Labs 首頁">
+        <Link className="brand" href="/" aria-label="CryptoBot Labs 首頁">
           <span className="brand__orbit" aria-hidden="true">
             <span className="brand__core" />
           </span>
@@ -33,7 +34,7 @@ export function SiteHeader() {
             <strong>CryptoBot</strong>
             <span>Labs</span>
           </span>
-        </a>
+        </Link>
 
         <nav className="site-nav site-nav--desktop" aria-label="主要導覽">
           <NavigationLinks />

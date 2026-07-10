@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export const SIMULATION_DISCLOSURE = "模擬回測資料，不代表未來績效";
 
 export function SiteFooter() {
@@ -5,7 +7,7 @@ export function SiteFooter() {
     <footer className="site-footer">
       <div className="site-container site-footer__inner">
         <div className="site-footer__brand">
-          <a className="brand brand--footer" href="/" aria-label="CryptoBot Labs 首頁">
+          <Link className="brand brand--footer" href="/" aria-label="CryptoBot Labs 首頁">
             <span className="brand__orbit" aria-hidden="true">
               <span className="brand__core" />
             </span>
@@ -13,7 +15,7 @@ export function SiteFooter() {
               <strong>CryptoBot</strong>
               <span>Labs</span>
             </span>
-          </a>
+          </Link>
           <p>WEEX 專屬自動交易策略實驗室</p>
         </div>
 
