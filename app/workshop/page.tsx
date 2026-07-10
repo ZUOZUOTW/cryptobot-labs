@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
+import { JavaScriptEditor, WEEX_JAVASCRIPT_TEMPLATE } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
+import { PackagePanel } from "../../components/workshop/PackagePanel";
 import { StrategyPalette } from "../../components/workshop/StrategyPalette";
 import { StrategySummary } from "../../components/workshop/StrategySummary";
 import { STRATEGY_PRESETS } from "../../data/strategies";
+import { backtestConfigFingerprint } from "../../lib/backtest";
 import { loadDraft, saveDraft } from "../../lib/storage";
-import type { BotConfig, StrategyBlock } from "../../lib/types";
+import type { BacktestReport, BotConfig, StrategyBlock } from "../../lib/types";
 import { validateConfig } from "../../lib/strategy-validation";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
@@ -21,20 +24,34 @@ const cloneConfig = (config: BotConfig): BotConfig => ({
 });
 
 const DEFAULT_CONFIG = cloneConfig(STRATEGY_PRESETS[0]);
+type WorkshopMode = "visual" | "javascript";
+
+interface AssociatedReport {
+  fingerprint: string;
+  report: BacktestReport;
+}
 
 export default function WorkshopPage() {
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [draftError, setDraftError] = useState("");
+  const [mode, setMode] = useState<WorkshopMode>("visual");
+  const [associatedReport, setAssociatedReport] = useState<AssociatedReport | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const draft = loadDraft();
-      if (draft) setConfig(cloneConfig(draft));
+      const next = draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
+      const requestedJavaScript = new URLSearchParams(window.location.search).get("mode") === "javascript";
+      if (requestedJavaScript && next.source === undefined) next.source = WEEX_JAVASCRIPT_TEMPLATE;
+      if (requestedJavaScript || next.source !== undefined) setMode("javascript");
+      setConfig(next);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
   const validation = useMemo(() => validateConfig(config), [config]);
+  const configFingerprint = useMemo(() => backtestConfigFingerprint(config), [config]);
+  const currentReport = associatedReport?.fingerprint === configFingerprint ? associatedReport.report : null;
 
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
     const next = createNext(config);
@@ -77,6 +94,24 @@ export default function WorkshopPage() {
     return { ...current, [key]: value };
   });
 
+  const selectMode = (nextMode: WorkshopMode) => {
+    setMode(nextMode);
+    if (nextMode === "javascript" && config.source === undefined) {
+      updateConfig((current) => ({ ...current, source: WEEX_JAVASCRIPT_TEMPLATE }));
+    }
+  };
+
+  const updateSource = (source: string) => updateConfig((current) => ({ ...current, source }));
+  const acceptReport = (report: BacktestReport) => setAssociatedReport({ fingerprint: configFingerprint, report });
+  const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
+    const next = cloneConfig(importedConfig);
+    const saved = saveDraft(next);
+    setDraftError(saved.ok ? "" : saved.reason);
+    setConfig(next);
+    setMode(next.source === undefined ? "visual" : "javascript");
+    setAssociatedReport({ fingerprint: backtestConfigFingerprint(next), report });
+  };
+
   return (
     <div className="workshop-page site-container">
       <header className="page-intro workshop-page__intro">
@@ -88,19 +123,34 @@ export default function WorkshopPage() {
 
       {draftError && <p className="draft-status" role="status">{draftError}</p>}
 
+      <div className="workshop-mode" aria-label="編輯模式" role="group">
+        <button aria-pressed={mode === "visual"} onClick={() => selectMode("visual")} type="button">視覺化模式</button>
+        <button aria-pressed={mode === "javascript"} onClick={() => selectMode("javascript")} type="button">JavaScript 模式</button>
+      </div>
+
       <div className="workshop-grid">
-        <StrategyPalette
-          onAdd={addBlock}
-          onMove={moveBlock}
-          onPreset={selectPreset}
-          onRemove={removeBlock}
-          selected={config.blocks}
-        />
+        {mode === "visual" ? (
+          <StrategyPalette
+            onAdd={addBlock}
+            onMove={moveBlock}
+            onPreset={selectPreset}
+            onRemove={removeBlock}
+            selected={config.blocks}
+          />
+        ) : (
+          <JavaScriptEditor source={config.source ?? WEEX_JAVASCRIPT_TEMPLATE} onChange={updateSource} />
+        )}
         <ParameterPanel config={config} onConfigField={updateField} onParameter={updateParameter} />
         <div className="workshop-grid__results">
           <StrategySummary config={config} validation={validation} />
-          <BacktestPanel config={config} validation={validation} />
+          <BacktestPanel
+            config={config}
+            onReport={acceptReport}
+            restoredReport={currentReport}
+            validation={validation}
+          />
         </div>
+        <PackagePanel config={config} onImport={acceptImport} report={currentReport} />
       </div>
     </div>
   );

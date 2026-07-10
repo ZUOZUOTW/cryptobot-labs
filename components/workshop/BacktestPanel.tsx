@@ -24,6 +24,8 @@ interface BacktestPanelProps {
   config: BotConfig;
   validation: ValidationResult;
   executeBacktest?: typeof runBacktest;
+  restoredReport?: BacktestReport | null;
+  onReport?: (report: BacktestReport) => void;
 }
 
 interface AssociatedReport {
@@ -31,27 +33,44 @@ interface AssociatedReport {
   report: BacktestReport;
 }
 
-export function BacktestPanel({ config, validation, executeBacktest = runBacktest }: BacktestPanelProps) {
+export function BacktestPanel({
+  config,
+  validation,
+  executeBacktest = runBacktest,
+  restoredReport = null,
+  onReport,
+}: BacktestPanelProps) {
   const configFingerprint = backtestConfigFingerprint(config);
+  const sessionKey = `${configFingerprint}:${restoredReport ? JSON.stringify(restoredReport) : ""}`;
 
   return (
     <BacktestPanelSession
       config={config}
       configFingerprint={configFingerprint}
       executeBacktest={executeBacktest}
-      key={configFingerprint}
+      key={sessionKey}
+      onReport={onReport}
+      restoredReport={restoredReport}
       validation={validation}
     />
   );
 }
 
-interface BacktestPanelSessionProps extends Required<BacktestPanelProps> {
+interface BacktestPanelSessionProps {
+  config: BotConfig;
   configFingerprint: string;
+  executeBacktest: typeof runBacktest;
+  validation: ValidationResult;
+  restoredReport: BacktestReport | null;
+  onReport?: (report: BacktestReport) => void;
 }
 
-function BacktestPanelSession({ config, configFingerprint, validation, executeBacktest }: BacktestPanelSessionProps) {
-  const [state, setState] = useState<BacktestState>("idle");
-  const [completedReport, setCompletedReport] = useState<AssociatedReport | null>(null);
+function BacktestPanelSession({ config, configFingerprint, validation, executeBacktest, restoredReport, onReport }: BacktestPanelSessionProps) {
+  const [state, setState] = useState<BacktestState>(restoredReport ? "complete" : "idle");
+  const [completedReport, setCompletedReport] = useState<AssociatedReport | null>(restoredReport ? {
+    configFingerprint,
+    report: restoredReport,
+  } : null);
   const [errors, setErrors] = useState<string[]>([]);
   const report = completedReport?.configFingerprint === configFingerprint ? completedReport.report : null;
   const reportKey = useMemo(() => report ? JSON.stringify(report) : "", [report]);
@@ -74,7 +93,9 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
     if (state !== "running") return;
     const timer = window.setTimeout(() => {
       try {
-        setCompletedReport({ configFingerprint, report: executeBacktest(config) });
+        const nextReport = executeBacktest(config);
+        setCompletedReport({ configFingerprint, report: nextReport });
+        onReport?.(nextReport);
         setState("complete");
       } catch (error) {
         setErrors([error instanceof Error ? error.message : "回測發生未知錯誤"]);
@@ -82,7 +103,7 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
       }
     }, 160);
     return () => window.clearTimeout(timer);
-  }, [config, configFingerprint, executeBacktest, state]);
+  }, [config, configFingerprint, executeBacktest, onReport, state]);
 
   const run = () => {
     setErrors([]);

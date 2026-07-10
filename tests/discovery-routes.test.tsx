@@ -156,7 +156,7 @@ describe("bot detail route", () => {
       const { unmount } = render(view);
       expect(screen.getByRole("heading", { level: 1, name: bot.name })).toBeInTheDocument();
       expect(screen.getAllByRole("link", { name: "複製到組裝車間" }).every((link) => link.getAttribute("href") === `/workshop?bot=${bot.id}`)).toBe(true);
-      expect(screen.getAllByRole("button", { name: `下載官方策略包 ${bot.name}` }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole("button", { name: `快速下載 ${bot.name}` }).length).toBeGreaterThan(0);
       unmount();
     }
   });

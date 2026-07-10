@@ -49,7 +49,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
           </div>
           <div className="bot-detail-hero__actions">
             <Link className="button button--primary" href={`/workshop?bot=${bot.id}`}>複製到組裝車間</Link>
-            <BotDownloadButton bot={bot} className="button button--secondary" label="下載官方策略包" />
+            <BotDownloadButton bot={bot} className="button button--secondary" />
           </div>
         </div>
         <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
@@ -112,7 +112,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
 
       <section className="detail-section detail-cta site-container glass-panel">
         <div><p className="eyebrow">CUSTOMIZE OR DOWNLOAD</p><h2>把官方策略變成你的版本。</h2><p>先複製到組裝車間調整參數，或下載固定 WEEX 設定的官方策略包。</p></div>
-        <div className="button-row"><Link className="button button--primary" href={`/workshop?bot=${bot.id}`}>複製到組裝車間</Link><BotDownloadButton bot={bot} className="button button--secondary" label="下載官方策略包" /></div>
+        <div className="button-row"><Link className="button button--primary" href={`/workshop?bot=${bot.id}`}>複製到組裝車間</Link><BotDownloadButton bot={bot} className="button button--secondary" /></div>
       </section>
     </article>
   );
