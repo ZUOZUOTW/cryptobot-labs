@@ -53,6 +53,15 @@ async function completeBacktest() {
   });
 }
 
+function readBlobText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result)));
+    reader.addEventListener("error", () => reject(reader.error));
+    reader.readAsText(blob);
+  });
+}
+
 describe("multi-strategy workshop", () => {
   it("offers accessible visual and JavaScript modes plus a ZIP file input", async () => {
     const user = userEvent.setup();
@@ -349,7 +358,7 @@ describe("multi-strategy workshop", () => {
       new File(["zip"], "cannot-save.zip", { type: "application/zip" }),
     );
 
-    expect(await screen.findByText(/無法儲存匯入策略草稿，請立即下載策略套件備份/)).toBeInTheDocument();
+    expect(await screen.findByText(/無法儲存匯入策略草稿，請立即下載草稿備份 JSON/)).toBeInTheDocument();
     expect(screen.getByText(/已匯入 cannot-save\.zip/)).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("MACD 動能");
     expect(screen.getByRole("region", { name: "回測結果" })).toBeInTheDocument();
@@ -542,9 +551,70 @@ describe("multi-strategy workshop", () => {
 
     await user.click(screen.getByRole("button", { name: "加入 RSI Rebound" }));
 
-    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿，請立即下載策略套件備份");
-    expect(screen.getByRole("status")).toHaveTextContent("記憶體中的目前內容仍可立即匯出");
+    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿，請立即下載草稿備份 JSON");
+    expect(screen.getByRole("status")).toHaveTextContent("目前內容仍保留在記憶體中");
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("RSI Rebound");
+  });
+
+  it("downloads an incomplete invalid draft backup independently of package readiness", async () => {
+    const user = userEvent.setup();
+    const objectUrl = "blob:invalid-draft-backup";
+    let downloadedBlob: Blob | undefined;
+    let clickedDownload = "";
+    let clickedWhileConnected = false;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn((blob: Blob) => {
+        downloadedBlob = blob;
+        return objectUrl;
+      }),
+    });
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      clickedDownload = this.download;
+      clickedWhileConnected = this.isConnected;
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "建立空白策略" }));
+    await user.click(screen.getByRole("button", { name: "JavaScript 模式" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "JavaScript 策略原始碼" }), {
+      target: { value: "const exchange = 'WEEX'; const = ;" },
+    });
+
+    expect(screen.getByRole("button", { name: "下載草稿備份 JSON" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "下載草稿備份 JSON" }));
+
+    expect(clickedDownload).toBe("untitled-strategy-draft-backup.json");
+    expect(clickedWhileConnected).toBe(true);
+    expect(downloadedBlob).toBeInstanceOf(Blob);
+    expect(downloadedBlob).toHaveProperty("type", "application/json");
+    await expect(readBlobText(downloadedBlob!)).resolves.toContain('"blocks": []');
+    await expect(readBlobText(downloadedBlob!)).resolves.toContain("const exchange = 'WEEX'; const = ;");
+    expect(document.body.querySelector(`a[href="${objectUrl}"]`)).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+  });
+
+  it("offers a truthful blank draft backup when reset persistence fails", async () => {
+    const user = userEvent.setup();
+    let clickedDownload = "";
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:blank-draft-backup") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      clickedDownload = this.download;
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "建立空白策略" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿");
+    expect(screen.getByRole("status")).toHaveTextContent("草稿備份不是可執行策略套件");
+    await user.click(screen.getByRole("button", { name: "下載草稿備份 JSON" }));
+    expect(clickedDownload).toBe("untitled-strategy-draft-backup.json");
   });
 
   it("ignores an unreadable saved draft and starts from the safe default", () => {

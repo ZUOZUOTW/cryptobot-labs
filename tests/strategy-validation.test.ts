@@ -185,6 +185,20 @@ describe("validateConfig", () => {
     const source = `export const strategy = { exchange: 'WEEX', ${field}: '${sourceValue}' };`;
     expect(validateConfig({ ...validConfig, source }).errors).toContain(error);
   });
+
+  it.each([
+    [
+      "mismatched strategy object before matching display object",
+      "const strategy = { exchange: 'WEEX', symbol: 'ETHUSDT' }; const display = { symbol: 'BTCUSDT' };",
+    ],
+    [
+      "matching display object before mismatched strategy object",
+      "const display = { symbol: 'BTCUSDT' }; const strategy = { exchange: 'WEEX', symbol: 'ETHUSDT' };",
+    ],
+  ])("rejects every recognized source value when %s", (_case, source) => {
+    expect(validateConfig({ ...validConfig, source }).errors)
+      .toContain("JavaScript 的交易對（ETHUSDT）與策略設定（BTCUSDT）不一致");
+  });
 });
 
 describe("validateJavaScript", () => {

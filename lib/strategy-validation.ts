@@ -399,7 +399,7 @@ const sourceConfigErrors = (source: string, config: BotConfig): string[] => {
     return [];
   }
   const bindings = immutableStaticBindings(syntaxTree);
-  const found = new Map<keyof typeof SOURCE_CONFIG_FIELDS, string>();
+  const found = new Map<keyof typeof SOURCE_CONFIG_FIELDS, Set<string>>();
   walkAst(syntaxTree, (node) => {
     let key: string | undefined;
     let rawValue: unknown;
@@ -416,13 +416,18 @@ const sourceConfigErrors = (source: string, config: BotConfig): string[] => {
     const normalized = key?.toLowerCase() as keyof typeof SOURCE_CONFIG_FIELDS | undefined;
     if (!normalized || !(normalized in SOURCE_CONFIG_FIELDS)) return;
     const resolved = staticStringValue(rawValue, bindings);
-    if (resolved !== undefined) found.set(normalized, resolved);
+    if (resolved !== undefined) {
+      const values = found.get(normalized) ?? new Set<string>();
+      values.add(resolved);
+      found.set(normalized, values);
+    }
   });
   const errors: string[] = [];
   for (const field of Object.keys(SOURCE_CONFIG_FIELDS) as Array<keyof typeof SOURCE_CONFIG_FIELDS>) {
-    const sourceValue = found.get(field);
-    if (sourceValue !== undefined && sourceValue !== config[field]) {
-      errors.push(`JavaScript 的${SOURCE_CONFIG_FIELDS[field]}（${sourceValue}）與策略設定（${config[field]}）不一致`);
+    for (const sourceValue of found.get(field) ?? []) {
+      if (sourceValue !== config[field]) {
+        errors.push(`JavaScript 的${SOURCE_CONFIG_FIELDS[field]}（${sourceValue}）與策略設定（${config[field]}）不一致`);
+      }
     }
   }
   return errors;

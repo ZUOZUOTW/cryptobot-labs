@@ -10,9 +10,10 @@ import { StrategySummary } from "../../components/workshop/StrategySummary";
 import { BOT_CATALOG } from "../../data/bots";
 import { STRATEGY_PRESETS } from "../../data/strategies";
 import { backtestConfigFingerprint } from "../../lib/backtest";
+import { downloadBlob } from "../../lib/browser-download";
 import { loadDraft, saveDraft } from "../../lib/storage";
 import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "../../lib/types";
-import { validateConfig } from "../../lib/strategy-validation";
+import { validateConfig, validateDraftConfig } from "../../lib/strategy-validation";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -44,6 +45,13 @@ const blankConfig = (): BotConfig => ({
   name: "未命名策略",
   blocks: [],
 });
+const draftBackupFilename = (config: BotConfig): string => {
+  const slug = config.id.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `${slug || "weex-strategy"}-draft-backup.json`;
+};
+const draftSaveWarning = (reason: string): string => (
+  `${reason}，請立即下載草稿備份 JSON。此草稿備份不是可執行策略套件；目前內容仍保留在記憶體中。`
+);
 type WorkshopMode = "visual" | "javascript";
 
 interface AssociatedReport {
@@ -80,7 +88,7 @@ export default function WorkshopPage() {
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
     const next = createNext(config);
     const saved = saveDraft(next);
-    setDraftError(saved.ok ? "" : `${saved.reason}，請立即下載策略套件備份。記憶體中的目前內容仍可立即匯出。`);
+    setDraftError(saved.ok ? "" : draftSaveWarning(saved.reason));
     setConfig(next);
   };
 
@@ -141,7 +149,7 @@ export default function WorkshopPage() {
   const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
     const next = cloneConfig(importedConfig);
     const saved = saveDraft(next);
-    setDraftError(saved.ok ? "" : "無法儲存匯入策略草稿，請立即下載策略套件備份。記憶體中的匯入內容仍可立即匯出。");
+    setDraftError(saved.ok ? "" : draftSaveWarning("無法儲存匯入策略草稿"));
     setConfig(next);
     setMode(next.source === undefined ? "visual" : "javascript");
     setAssociatedReport({ fingerprint: backtestConfigFingerprint(next), report });
@@ -151,11 +159,17 @@ export default function WorkshopPage() {
   const resetToBlank = () => {
     const next = blankConfig();
     const saved = saveDraft(next);
-    setDraftError(saved.ok ? "" : saved.reason);
+    setDraftError(saved.ok ? "" : draftSaveWarning(saved.reason));
     setConfig(next);
     setMode("visual");
     setAssociatedReport(null);
     setMobileMessage("已建立空白策略，請加入進場與出場或風控規則。");
+  };
+
+  const downloadDraftBackup = () => {
+    if (!validateDraftConfig(config).valid) return;
+    const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: "application/json" });
+    downloadBlob(blob, draftBackupFilename(config));
   };
 
   return (
@@ -167,7 +181,16 @@ export default function WorkshopPage() {
         <p className="simulation-disclosure" role="note">模擬回測資料，不代表未來績效</p>
       </header>
 
-      {draftError && <p className="draft-status" role="status">{draftError}</p>}
+      {draftError && (
+        <div className="draft-status" role="status">
+          <p>{draftError}</p>
+          {validateDraftConfig(config).valid && (
+            <button className="button button--secondary" onClick={downloadDraftBackup} type="button">
+              下載草稿備份 JSON
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="workshop-mode" aria-label="編輯模式" role="group">
         <button aria-pressed={mode === "visual"} onClick={() => selectMode("visual")} type="button">視覺化模式</button>
