@@ -5,27 +5,32 @@ import { describe, expect, it } from "vitest";
 const readProjectFile = (path: string) =>
   readFile(resolve(process.cwd(), path), "utf8");
 
-describe("CryptoBot Labs starter surface", () => {
+describe("CryptoBot Labs production shell", () => {
   it("uses product metadata and Traditional Chinese document language", async () => {
     const [layout, page] = await Promise.all([
       readProjectFile("app/layout.tsx"),
       readProjectFile("app/page.tsx"),
     ]);
 
-    expect(layout).toContain('title: "CryptoBot Labs"');
+    expect(layout).toContain('title: "CryptoBot Labs｜WEEX 自動交易策略實驗室"');
     expect(layout).toContain('<html lang="zh-Hant">');
-    expect(page).toContain('title: "CryptoBot Labs"');
-    expect(page).not.toContain("Your site is taking shape");
+    expect(layout).toContain("<SiteHeader />");
+    expect(layout).toContain("<SiteFooter />");
+    expect(layout).toContain('<main className="site-main" id="main-content"');
+    expect(page).not.toContain("metadata");
+    expect(page).not.toContain("SkeletonPreview");
   });
 
-  it("shows a temporary Traditional Chinese loading message", async () => {
-    const preview = await readProjectFile(
-      "app/_sites-preview/SkeletonPreview.tsx",
-    );
+  it("ships the Orbital Lab tokens and global simulation disclosure", async () => {
+    const [styles, footer] = await Promise.all([
+      readProjectFile("app/globals.css"),
+      readProjectFile("components/SiteFooter.tsx"),
+    ]);
 
-    expect(preview).toContain(">CryptoBot Labs<");
-    expect(preview).toContain("交易機器人工作台正在準備中");
-    expect(preview).toContain("完成後將自動顯示");
-    expect(preview).not.toContain("Codex is working");
+    expect(styles).toContain("--bg: #06070b");
+    expect(styles).toContain("--violet: #8b63ff");
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(footer).toContain("模擬回測資料，不代表未來績效");
+    expect(footer).toContain("本原型僅支援 WEEX");
   });
 });
