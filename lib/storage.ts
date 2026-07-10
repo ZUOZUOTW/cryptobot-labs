@@ -1,4 +1,4 @@
-import { validateConfig } from "./strategy-validation";
+import { hasBotConfigShape, validateConfig } from "./strategy-validation";
 import type { BotConfig } from "./types";
 
 const DRAFT_STORAGE_KEY = "cryptobot-labs:draft:v1";
@@ -20,8 +20,9 @@ export const loadDraft = (): BotConfig | null => {
   try {
     const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
     if (raw === null) return null;
-    const config = JSON.parse(raw) as BotConfig;
-    return validateConfig(config).valid ? config : null;
+    const config = JSON.parse(raw) as unknown;
+    if (!hasBotConfigShape(config) || !validateConfig(config).valid) return null;
+    return config as BotConfig;
   } catch {
     return null;
   }

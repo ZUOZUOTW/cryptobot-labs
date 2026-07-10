@@ -77,6 +77,15 @@ describe("validateConfig", () => {
     expect(validateConfig(validConfig).valid).toBe(true);
   });
 
+  it.each([
+    null,
+    [],
+    { ...validConfig, name: "" },
+    { ...validConfig, blocks: [{ ...entryBlock, parameters: null }] },
+  ])("rejects malformed runtime config shapes without throwing", (config) => {
+    expect(validateConfig(config).errors).toContain("策略設定格式不正確");
+  });
+
   it("rejects non-WEEX configs", () => {
     expect(validateConfig({ ...validConfig, exchange: "BINANCE" as "WEEX" }).errors).toContain("只支援 WEEX 交易所");
   });

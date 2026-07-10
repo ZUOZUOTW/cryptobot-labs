@@ -6,8 +6,57 @@ export interface ValidationResult {
 }
 
 export type SourceValidationResult = ValidationResult;
+export type BotConfigCandidate = Omit<BotConfig, "exchange"> & { exchange: string };
 
 const FORBIDDEN = ["binance", "okx", "bybit", "coinbase", "kraken", "api.binance.com", "api.bybit.com"];
+const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
+
+type UnknownRecord = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is UnknownRecord => (
+  value !== null && typeof value === "object" && !Array.isArray(value)
+);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isNonEmptyString = (value: unknown): value is string => isString(value) && value.trim().length > 0;
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+const isStrategyParameter = (value: unknown): boolean => (
+  isRecord(value)
+  && isNonEmptyString(value.key)
+  && isString(value.label)
+  && isFiniteNumber(value.value)
+  && isFiniteNumber(value.min)
+  && isFiniteNumber(value.max)
+  && isFiniteNumber(value.step)
+  && (value.suffix === undefined || isString(value.suffix))
+);
+
+const isStrategyBlock = (value: unknown): boolean => (
+  isRecord(value)
+  && isNonEmptyString(value.id)
+  && isNonEmptyString(value.name)
+  && isString(value.description)
+  && isString(value.group)
+  && STRATEGY_GROUPS.some((group) => group === value.group)
+  && Array.isArray(value.parameters)
+  && value.parameters.every(isStrategyParameter)
+);
+
+export const hasBotConfigShape = (value: unknown): value is BotConfigCandidate => (
+  isRecord(value)
+  && isNonEmptyString(value.id)
+  && isNonEmptyString(value.name)
+  && isNonEmptyString(value.exchange)
+  && (value.market === "spot" || value.market === "futures")
+  && isNonEmptyString(value.symbol)
+  && isNonEmptyString(value.timeframe)
+  && (value.logicMode === "all" || value.logicMode === "any")
+  && isFiniteNumber(value.leverage)
+  && Array.isArray(value.blocks)
+  && value.blocks.every(isStrategyBlock)
+  && (value.source === undefined || isString(value.source))
+);
 
 export const validateJavaScript = (source: string): SourceValidationResult => {
   const lowered = source.toLowerCase();
@@ -21,7 +70,9 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
   return { valid: errors.length === 0, errors };
 };
 
-export const validateConfig = (config: BotConfig): ValidationResult => {
+export const validateConfig = (value: unknown): ValidationResult => {
+  if (!hasBotConfigShape(value)) return { valid: false, errors: ["策略設定格式不正確"] };
+  const config = value;
   const errors: string[] = [];
 
   if (config.exchange !== "WEEX") errors.push("只支援 WEEX 交易所");

@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STRATEGY_PRESETS } from "../data/strategies";
 import { runBacktest } from "../lib/backtest";
 import { exportBotPackage, importBotPackage } from "../lib/bot-package";
@@ -46,16 +46,18 @@ describe("bot package", () => {
     expect(imported).toEqual({ config: configWithSource, report });
   });
 
-  it("writes one generated source consistently and restores it into configs without source", async () => {
+  it("preserves an absent config source while validating the generated strategy source", async () => {
     const report = runBacktest(validConfig);
     const blob = await exportBotPackage(validConfig, report);
     const zip = await JSZip.loadAsync(blob);
     const packagedConfig = JSON.parse(await zip.file("bot-config.json")!.async("string")) as BotConfig;
     const packagedSource = await zip.file("strategy.js")!.async("string");
 
-    expect(packagedConfig.source).toBe(packagedSource);
+    expect(packagedConfig).toEqual(validConfig);
+    expect(packagedConfig).not.toHaveProperty("source");
+    expect(packagedSource).toContain("WEEX");
     await expect(importBotPackage(new File([blob], "bot.zip"))).resolves.toEqual({
-      config: packagedConfig,
+      config: validConfig,
       report,
     });
   });
@@ -211,6 +213,7 @@ describe("bot package", () => {
 
 describe("draft storage", () => {
   beforeEach(() => localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
 
   it("saves and loads a draft from the fixed storage key", () => {
     expect(saveDraft(validConfig)).toEqual({ ok: true });
@@ -224,18 +227,36 @@ describe("draft storage", () => {
     expect(loadDraft()).toBeNull();
   });
 
+  it.each([
+    { ...validConfig, id: "" },
+    { ...validConfig, blocks: [{ ...validConfig.blocks[0], parameters: null }] },
+  ])("rejects a structurally malformed draft on save", (malformedConfig) => {
+    expect(saveDraft(malformedConfig as unknown as BotConfig)).toEqual({
+      ok: false,
+      reason: "策略設定無效：策略設定格式不正確",
+    });
+    expect(localStorage.getItem("cryptobot-labs:draft:v1")).toBeNull();
+  });
+
+  it.each([
+    { ...validConfig, symbol: "" },
+    { ...validConfig, blocks: "not-an-array" },
+  ])("returns null for a structurally malformed stored draft", (malformedConfig) => {
+    localStorage.setItem("cryptobot-labs:draft:v1", JSON.stringify(malformedConfig));
+
+    expect(loadDraft()).toBeNull();
+  });
+
   it("returns a failure result instead of throwing when storage fails", () => {
     const error = new Error("quota exceeded");
-    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw error; });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw error; });
 
     expect(saveDraft(validConfig)).toEqual({ ok: false, reason: "無法儲存策略草稿" });
-    setItem.mockRestore();
   });
 
   it("returns null instead of throwing when storage cannot be read", () => {
-    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
 
     expect(loadDraft()).toBeNull();
-    getItem.mockRestore();
   });
 });
