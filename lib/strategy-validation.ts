@@ -10,7 +10,8 @@ export type SourceValidationResult = ValidationResult;
 export type BotConfigCandidate = Omit<BotConfig, "exchange"> & { exchange: string };
 
 const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
-const HTTP_URL_PATTERN = /https?:\/\/[^\s"'`<>()\[\]{}]+/gi;
+const NETWORK_URL_CANDIDATE_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/.*?(?=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/|[\s"'`<>]|$)/g;
+const SUPPORTED_NETWORK_SCHEMES = new Set(["http", "https", "ws", "wss"]);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -156,11 +157,30 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
 
     const staticValue = staticStringValue(node);
     if (staticValue === undefined) return;
-    for (const match of staticValue.matchAll(HTTP_URL_PATTERN)) {
-      let hostname: string;
+    for (const match of staticValue.matchAll(NETWORK_URL_CANDIDATE_PATTERN)) {
+      const candidate = match[0];
+      const scheme = candidate.slice(0, candidate.indexOf(":")).toLowerCase();
+      if (!SUPPORTED_NETWORK_SCHEMES.has(scheme)) {
+        errors.push(`不支援的網路協定：${scheme}`);
+        continue;
+      }
+
+      let url: URL;
       try {
-        hostname = new URL(match[0]).hostname.toLowerCase();
+        url = new URL(candidate);
       } catch {
+        errors.push(`偵測到無效網路網址：${candidate}`);
+        continue;
+      }
+
+      if (url.username !== "" || url.password !== "") {
+        errors.push("網路網址不得包含使用者資訊");
+        continue;
+      }
+
+      const hostname = url.hostname.toLowerCase();
+      if (hostname === "") {
+        errors.push(`偵測到無效網路網址：${candidate}`);
         continue;
       }
       if (hostname === "weex.com" || hostname.endsWith(".weex.com")) {

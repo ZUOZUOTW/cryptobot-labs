@@ -222,6 +222,44 @@ describe("validateJavaScript", () => {
   });
 
   it.each([
+    ["wss://api.kucoin.com/ws", "api.kucoin.com"],
+    ["ws://api.bitget.com/ws", "api.bitget.com"],
+    ["https://[::1]/api", new URL("https://[::1]/api").hostname],
+  ])("rejects supported network URL %s when its host is outside WEEX", (url, hostname) => {
+    const source = `const exchange = 'WEEX'; const endpoint = '${url}';`;
+
+    expect(validateJavaScript(source).errors).toContain(`偵測到非 WEEX 網域：${hostname}`);
+  });
+
+  it("rejects URL credentials even when the parsed hostname is allowed", () => {
+    const source = "const exchange = 'WEEX'; const endpoint = 'https://api.kucoin.com@weex.com/private';";
+
+    expect(validateJavaScript(source).errors).toContain("網路網址不得包含使用者資訊");
+  });
+
+  it("rejects unsupported network schemes", () => {
+    const source = "const exchange = 'WEEX'; const endpoint = 'ftp://weex.com/strategy';";
+
+    expect(validateJavaScript(source).errors).toContain("不支援的網路協定：ftp");
+  });
+
+  it.each(["https://", "https://[::1"])('rejects malformed network URL candidate %s', (url) => {
+    const source = `const exchange = 'WEEX'; const endpoint = '${url}';`;
+
+    expect(validateJavaScript(source).errors).toContain(`偵測到無效網路網址：${url}`);
+  });
+
+  it("accepts an approved WEEX websocket host", () => {
+    expect(validateJavaScript("const endpoint = 'wss://ws.weex.com/stream';").valid).toBe(true);
+  });
+
+  it("checks every scheme candidate inside one decoded string", () => {
+    const source = "const exchange = 'WEEX'; const endpoint = 'https://weex.com/?next=https://api.kucoin.com';";
+
+    expect(validateJavaScript(source).errors).toContain("偵測到非 WEEX 網域：api.kucoin.com");
+  });
+
+  it.each([
     ["const exchange = 'WEEX';\nconst = ;", 2],
     ["const exchange = 'WEEX';\nif (signal) { enter();", 2],
   ])("reports real JavaScript syntax errors with their line number", (source, line) => {
