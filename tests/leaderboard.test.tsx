@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
@@ -150,5 +151,26 @@ describe("dynamic leaderboard", () => {
 
     expect(projectMetrics(breakout.metrics, "30").maxDrawdown).toBeCloseTo(-5.096, 10);
     expect(projectMetrics(breakout.metrics, "90").maxDrawdown).toBeCloseTo(-13.468, 10);
+  });
+
+  it("pins mobile comparison values beside names and bars beneath them", () => {
+    renderLeaderboard();
+
+    const comparison = screen.getByRole("region", { name: "機器人績效比較" });
+    const firstItem = within(comparison).getAllByRole("listitem")[0];
+    expect(within(firstItem).getByRole("link")).toHaveClass("comparison-bars__name");
+    expect(firstItem.querySelector("strong")).toHaveClass("comparison-bars__value");
+
+    const css = readFileSync("app/globals.css", "utf8");
+    const mobileStyles = css.slice(
+      css.indexOf("@media (max-width: 52rem)"),
+      css.indexOf("@media (max-width: 38rem)"),
+    );
+
+    expect(mobileStyles).toMatch(/\.comparison-bars li \{ grid-template-columns: 2rem minmax\(0, 1fr\) auto; gap: 0\.65rem; \}/);
+    expect(mobileStyles).toMatch(/\.comparison-bars__rank \{ grid-column: 1; grid-row: 1; \}/);
+    expect(mobileStyles).toMatch(/\.comparison-bars__name \{ grid-column: 2; grid-row: 1; min-width: 0; \}/);
+    expect(mobileStyles).toMatch(/\.comparison-bars__value \{ grid-column: 3; grid-row: 1; \}/);
+    expect(mobileStyles).toMatch(/\.comparison-bars__track \{ grid-column: 2 \/ 4; grid-row: 2; \}/);
   });
 });

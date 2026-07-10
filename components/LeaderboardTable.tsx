@@ -196,11 +196,11 @@ export function LeaderboardTable() {
           {rankedBots.map((bot, index) => (
             <li data-bot-id={bot.id} key={bot.id}>
               <span className="comparison-bars__rank">{String(index + 1).padStart(2, "0")}</span>
-              <Link href={`/bots/${bot.id}`}>{bot.name}</Link>
+              <Link className="comparison-bars__name" href={`/bots/${bot.id}`}>{bot.name}</Link>
               <span className="comparison-bars__track" aria-hidden="true">
                 <span style={{ "--bar-width": `${(comparisonValue(bot, sort) / maximumComparison) * 100}%` } as CSSProperties} />
               </span>
-              <strong>{comparisonLabel(bot, sort)}</strong>
+              <strong className="comparison-bars__value">{comparisonLabel(bot, sort)}</strong>
             </li>
           ))}
         </ol>

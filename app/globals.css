@@ -1298,8 +1298,11 @@ a {
   .podium-grid { grid-template-columns: 1fr; align-items: stretch; }
   .podium-card,
   .podium-card[data-rank="1"] { min-height: 13rem; }
-  .comparison-bars li { grid-template-columns: 2rem minmax(8rem, 1fr) 4.5rem; }
-  .comparison-bars__track { grid-column: 2 / -1; }
+  .comparison-bars li { grid-template-columns: 2rem minmax(0, 1fr) auto; gap: 0.65rem; }
+  .comparison-bars__rank { grid-column: 1; grid-row: 1; }
+  .comparison-bars__name { grid-column: 2; grid-row: 1; min-width: 0; }
+  .comparison-bars__value { grid-column: 3; grid-row: 1; }
+  .comparison-bars__track { grid-column: 2 / 4; grid-row: 2; }
 }
 
 @media (max-width: 38rem) {
