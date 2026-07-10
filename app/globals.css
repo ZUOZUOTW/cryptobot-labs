@@ -1248,6 +1248,7 @@ a {
 .risk-return-panel__point[data-risk="低"] > a > span { background: var(--mint); box-shadow: 0 0 0.7rem rgb(88 240 176 / 70%); }
 .risk-return-panel__point[data-risk="高"] > a > span { background: var(--danger); box-shadow: 0 0 0.7rem rgb(255 107 98 / 70%); }
 .risk-return-panel__point strong { position: absolute; top: 0.8rem; left: 0.4rem; width: max-content; max-width: 7rem; color: var(--muted); font-size: 0.52rem; font-weight: 520; }
+.risk-return-panel__point[data-label-placement="left"] strong { right: 0.4rem; left: auto; text-align: right; }
 
 .leaderboard-table-shell { scroll-margin-top: calc(var(--header-height) + 7rem); }
 .leaderboard-table__row { will-change: transform; }

@@ -229,26 +229,32 @@ export function LeaderboardTable() {
           <div className="risk-return-panel__plot" role="list" aria-label={`${PERIOD_LABELS[period]}風險與收益資料點`}>
             <span className="risk-return-panel__axis risk-return-panel__axis--return" aria-hidden="true">收益較高 →</span>
             <span className="risk-return-panel__axis risk-return-panel__axis--risk" aria-hidden="true">風險較高 →</span>
-            {rankedBots.map((bot) => (
-              <span
-                className="risk-return-panel__point"
-                data-risk={bot.risk}
-                key={bot.id}
-                role="listitem"
-                style={{
-                  "--return-position": `${(bot.projectedMetrics.totalReturn / maximumReturn) * 86 + 7}%`,
-                  "--risk-position": `${(Math.abs(bot.projectedMetrics.maxDrawdown) / maximumDrawdown) * 78 + 7}%`,
-                } as CSSProperties}
-              >
-                <Link
-                  aria-label={`${bot.name}，收益 ${signedPercent(bot.projectedMetrics.totalReturn)}，最大回撤 ${drawdownPercent(bot.projectedMetrics.maxDrawdown)}`}
-                  href={`/bots/${bot.id}`}
+            {rankedBots.map((bot) => {
+              const returnPosition = (bot.projectedMetrics.totalReturn / maximumReturn) * 86 + 7;
+              const labelPlacement = returnPosition >= 60 ? "left" : "right";
+
+              return (
+                <span
+                  className="risk-return-panel__point"
+                  data-label-placement={labelPlacement}
+                  data-risk={bot.risk}
+                  key={bot.id}
+                  role="listitem"
+                  style={{
+                    "--return-position": `${returnPosition}%`,
+                    "--risk-position": `${(Math.abs(bot.projectedMetrics.maxDrawdown) / maximumDrawdown) * 78 + 7}%`,
+                  } as CSSProperties}
                 >
-                  <span aria-hidden="true" />
-                  <strong>{bot.name}</strong>
-                </Link>
-              </span>
-            ))}
+                  <Link
+                    aria-label={`${bot.name}，收益 ${signedPercent(bot.projectedMetrics.totalReturn)}，最大回撤 ${drawdownPercent(bot.projectedMetrics.maxDrawdown)}`}
+                    href={`/bots/${bot.id}`}
+                  >
+                    <span aria-hidden="true" />
+                    <strong>{bot.name}</strong>
+                  </Link>
+                </span>
+              );
+            })}
           </div>
           <p className="simulation-disclosure" role="note">{DISCLAIMER}</p>
         </div>

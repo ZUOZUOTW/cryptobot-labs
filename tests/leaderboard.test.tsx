@@ -2,6 +2,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import LeaderboardPage from "../app/leaderboard/page";
+import { projectMetrics } from "../components/LeaderboardTable";
 import { BOT_CATALOG } from "../data/bots";
 
 afterEach(cleanup);
@@ -114,14 +115,40 @@ describe("dynamic leaderboard", () => {
     expect(within(panel).getAllByRole("listitem")).toHaveLength(BOT_CATALOG.length);
   });
 
-  it("uses relative day labels for projected short-period curves", async () => {
+  it("places right-edge risk and return labels leftward while keeping interior labels readable", () => {
+    renderLeaderboard();
+
+    const panel = screen.getByRole("region", { name: "風險與收益分布" });
+    const edgeLink = within(panel).getByRole("link", { name: /Breakout Hunter/ });
+    const interiorLink = within(panel).getByRole("link", { name: /Orbit DCA/ });
+
+    expect(edgeLink.closest('[role="listitem"]')).toHaveAttribute("data-label-placement", "left");
+    expect(interiorLink.closest('[role="listitem"]')).toHaveAttribute("data-label-placement", "right");
+    expect(edgeLink).toHaveTextContent("Breakout Hunter");
+    expect(interiorLink).toHaveTextContent("Orbit DCA");
+  });
+
+  it("uses exact projected values and relative day labels for both short periods", async () => {
     const user = userEvent.setup();
     renderLeaderboard();
 
     await user.click(screen.getByRole("button", { name: "30 天" }));
-    const chart = screen.getByRole("figure", { name: /30 天收益曲線/ });
-    expect(within(chart).getByRole("listitem", { name: /第 1 天/ })).toBeInTheDocument();
-    expect(within(chart).getByRole("listitem", { name: /第 30 天/ })).toBeInTheDocument();
-    expect(within(chart).queryByRole("listitem", { name: /7月/ })).not.toBeInTheDocument();
+    const thirtyDayChart = screen.getByRole("figure", { name: /30 天收益曲線/ });
+    expect(within(thirtyDayChart).getByRole("listitem", { name: "第 1 天：100，持平" })).toBeInTheDocument();
+    expect(within(thirtyDayChart).getByRole("listitem", { name: "第 30 天：119.992，上升" })).toBeInTheDocument();
+    expect(within(thirtyDayChart).queryByRole("listitem", { name: /7月/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "90 天" }));
+    const ninetyDayChart = screen.getByRole("figure", { name: /90 天收益曲線/ });
+    expect(within(ninetyDayChart).getByRole("listitem", { name: "第 1 天：100，持平" })).toBeInTheDocument();
+    expect(within(ninetyDayChart).getByRole("listitem", { name: "第 90 天：152.836，上升" })).toBeInTheDocument();
+    expect(within(ninetyDayChart).queryByRole("listitem", { name: /7月/ })).not.toBeInTheDocument();
+  });
+
+  it("projects drawdown with the exact 30-day and 90-day factors", () => {
+    const breakout = BOT_CATALOG.find((bot) => bot.id === "breakout-hunter")!;
+
+    expect(projectMetrics(breakout.metrics, "30").maxDrawdown).toBeCloseTo(-5.096, 10);
+    expect(projectMetrics(breakout.metrics, "90").maxDrawdown).toBeCloseTo(-13.468, 10);
   });
 });
