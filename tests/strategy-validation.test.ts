@@ -122,6 +122,30 @@ describe("validateConfig", () => {
     expect(validateConfig({ ...validConfig, blocks: [nonFiniteEntry, riskBlock] }).valid).toBe(false);
   });
 
+  it.each([
+    {
+      blockId: "sma-cross",
+      values: { shortPeriod: 60, longPeriod: 20 },
+      error: "SMA 均線交叉（sma-cross）的短期均線（shortPeriod）必須小於長期均線（longPeriod）",
+    },
+    {
+      blockId: "macd",
+      values: { fastPeriod: 26, slowPeriod: 12 },
+      error: "MACD 動能（macd）的快線週期（fastPeriod）必須小於慢線週期（slowPeriod）",
+    },
+  ])("rejects contradictory $blockId periods with actionable identifiers", ({ blockId, values, error }) => {
+    const catalogBlock = STRATEGY_BLOCKS.find((block) => block.id === blockId)!;
+    const contradictoryBlock = {
+      ...catalogBlock,
+      parameters: catalogBlock.parameters.map((parameter) => ({
+        ...parameter,
+        value: values[parameter.key as keyof typeof values] ?? parameter.value,
+      })),
+    };
+
+    expect(validateConfig({ ...validConfig, blocks: [contradictoryBlock, riskBlock] }).errors).toContain(error);
+  });
+
   it("validates optional JavaScript source without executing it", () => {
     const marker = "__cryptobotStrategyValidationExecuted";
     delete (globalThis as Record<string, unknown>)[marker];

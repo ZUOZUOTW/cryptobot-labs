@@ -2,6 +2,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkshopPage from "../app/workshop/page";
+import { BacktestPanel } from "../components/workshop/BacktestPanel";
+import { STRATEGY_BLOCKS, STRATEGY_PRESETS } from "../data/strategies";
+import { validateConfig } from "../lib/strategy-validation";
+import type { BotConfig } from "../lib/types";
 
 const DISCLAIMER = "模擬回測資料，不代表未來績效";
 
@@ -17,6 +21,16 @@ afterEach(() => {
 
 function renderWorkshop() {
   return render(<WorkshopPage />);
+}
+
+function cloneConfig(config: BotConfig): BotConfig {
+  return {
+    ...config,
+    blocks: config.blocks.map((block) => ({
+      ...block,
+      parameters: block.parameters.map((parameter) => ({ ...parameter })),
+    })),
+  };
 }
 
 async function loadSteadyTrend(user: ReturnType<typeof userEvent.setup>) {
@@ -57,6 +71,31 @@ describe("multi-strategy workshop", () => {
 
     expect(screen.getByText("至少需要一個出場或風控規則")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeDisabled();
+  });
+
+  it.each([
+    {
+      preset: "穩健趨勢",
+      input: "短期均線數值",
+      value: "60",
+      guidance: "SMA 均線交叉（sma-cross）的短期均線（shortPeriod）必須小於長期均線（longPeriod）",
+    },
+    {
+      preset: "低槓桿風控",
+      input: "快線週期數值",
+      value: "26",
+      guidance: "MACD 動能（macd）的快線週期（fastPeriod）必須小於慢線週期（slowPeriod）",
+    },
+  ])("blocks contradictory strategy periods in the $preset workshop flow", async ({ preset, input, value, guidance }) => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: preset }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: input }), { target: { value } });
+
+    expect(screen.getByRole("region", { name: "策略摘要" })).toHaveTextContent(guidance);
+    expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeDisabled();
+    expect(screen.queryByRole("region", { name: "回測結果" })).not.toBeInTheDocument();
   });
 
   it("supports searching and selecting multiple strategy blocks", async () => {
@@ -128,6 +167,35 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeEnabled();
   });
 
+  it("restores a valid saved draft after mount", async () => {
+    localStorage.setItem("cryptobot-labs:draft:v1", JSON.stringify(STRATEGY_PRESETS[4]));
+
+    renderWorkshop();
+
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("MACD 動能");
+    });
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("ATR 波動倉位");
+  });
+
+  it("keeps the catalog and presets isolated from the editable current config", async () => {
+    const catalogBefore = JSON.stringify(STRATEGY_BLOCKS);
+    const presetsBefore = JSON.stringify(STRATEGY_PRESETS);
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    await loadSteadyTrend(user);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "短期均線數值" }), { target: { value: "33" } });
+    await user.click(screen.getByRole("button", { name: "加入 RSI Rebound" }));
+
+    expect(JSON.stringify(STRATEGY_BLOCKS)).toBe(catalogBefore);
+    expect(JSON.stringify(STRATEGY_PRESETS)).toBe(presetsBefore);
+
+    await loadSteadyTrend(user);
+    expect(screen.getByRole("spinbutton", { name: "短期均線數值" })).toHaveValue(20);
+    expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("RSI Rebound");
+  });
+
   it("exposes the validating, running, and complete backtest states", async () => {
     vi.useFakeTimers();
     renderWorkshop();
@@ -142,6 +210,56 @@ describe("multi-strategy workshop", () => {
 
     act(() => vi.advanceTimersByTime(200));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "complete");
+  });
+
+  it("returns from validating to idle with guidance when validation rejects the run", () => {
+    vi.useFakeTimers();
+    const config = cloneConfig(STRATEGY_PRESETS[0]);
+    config.blocks.find((block) => block.id === "sma-cross")!
+      .parameters.find((parameter) => parameter.key === "shortPeriod")!.value = 60;
+    render(<BacktestPanel config={config} validation={{ valid: true, errors: [] }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "validating");
+
+    act(() => vi.advanceTimersByTime(40));
+    expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "idle");
+    expect(screen.getByRole("alert")).toHaveTextContent("短期均線（shortPeriod）必須小於長期均線（longPeriod）");
+  });
+
+  it("enters the error state when the backtest runtime throws", () => {
+    vi.useFakeTimers();
+    const config = cloneConfig(STRATEGY_PRESETS[0]);
+    render(
+      <BacktestPanel
+        config={config}
+        executeBacktest={() => { throw new Error("回測服務暫時無法使用"); }}
+        validation={validateConfig(config)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    act(() => vi.advanceTimersByTime(40));
+    act(() => vi.advanceTimersByTime(200));
+
+    expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "error");
+    expect(screen.getByRole("alert")).toHaveTextContent("回測服務暫時無法使用");
+  });
+
+  it("immediately hides a completed report when its config fingerprint changes", () => {
+    vi.useFakeTimers();
+    const config = cloneConfig(STRATEGY_PRESETS[0]);
+    const view = render(<BacktestPanel config={config} validation={validateConfig(config)} />);
+    fireEvent.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    act(() => vi.advanceTimersByTime(40));
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByRole("region", { name: "回測結果" })).toBeInTheDocument();
+
+    config.blocks[0].parameters[0].value += 1;
+    view.rerender(<BacktestPanel config={config} validation={validateConfig(config)} />);
+
+    expect(screen.queryByRole("region", { name: "回測結果" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "idle");
   });
 
   it("returns identical report data when unchanged settings are run again", async () => {
@@ -162,10 +280,13 @@ describe("multi-strategy workshop", () => {
   it("marks mutually exclusive position blocks as conflicts", async () => {
     renderWorkshop();
 
-    expect(screen.getByRole("button", { name: "加入 ATR 波動倉位" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("與已選擇的固定倉位衝突，請先移除原倉位模組。")).toBeInTheDocument();
+    const addControl = screen.getByRole("button", { name: "加入 ATR 波動倉位" });
+    const warning = screen.getByText("與已選擇的固定倉位衝突，請先移除原倉位模組。");
+    expect(addControl).toBeDisabled();
+    expect(warning).toHaveAttribute("id", "strategy-conflict-atr-sizing");
+    expect(addControl).toHaveAttribute("aria-describedby", "strategy-conflict-atr-sizing");
 
-    fireEvent.click(screen.getByRole("button", { name: "加入 ATR 波動倉位" }));
+    fireEvent.click(addControl);
     expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("ATR 波動倉位");
   });
 });

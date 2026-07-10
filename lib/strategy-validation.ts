@@ -21,6 +21,10 @@ const isString = (value: unknown): value is string => typeof value === "string";
 const isNonEmptyString = (value: unknown): value is string => isString(value) && value.trim().length > 0;
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
+const parameterValue = (block: BotConfig["blocks"][number], key: string): number | undefined => (
+  block.parameters.find((parameter) => parameter.key === key)?.value
+);
+
 const isStrategyParameter = (value: unknown): boolean => (
   isRecord(value)
   && isNonEmptyString(value.key)
@@ -90,6 +94,22 @@ export const validateConfig = (value: unknown): ValidationResult => {
     for (const item of strategy.parameters) {
       if (!Number.isFinite(item.value) || item.value < item.min || item.value > item.max) {
         errors.push(`${strategy.name}的${item.label}必須介於 ${item.min} 到 ${item.max}`);
+      }
+    }
+
+    if (strategy.id === "sma-cross") {
+      const shortPeriod = parameterValue(strategy, "shortPeriod");
+      const longPeriod = parameterValue(strategy, "longPeriod");
+      if (shortPeriod !== undefined && longPeriod !== undefined && shortPeriod >= longPeriod) {
+        errors.push("SMA 均線交叉（sma-cross）的短期均線（shortPeriod）必須小於長期均線（longPeriod）");
+      }
+    }
+
+    if (strategy.id === "macd") {
+      const fastPeriod = parameterValue(strategy, "fastPeriod");
+      const slowPeriod = parameterValue(strategy, "slowPeriod");
+      if (fastPeriod !== undefined && slowPeriod !== undefined && fastPeriod >= slowPeriod) {
+        errors.push("MACD 動能（macd）的快線週期（fastPeriod）必須小於慢線週期（slowPeriod）");
       }
     }
   }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { runBacktest } from "../../lib/backtest";
+import { useEffect, useMemo, useState } from "react";
+import { backtestConfigFingerprint, runBacktest } from "../../lib/backtest";
 import { validateConfig, type ValidationResult } from "../../lib/strategy-validation";
 import type { BacktestReport, BotConfig, BotMetrics } from "../../lib/types";
 import { PerformanceChart } from "../PerformanceChart";
@@ -23,26 +23,38 @@ const METRICS: { key: keyof BotMetrics; label: string; format: (value: number) =
 interface BacktestPanelProps {
   config: BotConfig;
   validation: ValidationResult;
+  executeBacktest?: typeof runBacktest;
 }
 
-export function BacktestPanel({ config, validation }: BacktestPanelProps) {
-  const [state, setState] = useState<BacktestState>("idle");
-  const [report, setReport] = useState<BacktestReport | null>(null);
-  const [errors, setErrors] = useState<string[]>([]);
-  const previousConfig = useRef(config);
-  const missingRequiredRule = validation.errors.some((error) => (
-    error === "至少需要一個進場訊號" || error === "至少需要一個出場或風控規則"
-  ));
-  const reportKey = useMemo(() => report ? JSON.stringify(report) : "", [report]);
+interface AssociatedReport {
+  configFingerprint: string;
+  report: BacktestReport;
+}
 
-  useEffect(() => {
-    if (previousConfig.current !== config) {
-      previousConfig.current = config;
-      setState("idle");
-      setReport(null);
-      setErrors([]);
-    }
-  }, [config]);
+export function BacktestPanel({ config, validation, executeBacktest = runBacktest }: BacktestPanelProps) {
+  const configFingerprint = backtestConfigFingerprint(config);
+
+  return (
+    <BacktestPanelSession
+      config={config}
+      configFingerprint={configFingerprint}
+      executeBacktest={executeBacktest}
+      key={configFingerprint}
+      validation={validation}
+    />
+  );
+}
+
+interface BacktestPanelSessionProps extends Required<BacktestPanelProps> {
+  configFingerprint: string;
+}
+
+function BacktestPanelSession({ config, configFingerprint, validation, executeBacktest }: BacktestPanelSessionProps) {
+  const [state, setState] = useState<BacktestState>("idle");
+  const [completedReport, setCompletedReport] = useState<AssociatedReport | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const report = completedReport?.configFingerprint === configFingerprint ? completedReport.report : null;
+  const reportKey = useMemo(() => report ? JSON.stringify(report) : "", [report]);
 
   useEffect(() => {
     if (state !== "validating") return;
@@ -62,7 +74,7 @@ export function BacktestPanel({ config, validation }: BacktestPanelProps) {
     if (state !== "running") return;
     const timer = window.setTimeout(() => {
       try {
-        setReport(runBacktest(config));
+        setCompletedReport({ configFingerprint, report: executeBacktest(config) });
         setState("complete");
       } catch (error) {
         setErrors([error instanceof Error ? error.message : "回測發生未知錯誤"]);
@@ -70,11 +82,11 @@ export function BacktestPanel({ config, validation }: BacktestPanelProps) {
       }
     }, 160);
     return () => window.clearTimeout(timer);
-  }, [config, state]);
+  }, [config, configFingerprint, executeBacktest, state]);
 
   const run = () => {
     setErrors([]);
-    setReport(null);
+    setCompletedReport(null);
     setState("validating");
   };
 
@@ -94,7 +106,7 @@ export function BacktestPanel({ config, validation }: BacktestPanelProps) {
 
       <button
         className="button button--primary backtest-run"
-        disabled={missingRequiredRule || busy}
+        disabled={!validation.valid || busy}
         onClick={run}
         type="button"
       >

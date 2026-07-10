@@ -79,18 +79,21 @@ export function StrategyPalette({ selected, onPreset, onAdd, onRemove, onMove }:
                   const conflictMessage = conflict
                     ? `與已選擇的${selectedPosition.name}衝突，請先移除原倉位模組。`
                     : undefined;
+                  const conflictId = conflict ? `strategy-conflict-${block.id}` : undefined;
 
                   return (
                     <li className="strategy-option" data-status={conflict ? "conflict" : "compatible"} key={block.id}>
                       <div>
                         <strong>{strategyDisplayName(block)}</strong>
                         <p>{block.description}</p>
-                        {conflictMessage && <p className="strategy-conflict">{conflictMessage}</p>}
+                        {conflictMessage && <p className="strategy-conflict" id={conflictId}>{conflictMessage}</p>}
                       </div>
                       <button
+                        aria-describedby={conflictId}
                         aria-disabled={conflict || isSelected}
                         aria-label={`加入 ${strategyDisplayName(block)}`}
                         className="strategy-option__add"
+                        disabled={conflict || isSelected}
                         onClick={() => {
                           if (!conflict && !isSelected) onAdd(block);
                         }}

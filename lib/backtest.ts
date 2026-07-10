@@ -19,6 +19,8 @@ const stableValue = (value: unknown): unknown => {
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
 
+export const backtestConfigFingerprint = (config: BotConfig): string => stableStringify(config);
+
 const hashString = (source: string): number => {
   let hash = 0x811c9dc5;
   for (let index = 0; index < source.length; index += 1) {
@@ -83,7 +85,7 @@ export const runBacktest = (config: BotConfig): BacktestReport => {
   const validation = validateConfig(config);
   if (!validation.valid) throw new Error(`策略設定無效：${validation.errors.join("；")}`);
 
-  const hash = hashString(stableStringify(config));
+  const hash = hashString(backtestConfigFingerprint(config));
   const seed = hash.toString(16).padStart(8, "0");
   const random = seededRandom(hash);
   const strategyCount = config.blocks.length;
