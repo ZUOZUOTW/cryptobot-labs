@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { runBacktest } from "./backtest";
 import { hasBotConfigShape, validateConfig, validateJavaScript } from "./strategy-validation";
 import type { BacktestReport, BotConfig } from "./types";
 
@@ -76,6 +77,18 @@ const assertReport = (value: unknown): BacktestReport => {
   if (!isBacktestReport(value)) throw new Error("回測報告格式無效：backtest-report.json");
   return value;
 };
+
+const reportsMatch = (report: BacktestReport, expected: BacktestReport): boolean => (
+  report.seed === expected.seed
+  && report.generatedAt === expected.generatedAt
+  && report.disclaimer === expected.disclaimer
+  && METRIC_FIELDS.every((field) => report.metrics[field] === expected.metrics[field])
+  && report.equityCurve.length === expected.equityCurve.length
+  && report.equityCurve.every((point, index) => (
+    point.label === expected.equityCurve[index]?.label
+    && point.value === expected.equityCurve[index]?.value
+  ))
+);
 
 const assertSource = (source: string): void => {
   const validation = validateJavaScript(source);
@@ -176,6 +189,10 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
 
   const reportValue = await parseJsonFile(zip, "backtest-report.json");
   const report = assertReport(reportValue);
+  const expectedReport = runBacktest(config);
+  if (!reportsMatch(report, expectedReport)) {
+    throw new Error("回測報告與策略設定不一致：backtest-report.json");
+  }
 
   return { config, report };
 };

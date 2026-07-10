@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkshopPage from "../app/workshop/page";
 import { BacktestPanel } from "../components/workshop/BacktestPanel";
+import { BOT_CATALOG } from "../data/bots";
 import { STRATEGY_BLOCKS, STRATEGY_PRESETS } from "../data/strategies";
 import * as botPackage from "../lib/bot-package";
 import { runBacktest } from "../lib/backtest";
@@ -15,6 +16,7 @@ const originalRevokeObjectURL = URL.revokeObjectURL;
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/workshop");
 });
 
 afterEach(() => {
@@ -80,7 +82,7 @@ describe("multi-strategy workshop", () => {
       target: { value: "fetch('https://api.binance.com')" },
     });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("偵測到非 WEEX 交易所識別字");
+    expect(screen.getByRole("alert")).toHaveTextContent("偵測到非 WEEX 網域：api.binance.com");
     expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -106,6 +108,7 @@ describe("multi-strategy workshop", () => {
     const user = userEvent.setup();
     const objectUrl = "blob:workshop-package";
     let clickedDownload = "";
+    let clickedWhileConnected = false;
     const exportPackage = vi.spyOn(botPackage, "exportBotPackage").mockResolvedValue(new Blob(["zip"]));
     const createObjectURL = vi.fn(() => objectUrl);
     const revokeObjectURL = vi.fn();
@@ -113,6 +116,7 @@ describe("multi-strategy workshop", () => {
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
       clickedDownload = this.download;
+      clickedWhileConnected = this.isConnected;
     });
     renderWorkshop();
 
@@ -128,8 +132,57 @@ describe("multi-strategy workshop", () => {
     await user.click(within(dialog).getByRole("button", { name: "確認下載" }));
     await waitFor(() => expect(exportPackage).toHaveBeenCalledTimes(1));
     expect(clickedDownload).toMatch(/\.zip$/);
+    expect(clickedWhileConnected).toBe(true);
+    expect(document.body.querySelector(`a[href="${objectUrl}"]`)).toBeNull();
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+  });
+
+  it("removes the connected download anchor and revokes its URL when clicking fails", async () => {
+    const user = userEvent.setup();
+    const objectUrl = "blob:failed-workshop-package";
+    vi.spyOn(botPackage, "exportBotPackage").mockResolvedValue(new Blob(["zip"]));
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => objectUrl) });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      expect(this.isConnected).toBe(true);
+      throw new Error("瀏覽器阻擋下載");
+    });
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    await completeBacktest();
+    await user.click(screen.getByRole("button", { name: "下載完整策略包" }));
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("瀏覽器阻擋下載");
+    expect(document.body.querySelector(`a[href="${objectUrl}"]`)).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+  });
+
+  it("moves focus into the confirmation, traps Tab, closes on Escape, and restores the trigger", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    await completeBacktest();
+    const trigger = screen.getByRole("button", { name: "下載完整策略包" });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "確認下載完整策略包" });
+    const cancel = within(dialog).getByRole("button", { name: "取消" });
+    const confirm = within(dialog).getByRole("button", { name: "確認下載" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "確認下載完整策略包" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 
   it("only exports a report matching the current config fingerprint", async () => {
@@ -166,6 +219,76 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("ATR 波動倉位");
     expect(screen.getByRole("region", { name: "回測結果" })).toHaveAttribute("data-report-key", JSON.stringify(importedReport));
     expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
+  });
+
+  it("keeps import restoration atomic when saving the imported draft fails", async () => {
+    const user = userEvent.setup();
+    const importedConfig = cloneConfig(STRATEGY_PRESETS[4]);
+    vi.spyOn(botPackage, "importBotPackage").mockResolvedValue({
+      config: importedConfig,
+      report: runBacktest(importedConfig),
+    });
+    renderWorkshop();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+
+    await user.upload(
+      screen.getByLabelText("匯入策略 ZIP 套件"),
+      new File(["zip"], "cannot-save.zip", { type: "application/zip" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("無法儲存策略草稿");
+    expect(screen.queryByText(/已匯入 cannot-save\.zip/)).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("SMA 均線交叉");
+    expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("MACD 動能");
+    expect(screen.queryByRole("region", { name: "回測結果" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
+  });
+
+  it("allows retrying the same ZIP file after an import failure", async () => {
+    const user = userEvent.setup();
+    const importPackage = vi.spyOn(botPackage, "importBotPackage")
+      .mockRejectedValue(new Error("策略套件 ZIP 格式無效"));
+    const file = new File(["broken"], "same-file.zip", { type: "application/zip" });
+    renderWorkshop();
+
+    const input = screen.getByLabelText("匯入策略 ZIP 套件");
+    await user.upload(input, file);
+    await screen.findByRole("alert");
+    await user.upload(input, file);
+
+    await waitFor(() => expect(importPackage).toHaveBeenCalledTimes(2));
+  });
+
+  it("hydrates a known catalog bot ahead of a saved draft and clones catalog parameters", async () => {
+    const catalogBefore = JSON.stringify(BOT_CATALOG);
+    localStorage.setItem("cryptobot-labs:draft:v1", JSON.stringify(STRATEGY_PRESETS[0]));
+    window.history.replaceState(null, "", "/workshop?bot=momentum-forge");
+    renderWorkshop();
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "市場" })).toHaveValue("futures"));
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("MACD");
+    expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("SMA 均線交叉");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "停損數值" }), { target: { value: "7" } });
+    expect(JSON.stringify(BOT_CATALOG)).toBe(catalogBefore);
+  });
+
+  it("falls back to the saved draft for an unknown catalog bot id", async () => {
+    localStorage.setItem("cryptobot-labs:draft:v1", JSON.stringify(STRATEGY_PRESETS[4]));
+    window.history.replaceState(null, "", "/workshop?bot=unknown-bot");
+    renderWorkshop();
+
+    await waitFor(() => expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("MACD 動能"));
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("ATR 波動倉位");
+  });
+
+  it("preserves JavaScript mode while hydrating a catalog bot query", async () => {
+    window.history.replaceState(null, "", "/workshop?bot=orbit-dca&mode=javascript");
+    renderWorkshop();
+
+    const source = await screen.findByRole("textbox", { name: "JavaScript 策略原始碼" });
+    expect((source as HTMLTextAreaElement).value).toContain("WEEX");
+    expect(screen.getByRole("button", { name: "JavaScript 模式" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("combobox", { name: "市場" })).toHaveValue("spot");
   });
 
   it("shows named import errors and preserves the current draft on failure", async () => {

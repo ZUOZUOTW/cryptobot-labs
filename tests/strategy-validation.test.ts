@@ -166,9 +166,42 @@ describe("validateJavaScript", () => {
     expect(validateJavaScript("const exchange = 'WEEX';").valid).toBe(true);
   });
 
-  it("reports unbalanced bracket pairs", () => {
-    expect(validateJavaScript("if (signal) { enter();").errors).toEqual(expect.arrayContaining([
-      "括號不完整：{}",
-    ]));
+  it("requires source to explicitly identify WEEX", () => {
+    expect(validateJavaScript("const strategy = { symbol: 'BTCUSDT' };").errors)
+      .toContain("策略程式碼必須明確指定 WEEX 交易所");
+    expect(validateJavaScript("const note = 'WEEX';").errors)
+      .toContain("策略程式碼必須明確指定 WEEX 交易所");
+  });
+
+  it.each([
+    "https://api.kucoin.com/v1/orders",
+    "https://weex.com.evil.example/collect",
+    "http://bitget.com/api",
+  ])("rejects every non-WEEX HTTP host: %s", (url) => {
+    expect(validateJavaScript(`const exchange = 'WEEX'; fetch('${url}');`).errors)
+      .toContain(`偵測到非 WEEX 網域：${new URL(url).hostname}`);
+  });
+
+  it.each([
+    "const exchange = 'KuCoin';",
+    "const config = { exchange: 'BITGET' };",
+    "exchange = BYBIT;",
+  ])("rejects non-WEEX exchange assignments without relying on a short denylist", (source) => {
+    expect(validateJavaScript(source).errors.some((error) => error.includes("偵測到非 WEEX 交易所識別字")))
+      .toBe(true);
+  });
+
+  it("accepts weex.com and its subdomains", () => {
+    expect(validateJavaScript("fetch('https://api.weex.com/v1/markets');").valid).toBe(true);
+    expect(validateJavaScript("const endpoint = 'https://weex.com/api';").valid).toBe(true);
+  });
+
+  it.each([
+    ["const exchange = 'WEEX';\nconst = ;", 2],
+    ["const exchange = 'WEEX';\nif (signal) { enter();", 2],
+  ])("reports real JavaScript syntax errors with their line number", (source, line) => {
+    expect(validateJavaScript(source).errors).toEqual([
+      expect.stringContaining(`第 ${line} 行`),
+    ]);
   });
 });

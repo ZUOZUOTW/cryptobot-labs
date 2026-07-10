@@ -164,7 +164,7 @@ describe("bot package", () => {
     files["strategy.js"] = "fetch('https://api.bybit.com')";
 
     await expect(importBotPackage(await packageFile(files)))
-      .rejects.toThrow("偵測到非 WEEX 交易所識別字：bybit");
+      .rejects.toThrow("偵測到非 WEEX 網域：api.bybit.com");
   });
 
   it("rejects mismatched config and strategy sources", async () => {
@@ -181,6 +181,46 @@ describe("bot package", () => {
 
     await expect(importBotPackage(await packageFile(files)))
       .rejects.toThrow("回測報告格式無效：backtest-report.json");
+  });
+
+  it("rejects a structurally valid report generated for a different config", async () => {
+    const files = validPackageFiles();
+    const otherConfig = { ...configWithSource, symbol: "ETHUSDT" };
+    files["bot-config.json"] = JSON.stringify(otherConfig);
+    files["backtest-report.json"] = JSON.stringify(runBacktest(configWithSource));
+
+    await expect(importBotPackage(await packageFile(files)))
+      .rejects.toThrow("回測報告與策略設定不一致：backtest-report.json");
+  });
+
+  it("accepts a deterministic report whose JSON keys use a different order", async () => {
+    const files = validPackageFiles();
+    const report = runBacktest(configWithSource);
+    files["backtest-report.json"] = JSON.stringify({
+      disclaimer: report.disclaimer,
+      equityCurve: report.equityCurve,
+      metrics: Object.fromEntries(Object.entries(report.metrics).reverse()),
+      generatedAt: report.generatedAt,
+      seed: report.seed,
+    });
+
+    await expect(importBotPackage(await packageFile(files))).resolves.toEqual({
+      config: configWithSource,
+      report,
+    });
+  });
+
+  it.each([
+    ["seed", (report: BacktestReport) => ({ ...report, seed: "tampered-seed" })],
+    ["generatedAt", (report: BacktestReport) => ({ ...report, generatedAt: "2026-01-01T00:00:00.000Z" })],
+    ["metrics", (report: BacktestReport) => ({ ...report, metrics: { ...report.metrics, totalReturn: report.metrics.totalReturn + 1 } })],
+    ["equity curve", (report: BacktestReport) => ({ ...report, equityCurve: report.equityCurve.map((point, index) => index === 0 ? { ...point, value: point.value + 1 } : point) })],
+  ])("rejects a report with mismatched %s provenance", async (_field, mutate) => {
+    const files = validPackageFiles();
+    files["backtest-report.json"] = JSON.stringify(mutate(runBacktest(configWithSource)));
+
+    await expect(importBotPackage(await packageFile(files)))
+      .rejects.toThrow("回測報告與策略設定不一致：backtest-report.json");
   });
 
   it.each(["null", "[]"])("rejects null or array report shape %s", async (report) => {

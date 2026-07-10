@@ -7,10 +7,11 @@ import { ParameterPanel } from "../../components/workshop/ParameterPanel";
 import { PackagePanel } from "../../components/workshop/PackagePanel";
 import { StrategyPalette } from "../../components/workshop/StrategyPalette";
 import { StrategySummary } from "../../components/workshop/StrategySummary";
+import { BOT_CATALOG } from "../../data/bots";
 import { STRATEGY_PRESETS } from "../../data/strategies";
 import { backtestConfigFingerprint } from "../../lib/backtest";
 import { loadDraft, saveDraft } from "../../lib/storage";
-import type { BacktestReport, BotConfig, StrategyBlock } from "../../lib/types";
+import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "../../lib/types";
 import { validateConfig } from "../../lib/strategy-validation";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
@@ -21,6 +22,19 @@ const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
 const cloneConfig = (config: BotConfig): BotConfig => ({
   ...config,
   blocks: config.blocks.map(cloneBlock),
+});
+
+const configFromBot = (bot: BotDefinition): BotConfig => ({
+  id: bot.id,
+  name: bot.name,
+  exchange: bot.exchange,
+  market: bot.market,
+  symbol: bot.symbol,
+  timeframe: bot.timeframe,
+  logicMode: bot.logicMode,
+  leverage: bot.leverage,
+  blocks: bot.blocks.map(cloneBlock),
+  ...(bot.source === undefined ? {} : { source: bot.source }),
 });
 
 const DEFAULT_CONFIG = cloneConfig(STRATEGY_PRESETS[0]);
@@ -39,11 +53,13 @@ export default function WorkshopPage() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      const search = new URLSearchParams(window.location.search);
       const draft = loadDraft();
-      const next = draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
-      const requestedJavaScript = new URLSearchParams(window.location.search).get("mode") === "javascript";
+      const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
+      const next = requestedBot ? configFromBot(requestedBot) : draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
+      const requestedJavaScript = search.get("mode") === "javascript";
       if (requestedJavaScript && next.source === undefined) next.source = WEEX_JAVASCRIPT_TEMPLATE;
-      if (requestedJavaScript || next.source !== undefined) setMode("javascript");
+      setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
       setConfig(next);
     }, 0);
     return () => window.clearTimeout(timer);
@@ -106,10 +122,12 @@ export default function WorkshopPage() {
   const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
     const next = cloneConfig(importedConfig);
     const saved = saveDraft(next);
-    setDraftError(saved.ok ? "" : saved.reason);
+    if (!saved.ok) return saved;
+    setDraftError("");
     setConfig(next);
     setMode(next.source === undefined ? "visual" : "javascript");
     setAssociatedReport({ fingerprint: backtestConfigFingerprint(next), report });
+    return saved;
   };
 
   return (

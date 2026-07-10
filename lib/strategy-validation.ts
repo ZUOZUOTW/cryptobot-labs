@@ -1,3 +1,4 @@
+import { parse } from "acorn";
 import type { BotConfig } from "./types";
 
 export interface ValidationResult {
@@ -8,8 +9,8 @@ export interface ValidationResult {
 export type SourceValidationResult = ValidationResult;
 export type BotConfigCandidate = Omit<BotConfig, "exchange"> & { exchange: string };
 
-const FORBIDDEN = ["binance", "okx", "bybit", "coinbase", "kraken", "api.binance.com", "api.bybit.com"];
 const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
+const HTTP_URL_PATTERN = /https?:\/\/[^\s"'`<>()\[\]{}]+/gi;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -62,15 +63,107 @@ export const hasBotConfigShape = (value: unknown): value is BotConfigCandidate =
   && (value.source === undefined || isString(value.source))
 );
 
-export const validateJavaScript = (source: string): SourceValidationResult => {
-  const lowered = source.toLowerCase();
-  const forbidden = FORBIDDEN.find((token) => lowered.includes(token));
-  const errors: string[] = [];
-  if (forbidden) errors.push(`偵測到非 WEEX 交易所識別字：${forbidden}`);
-  const pairs = [["(", ")"], ["{", "}"], ["[", "]"]] as const;
-  for (const [open, close] of pairs) {
-    if ((source.split(open).length - 1) !== (source.split(close).length - 1)) errors.push(`括號不完整：${open}${close}`);
+type AstRecord = Record<string, unknown> & { type?: string };
+
+const astRecord = (value: unknown): AstRecord | null => isRecord(value) ? value : null;
+
+const astName = (value: unknown): string | undefined => {
+  const node = astRecord(value);
+  if (!node) return undefined;
+  if (node.type === "Identifier" && typeof node.name === "string") return node.name;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (
+    node.type === "TemplateLiteral"
+    && Array.isArray(node.expressions)
+    && node.expressions.length === 0
+    && Array.isArray(node.quasis)
+  ) {
+    const first = astRecord(node.quasis[0]);
+    const cooked = astRecord(first?.value)?.cooked;
+    return typeof cooked === "string" ? cooked : undefined;
   }
+  return undefined;
+};
+
+const assignmentTargetName = (value: unknown): string | undefined => {
+  const node = astRecord(value);
+  if (!node) return undefined;
+  if (node.type === "Identifier") return astName(node);
+  if (node.type === "MemberExpression") return astName(node.property);
+  return undefined;
+};
+
+const exchangeValue = (node: AstRecord): string | undefined | null => {
+  if (node.type === "VariableDeclarator" && astName(node.id)?.toLowerCase() === "exchange") {
+    return astName(node.init) ?? null;
+  }
+  if (node.type === "Property" && astName(node.key)?.toLowerCase() === "exchange") {
+    return astName(node.value) ?? null;
+  }
+  if (node.type === "AssignmentExpression" && assignmentTargetName(node.left)?.toLowerCase() === "exchange") {
+    return astName(node.right) ?? null;
+  }
+  return undefined;
+};
+
+const walkAst = (value: unknown, visit: (node: AstRecord) => void): void => {
+  if (Array.isArray(value)) {
+    value.forEach((item) => walkAst(item, visit));
+    return;
+  }
+  const node = astRecord(value);
+  if (!node) return;
+  if (typeof node.type === "string") visit(node);
+  for (const [key, child] of Object.entries(node)) {
+    if (key !== "loc" && key !== "start" && key !== "end") walkAst(child, visit);
+  }
+};
+
+export const validateJavaScript = (source: string): SourceValidationResult => {
+  let syntaxTree: unknown;
+  try {
+    syntaxTree = parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      locations: true,
+      sourceType: "module",
+    });
+  } catch (error) {
+    const syntaxError = error as SyntaxError & { loc?: { line?: number } };
+    const line = syntaxError.loc?.line ?? 1;
+    return { valid: false, errors: [`JavaScript 語法錯誤（第 ${line} 行）：${syntaxError.message}`] };
+  }
+
+  const errors: string[] = [];
+  const exchangeErrors = new Set<string>();
+  let explicitlyWeex = false;
+
+  walkAst(syntaxTree, (node) => {
+    const assignedExchange = exchangeValue(node);
+    if (assignedExchange === undefined) return;
+    if (assignedExchange?.toUpperCase() === "WEEX") {
+      explicitlyWeex = true;
+      return;
+    }
+    exchangeErrors.add(assignedExchange === null ? "無法確認" : assignedExchange.toLowerCase());
+  });
+
+  for (const match of source.matchAll(HTTP_URL_PATTERN)) {
+    let hostname: string;
+    try {
+      hostname = new URL(match[0]).hostname.toLowerCase();
+    } catch {
+      continue;
+    }
+    if (hostname === "weex.com" || hostname.endsWith(".weex.com")) {
+      explicitlyWeex = true;
+    } else {
+      errors.push(`偵測到非 WEEX 網域：${hostname}`);
+    }
+  }
+
+  exchangeErrors.forEach((exchange) => errors.push(`偵測到非 WEEX 交易所識別字：${exchange}`));
+  if (!explicitlyWeex) errors.push("策略程式碼必須明確指定 WEEX 交易所");
   return { valid: errors.length === 0, errors };
 };
 

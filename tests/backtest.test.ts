@@ -12,7 +12,7 @@ describe("runBacktest", () => {
 
   it("rejects forbidden JavaScript source at the public boundary", () => {
     expect(() => runBacktest({ ...validConfig, source: "fetch('https://api.bybit.com')" }))
-      .toThrowError("策略設定無效：偵測到非 WEEX 交易所識別字：bybit");
+      .toThrowError("策略設定無效：偵測到非 WEEX 網域：api.bybit.com");
   });
 
   it("returns identical curves and metrics for identical configs", () => {
