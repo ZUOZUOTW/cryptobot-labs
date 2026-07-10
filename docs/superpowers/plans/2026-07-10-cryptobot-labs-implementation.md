@@ -130,6 +130,8 @@ describe("BOT_CATALOG", () => {
     expect(BOT_CATALOG.filter((bot) => bot.market === "futures")).toHaveLength(5);
     expect(new Set(BOT_CATALOG.map((bot) => bot.id)).size).toBe(10);
     expect(BOT_CATALOG.every((bot) => bot.exchange === "WEEX")).toBe(true);
+    expect(BOT_CATALOG.every((bot) => bot.blocks.some((block) => block.group === "entry"))).toBe(true);
+    expect(BOT_CATALOG.every((bot) => bot.blocks.some((block) => block.group === "risk"))).toBe(true);
   });
 
   it("provides complete metrics and at least twelve equity points", () => {
@@ -225,11 +227,15 @@ export interface BotDefinition extends BotConfig {
 Create `data/bots.ts`. Define a `makeBot` helper that derives monthly equity points from a numeric array, then instantiate exactly these bots and no extras:
 
 ```ts
-import type { BotDefinition, Market, RiskLevel } from "../lib/types";
+import type { BotDefinition, Market, RiskLevel, StrategyBlock } from "../lib/types";
 
 const DISCLAIMER = "模擬回測資料，不代表未來績效" as const;
 const months = ["7月", "8月", "9月", "10月", "11月", "12月", "1月", "2月", "3月", "4月", "5月", "6月"];
 const makeCurve = (values: number[]) => values.map((value, index) => ({ label: months[index], value }));
+const makeBlocks = (seed: Seed): StrategyBlock[] => [
+  { id: `${seed.id}-entry`, name: seed.tags[0], group: "entry", description: seed.explanation, parameters: [] },
+  { id: `${seed.id}-stop-loss`, name: "固定停損", group: "risk", description: "價格觸及停損幅度時離場。", parameters: [{ key:"stopLoss", label:"停損", value: seed.market === "spot" ? 5 : 3, min:1, max:20, step:0.5, suffix:"%" }] },
+];
 
 type Seed = {
   id: string; name: string; market: Market; description: string; tags: string[];
@@ -247,7 +253,7 @@ const makeBot = (seed: Seed): BotDefinition => ({
   timeframe: seed.market === "spot" ? "4h" : "1h",
   logicMode: "all",
   leverage: seed.market === "spot" ? 1 : 3,
-  blocks: [],
+  blocks: makeBlocks(seed),
   description: seed.description,
   tags: seed.tags,
   risk: seed.risk,
