@@ -1,8 +1,8 @@
-# vinext-starter
+# CryptoBot Labs
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+A WEEX-only strategy discovery and assembly prototype running on
+[vinext](https://github.com/cloudflare/vinext). All performance is deterministic
+simulation data; the site does not accept exchange credentials or place trades.
 
 ## Prerequisites
 
@@ -11,12 +11,14 @@ Drizzle support.
 ## Quick Start
 
 ```bash
-npm install
-npm run dev
-npm run build
+pnpm install
+pnpm run dev
+pnpm test
+pnpm run lint
+pnpm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+This project does not use `wrangler.jsonc`.
 
 ## Included Shape
 
@@ -87,10 +89,11 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 ## Useful Commands
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+- `pnpm run dev`: start local development
+- `pnpm test`: run the Vitest suite
+- `pnpm run lint`: run ESLint
+- `pnpm run build`: verify the production vinext output
+- `pnpm run db:generate`: generate Drizzle migrations after schema changes
 
 ## Learn More
 

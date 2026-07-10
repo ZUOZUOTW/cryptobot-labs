@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
+import { buildSiteMetadata, requestOrigin } from "@/lib/site-metadata";
 import "./globals.css";
+import "./workshop.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,14 +17,15 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
+const productMetadata = {
   title: "CryptoBot Labs｜WEEX 自動交易策略實驗室",
   description: "探索、比較並組裝 WEEX 專屬自動交易策略，透過可重現的模擬回測安全驗證交易想法。",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
-};
+} as const;
+
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers();
+  return buildSiteMetadata(requestOrigin(requestHeaders), productMetadata);
+}
 
 export default function RootLayout({
   children,
