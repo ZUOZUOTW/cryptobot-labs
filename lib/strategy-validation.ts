@@ -67,10 +67,9 @@ type AstRecord = Record<string, unknown> & { type?: string };
 
 const astRecord = (value: unknown): AstRecord | null => isRecord(value) ? value : null;
 
-const astName = (value: unknown): string | undefined => {
+const staticStringValue = (value: unknown): string | undefined => {
   const node = astRecord(value);
   if (!node) return undefined;
-  if (node.type === "Identifier" && typeof node.name === "string") return node.name;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   if (
     node.type === "TemplateLiteral"
@@ -83,6 +82,13 @@ const astName = (value: unknown): string | undefined => {
     return typeof cooked === "string" ? cooked : undefined;
   }
   return undefined;
+};
+
+const astName = (value: unknown): string | undefined => {
+  const node = astRecord(value);
+  if (!node) return undefined;
+  if (node.type === "Identifier" && typeof node.name === "string") return node.name;
+  return staticStringValue(node);
 };
 
 const assignmentTargetName = (value: unknown): string | undefined => {
@@ -140,27 +146,30 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
 
   walkAst(syntaxTree, (node) => {
     const assignedExchange = exchangeValue(node);
-    if (assignedExchange === undefined) return;
-    if (assignedExchange?.toUpperCase() === "WEEX") {
-      explicitlyWeex = true;
-      return;
+    if (assignedExchange !== undefined) {
+      if (assignedExchange?.toUpperCase() === "WEEX") {
+        explicitlyWeex = true;
+      } else {
+        exchangeErrors.add(assignedExchange === null ? "無法確認" : assignedExchange.toLowerCase());
+      }
     }
-    exchangeErrors.add(assignedExchange === null ? "無法確認" : assignedExchange.toLowerCase());
-  });
 
-  for (const match of source.matchAll(HTTP_URL_PATTERN)) {
-    let hostname: string;
-    try {
-      hostname = new URL(match[0]).hostname.toLowerCase();
-    } catch {
-      continue;
+    const staticValue = staticStringValue(node);
+    if (staticValue === undefined) return;
+    for (const match of staticValue.matchAll(HTTP_URL_PATTERN)) {
+      let hostname: string;
+      try {
+        hostname = new URL(match[0]).hostname.toLowerCase();
+      } catch {
+        continue;
+      }
+      if (hostname === "weex.com" || hostname.endsWith(".weex.com")) {
+        explicitlyWeex = true;
+      } else {
+        errors.push(`偵測到非 WEEX 網域：${hostname}`);
+      }
     }
-    if (hostname === "weex.com" || hostname.endsWith(".weex.com")) {
-      explicitlyWeex = true;
-    } else {
-      errors.push(`偵測到非 WEEX 網域：${hostname}`);
-    }
-  }
+  });
 
   exchangeErrors.forEach((exchange) => errors.push(`偵測到非 WEEX 交易所識別字：${exchange}`));
   if (!explicitlyWeex) errors.push("策略程式碼必須明確指定 WEEX 交易所");

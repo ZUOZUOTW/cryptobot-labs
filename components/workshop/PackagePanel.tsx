@@ -26,14 +26,23 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const restoreAfterExportRef = useRef(false);
   const canExport = report !== null && validateConfig(config).valid && exportState !== "working";
 
   useEffect(() => {
     if (!confirmationOpen) return;
     const trigger = exportTriggerRef.current;
     cancelRef.current?.focus();
-    return () => trigger?.focus();
+    return () => {
+      if (!restoreAfterExportRef.current) trigger?.focus();
+    };
   }, [confirmationOpen]);
+
+  useEffect(() => {
+    if (confirmationOpen || exportState === "working" || !restoreAfterExportRef.current) return;
+    restoreAfterExportRef.current = false;
+    exportTriggerRef.current?.focus();
+  }, [confirmationOpen, exportState]);
 
   const handleConfirmationKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
@@ -53,6 +62,7 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
 
   const confirmExport = async () => {
     if (!report || !canExport) return;
+    restoreAfterExportRef.current = true;
     setConfirmationOpen(false);
     setExportState("working");
     setImportState((current) => current === "error" ? "idle" : current);
@@ -128,7 +138,10 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
           <button
             className="button button--primary"
             disabled={!canExport}
-            onClick={() => setConfirmationOpen(true)}
+            onClick={() => {
+              restoreAfterExportRef.current = false;
+              setConfirmationOpen(true);
+            }}
             ref={exportTriggerRef}
             type="button"
           >

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
@@ -8,6 +8,9 @@ import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
 import { BotDownloadButton } from "../components/BotCard";
 import { BOT_CATALOG } from "../data/bots";
+import { runBacktest } from "../lib/backtest";
+import { importBotPackage } from "../lib/bot-package";
+import type { BotConfig } from "../lib/types";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -103,17 +106,18 @@ describe("bot catalog route", () => {
     expect(screen.getByText("顯示 10 / 10 組策略")).toBeInTheDocument();
   });
 
-  it("downloads the real strategy package and revokes its object URL in a later task", async () => {
+  it("quick-downloads an importable deterministic strategy package end to end", async () => {
     const bot = BOT_CATALOG[0];
     const objectUrl = "blob:orbit-dca-package";
     let clickedDownload = "";
     let clickedHref = "";
     let clickedWhileConnected = false;
+    let downloadedBlob: Blob | undefined;
     let resolveClick!: () => void;
     const clickObserved = new Promise<void>((resolve) => { resolveClick = resolve; });
     const createObjectURL = vi.fn((blob: Blob) => {
       expect(blob).toBeInstanceOf(Blob);
-      vi.useFakeTimers();
+      downloadedBlob = blob;
       return objectUrl;
     });
     const revokeObjectURL = vi.fn();
@@ -136,10 +140,25 @@ describe("bot catalog route", () => {
     expect(clickedDownload).toBe("orbit-dca-weex-strategy.zip");
     expect(clickedHref).toBe(objectUrl);
     expect(document.body.querySelector('a[download="orbit-dca-weex-strategy.zip"]')).toBeNull();
-    expect(revokeObjectURL).not.toHaveBeenCalled();
 
-    vi.runOnlyPendingTimers();
-    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    const expectedConfig: BotConfig = {
+      id: bot.id,
+      name: bot.name,
+      exchange: bot.exchange,
+      market: bot.market,
+      symbol: bot.symbol,
+      timeframe: bot.timeframe,
+      logicMode: bot.logicMode,
+      leverage: bot.leverage,
+      blocks: bot.blocks,
+      ...(bot.source === undefined ? {} : { source: bot.source }),
+    };
+    const imported = await importBotPackage(new File([downloadedBlob!], clickedDownload, { type: "application/zip" }));
+    expect(imported).toEqual({ config: expectedConfig, report: runBacktest(expectedConfig) });
+    expect(imported.report.metrics.totalReturn).not.toBe(bot.metrics.totalReturn);
+    expect(bot.metrics.totalReturn).toBe(48.6);
+
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
   });
 });
 

@@ -185,6 +185,49 @@ describe("multi-strategy workshop", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("restores focus to the export trigger after a successful deferred download", async () => {
+    const user = userEvent.setup();
+    let resolveExport!: (blob: Blob) => void;
+    vi.spyOn(botPackage, "exportBotPackage").mockReturnValue(new Promise((resolve) => { resolveExport = resolve; }));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:deferred-success") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    await completeBacktest();
+    const trigger = screen.getByRole("button", { name: "下載完整策略包" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+
+    expect(trigger).toBeDisabled();
+    expect(trigger).not.toHaveFocus();
+    await act(async () => { resolveExport(new Blob(["zip"])); });
+    await screen.findByText("完整策略包已開始下載。");
+    expect(trigger).toBeEnabled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("restores focus to the export trigger after a deferred export failure", async () => {
+    const user = userEvent.setup();
+    let rejectExport!: (error: Error) => void;
+    vi.spyOn(botPackage, "exportBotPackage").mockReturnValue(new Promise((_resolve, reject) => { rejectExport = reject; }));
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    await completeBacktest();
+    const trigger = screen.getByRole("button", { name: "下載完整策略包" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+
+    expect(trigger).toBeDisabled();
+    expect(trigger).not.toHaveFocus();
+    await act(async () => { rejectExport(new Error("策略套件輸出失敗")); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("策略套件輸出失敗");
+    expect(trigger).toBeEnabled();
+    expect(trigger).toHaveFocus();
+  });
+
   it("only exports a report matching the current config fingerprint", async () => {
     const user = userEvent.setup();
     renderWorkshop();

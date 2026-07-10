@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { runBacktest } from "../lib/backtest";
 import { exportBotPackage } from "../lib/bot-package";
-import type { BacktestReport, BotConfig, BotDefinition } from "../lib/types";
+import type { BotConfig, BotDefinition } from "../lib/types";
 import { PerformanceChart } from "./PerformanceChart";
 
 interface BotCardProps {
@@ -31,14 +32,6 @@ const botConfig = (bot: BotDefinition): BotConfig => ({
   ...(bot.source === undefined ? {} : { source: bot.source }),
 });
 
-const botReport = (bot: BotDefinition): BacktestReport => ({
-  seed: `official:${bot.id}`,
-  generatedAt: "2026-07-10T00:00:00.000Z",
-  metrics: bot.metrics,
-  equityCurve: bot.equityCurve,
-  disclaimer: bot.disclaimer,
-});
-
 export function BotDownloadButton({ bot, label = "快速下載", className = "button button--secondary button--small" }: BotDownloadButtonProps) {
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
 
@@ -46,7 +39,8 @@ export function BotDownloadButton({ bot, label = "快速下載", className = "bu
     setStatus("working");
     let objectUrl: string | undefined;
     try {
-      const blob = await exportBotPackage(botConfig(bot), botReport(bot));
+      const config = botConfig(bot);
+      const blob = await exportBotPackage(config, runBacktest(config));
       objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;

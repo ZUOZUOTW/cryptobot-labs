@@ -196,6 +196,31 @@ describe("validateJavaScript", () => {
     expect(validateJavaScript("const endpoint = 'https://weex.com/api';").valid).toBe(true);
   });
 
+  it("ignores URLs in comments for both approval and rejection", () => {
+    expect(validateJavaScript("// https://api.weex.com/v1\nconst note = 'comment only';").errors)
+      .toContain("策略程式碼必須明確指定 WEEX 交易所");
+    expect(validateJavaScript("// https://api.kucoin.com/v1\nconst exchange = 'WEEX';").valid)
+      .toBe(true);
+  });
+
+  it("decodes escaped URL literals before applying the host allowlist", () => {
+    const source = String.raw`const exchange = 'WEEX'; const endpoint = 'https:\/\/api.kucoin.com/v1';`;
+
+    expect(validateJavaScript(source).errors).toContain("偵測到非 WEEX 網域：api.kucoin.com");
+  });
+
+  it("checks static template URL values and rejects lookalike hosts", () => {
+    expect(validateJavaScript("const endpoint = `https://api.weex.com/v1`; ").valid).toBe(true);
+    expect(validateJavaScript("const exchange = 'WEEX'; const endpoint = `https://weex.com.evil.example/v1`; ").errors)
+      .toContain("偵測到非 WEEX 網域：weex.com.evil.example");
+  });
+
+  it("does not use a dynamic template URL to qualify WEEX", () => {
+    const validation = validateJavaScript("const host = 'api.weex.com'; const endpoint = `https://${host}/v1`; ");
+
+    expect(validation.errors).toEqual(["策略程式碼必須明確指定 WEEX 交易所"]);
+  });
+
   it.each([
     ["const exchange = 'WEEX';\nconst = ;", 2],
     ["const exchange = 'WEEX';\nif (signal) { enter();", 2],
