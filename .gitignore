@@ -2,5 +2,11 @@
 .superpowers/
 node_modules/
 dist/
+.next/
+.vinext/
+.wrangler/
+coverage/
+tsconfig.tsbuildinfo
+package-lock.json
 .env*
 !.env.example

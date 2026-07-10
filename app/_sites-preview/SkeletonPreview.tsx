@@ -133,12 +133,9 @@ export function SkeletonPreview() {
           aria-live="polite"
           aria-atomic="true"
         >
-          <span className="sites-skeleton-status-kicker">Codex is working</span>
-          <h1>Your site is taking shape</h1>
-          <p>
-            Codex is building the first version. It’ll appear here
-            automatically when it’s ready.
-          </p>
+          <span className="sites-skeleton-status-kicker">CryptoBot Labs</span>
+          <h1>交易機器人工作台正在準備中</h1>
+          <p>我們正在建立第一個版本，完成後將自動顯示。</p>
         </section>
       </main>
     </SkeletonTheme>

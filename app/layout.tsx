@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Starter Project",
-  description: "A clean starting point for building your site.",
+  title: "CryptoBot Labs",
+  description: "WEEX 專屬加密貨幣交易機器人原型。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -27,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="zh-Hant">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

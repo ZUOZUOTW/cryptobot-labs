@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import { SkeletonPreview } from "./_sites-preview/SkeletonPreview";
 
 export const metadata: Metadata = {
-  title: "Your site is taking shape",
-  description:
-    "Codex is building the first version. It’ll appear here automatically when it’s ready.",
+  title: "CryptoBot Labs",
+  description: "CryptoBot Labs 正在準備中，完成後將自動顯示。",
   other: {
     "codex-preview": "development",
   },
