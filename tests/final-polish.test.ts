@@ -124,6 +124,7 @@ describe("final responsive and maintenance contracts", () => {
     expect(globalStyles).toMatch(/@media \(max-width: 44rem\) \{\s*\.bot-grid,\s*\.metric-grid \{ grid-template-columns: 1fr; \}/);
     expect(workshopStyles).toMatch(/@media \(max-width: 44rem\) \{[\s\S]*?\.workshop-mode \{[\s\S]*?position: sticky;[\s\S]*?top: calc\(var\(--header-height\) \+ 0\.5rem\);/);
     expect(workshopStyles).toMatch(/@media \(max-width: 44rem\) \{[\s\S]*?\.market-controls,\s*\.block-parameters \{ grid-template-columns: 1fr; \}[\s\S]*?\.backtest-metrics \{ grid-template-columns: 1fr; \}[\s\S]*?\.package-panel__grid \{ grid-template-columns: 1fr; \}/);
+    expect(workshopStyles).toMatch(/\.workshop-mobile-actions \{[\s\S]*?position: fixed;[\s\S]*?bottom: 0;[\s\S]*?env\(safe-area-inset-bottom\)/);
   });
 
   it("keeps the exact reduced-motion override and editor focus ring", async () => {
@@ -160,5 +161,12 @@ describe("final responsive and maintenance contracts", () => {
     expect(readme).toContain("pnpm install");
     expect(readme).toContain("pnpm run build");
     expect(readme).not.toMatch(/(^|\n)(?:- `)?npm /);
+  });
+
+  it("uses pnpm in the optional D1 recovery copy", async () => {
+    const route = await readProjectFile("examples/d1/app/api/notes/route.ts");
+
+    expect(route).toContain("pnpm run db:generate");
+    expect(route).not.toMatch(/`npm run db:generate`/);
   });
 });

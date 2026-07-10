@@ -4,7 +4,7 @@ import { BotDownloadButton } from "../../../components/BotCard";
 import { MetricCard } from "../../../components/MetricCard";
 import { PerformanceChart } from "../../../components/PerformanceChart";
 import { BOT_CATALOG } from "../../../data/bots";
-import type { BotDefinition } from "../../../lib/types";
+import type { BotDefinition, EquityPoint } from "../../../lib/types";
 
 interface BotDetailPageProps {
   params: Promise<{ id: string }>;
@@ -22,6 +22,18 @@ const monthlyReturns = (bot: BotDefinition) => bot.equityCurve.map((point, index
   return { ...point, change };
 });
 
+export const benchmarkSeries = (bot: BotDefinition): EquityPoint[] => {
+  const seed = [...bot.id].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  let value = 100;
+  return bot.equityCurve.map((point, index) => {
+    if (index > 0) {
+      const cycle = ((seed + index * 7) % 9) - 3;
+      value *= 1 + (0.012 + cycle * 0.002);
+    }
+    return { label: point.label, value: Number(value.toFixed(2)) };
+  });
+};
+
 export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const { id } = await params;
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
@@ -30,6 +42,10 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
 
   const metrics = bot.metrics;
   const monthly = monthlyReturns(bot);
+  const benchmark = benchmarkSeries(bot);
+  const botFinal = bot.equityCurve.at(-1)?.value ?? 100;
+  const benchmarkFinal = benchmark.at(-1)?.value ?? 100;
+  const difference = botFinal - benchmarkFinal;
 
   return (
     <article className="bot-detail-page">
@@ -71,9 +87,16 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
       </section>
 
       <section className="detail-section site-container detail-chart-grid">
-        <div>
+        <div className="detail-performance-comparison">
           <div className="section-heading"><p className="eyebrow">EQUITY CURVE</p><h2>模擬累積收益</h2></div>
-          <PerformanceChart points={bot.equityCurve} label={`${bot.name} 累積收益曲線`} tone={bot.risk === "高" ? "danger" : "mint"} />
+          <div className="detail-performance-comparison__charts">
+            <PerformanceChart points={bot.equityCurve} label={`${bot.name} 累積收益曲線`} tone={bot.risk === "高" ? "danger" : "mint"} />
+            <PerformanceChart points={benchmark} label="WEEX 市場基準曲線" tone="cyan" />
+          </div>
+          <section aria-label="策略與基準比較摘要" className="benchmark-summary glass-panel">
+            <h3>策略與基準文字比較</h3>
+            <p>{bot.name} 期末淨值 {botFinal.toFixed(1)}；WEEX 市場基準期末淨值 {benchmarkFinal.toFixed(1)}。策略{difference >= 0 ? "領先" : "落後"}基準 {Math.abs(difference).toFixed(1)} 點。</p>
+          </section>
           <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
         </div>
         <div className="direction-panel glass-panel">

@@ -481,6 +481,7 @@
 .backtest-metrics .metric-card dd { font-size: clamp(1rem, 2vw, 1.35rem); }
 .backtest-result .simulation-disclosure { margin: 1rem 0 0; }
 .backtest-seed { margin: 0.45rem 0 0; color: var(--muted); font-family: var(--font-geist-mono), monospace; font-size: 0.56rem; letter-spacing: 0.08em; }
+.workshop-mobile-actions { display: none; }
 
 @keyframes workshop-signal {
   0%, 100% { opacity: 0.3; transform: translateY(0); }
@@ -494,6 +495,7 @@
 }
 
 @media (max-width: 44rem) {
+  .workshop-page { padding-bottom: calc(7rem + env(safe-area-inset-bottom)); }
   .workshop-page__intro::after { display: none; }
   .workshop-mode {
     position: sticky;
@@ -510,6 +512,24 @@
   .block-parameters { grid-template-columns: 1fr; }
   .backtest-metrics { grid-template-columns: 1fr; }
   .package-panel__grid { grid-template-columns: 1fr; }
+  .workshop-mobile-actions {
+    position: fixed;
+    z-index: 45;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.65rem max(1rem, env(safe-area-inset-right)) calc(0.65rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+    border-top: 1px solid var(--border);
+    background: rgb(6 7 11 / 96%);
+    box-shadow: 0 -1rem 2rem rgb(0 0 0 / 35%);
+    backdrop-filter: blur(1rem);
+  }
+  .workshop-mobile-actions p { margin: 0; color: var(--muted); font-size: 0.72rem; }
+  .workshop-mobile-actions div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+  .workshop-mobile-actions button { min-height: 2.75rem; border: 1px solid var(--border); border-radius: 0.7rem; background: rgb(139 99 255 / 12%); }
+  .workshop-mobile-actions button:disabled { opacity: 0.45; }
 }
 
 @media (max-width: 30rem) {

@@ -1,19 +1,21 @@
 import { existsSync } from "node:fs";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import BotDetailPage, { benchmarkSeries, generateStaticParams } from "../app/bots/[id]/page";
 import BotsPage from "../app/bots/page";
 import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
 import { BotDownloadButton } from "../components/BotCard";
 import { BOT_CATALOG } from "../data/bots";
 import { runBacktest } from "../lib/backtest";
-import { importBotPackage } from "../lib/bot-package";
+import * as botPackage from "../lib/bot-package";
 import type { BotConfig } from "../lib/types";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
+
+beforeEach(() => localStorage.clear());
 
 afterEach(() => {
   cleanup();
@@ -45,6 +47,12 @@ describe("landing page", () => {
     expect(screen.getByRole("heading", { name: "熱門機器人" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "績效排行榜預覽" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "只為 WEEX 而生。" })).toBeInTheDocument();
+  });
+
+  it("uses an explicit blank-workshop flag for the landing CTA", () => {
+    render(<Home />);
+
+    expect(screen.getByRole("link", { name: "從空白開始" })).toHaveAttribute("href", "/workshop?new=1");
   });
 
   it("renders featured bot cards with complete metrics and accessible actions", () => {
@@ -106,6 +114,64 @@ describe("bot catalog route", () => {
     expect(screen.getByText("顯示 10 / 10 組策略")).toBeInTheDocument();
   });
 
+  it("filters by trading timeframe", async () => {
+    const user = userEvent.setup();
+    render(<BotsPage />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "交易週期" }), "4h");
+
+    expect(screen.getAllByRole("article")).toHaveLength(5);
+    expect(screen.queryByText("Momentum Forge")).not.toBeInTheDocument();
+  });
+
+  it("favorites bots and persists favorites plus recent discovery preferences", async () => {
+    const user = userEvent.setup();
+    const first = render(<BotsPage />);
+
+    await user.click(screen.getByRole("button", { name: "收藏 Orbit DCA" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "市場" }), "spot");
+    await user.selectOptions(screen.getByRole("combobox", { name: "風險等級" }), "中");
+    await user.selectOptions(screen.getByRole("combobox", { name: "策略類型" }), "均線");
+    await user.selectOptions(screen.getByRole("combobox", { name: "交易週期" }), "4h");
+    await user.selectOptions(screen.getByRole("combobox", { name: "排序方式" }), "stability-desc");
+    first.unmount();
+
+    render(<BotsPage />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "市場" })).toHaveValue("spot"));
+    expect(screen.getByRole("combobox", { name: "風險等級" })).toHaveValue("中");
+    expect(screen.getByRole("combobox", { name: "策略類型" })).toHaveValue("均線");
+    expect(screen.getByRole("combobox", { name: "交易週期" })).toHaveValue("4h");
+    expect(screen.getByRole("combobox", { name: "排序方式" })).toHaveValue("stability-desc");
+    await user.click(screen.getByRole("button", { name: "重設篩選" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消收藏 Orbit DCA" })).toHaveAttribute("aria-pressed", "true"));
+  });
+
+  it("fails safely when discovery preferences cannot be stored", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    const user = userEvent.setup();
+    render(<BotsPage />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "市場" }), "spot");
+
+    expect(screen.getByRole("status")).toHaveTextContent("無法儲存探索偏好");
+    expect(screen.getAllByRole("article")).toHaveLength(5);
+  });
+
+  it("ignores unknown stored filters and favorite ids", async () => {
+    localStorage.setItem("cryptobot-labs:discovery:v1", JSON.stringify({
+      market: "all", risk: "all", tag: "未知標籤", timeframe: "99h",
+      sort: "return-desc", favorites: ["unknown-bot"],
+    }));
+
+    render(<BotsPage />);
+
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 10)); });
+    expect(screen.getAllByRole("article")).toHaveLength(10);
+    expect(screen.getByRole("combobox", { name: "策略類型" })).toHaveValue("all");
+    expect(screen.getByRole("combobox", { name: "交易週期" })).toHaveValue("all");
+    expect(screen.queryByRole("button", { name: /取消收藏/ })).not.toBeInTheDocument();
+  });
+
   it("quick-downloads an importable deterministic strategy package end to end", async () => {
     const bot = BOT_CATALOG[0];
     const objectUrl = "blob:orbit-dca-package";
@@ -133,6 +199,10 @@ describe("bot catalog route", () => {
     const user = userEvent.setup();
     render(<BotDownloadButton bot={bot} />);
     await user.click(screen.getByRole("button", { name: `快速下載 ${bot.name}` }));
+    const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
+    expect(dialog).toHaveTextContent("無法獨立交易");
+    expect(createObjectURL).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "確認下載" }));
     await clickObserved;
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
@@ -153,12 +223,31 @@ describe("bot catalog route", () => {
       blocks: bot.blocks,
       ...(bot.source === undefined ? {} : { source: bot.source }),
     };
-    const imported = await importBotPackage(new File([downloadedBlob!], clickedDownload, { type: "application/zip" }));
+    const imported = await botPackage.importBotPackage(new File([downloadedBlob!], clickedDownload, { type: "application/zip" }));
     expect(imported).toEqual({ config: expectedConfig, report: runBacktest(expectedConfig) });
     expect(imported.report.metrics.totalReturn).not.toBe(bot.metrics.totalReturn);
     expect(bot.metrics.totalReturn).toBe(48.6);
 
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+  });
+
+  it("offers five individual files when a quick ZIP download fails", async () => {
+    const bot = BOT_CATALOG[0];
+    vi.spyOn(botPackage, "exportBotPackage").mockRejectedValue(new Error("ZIP 產生失敗"));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:single-file") });
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    render(<BotDownloadButton bot={bot} />);
+
+    await user.click(screen.getByRole("button", { name: `快速下載 ${bot.name}` }));
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+
+    expect(await screen.findByText("ZIP 下載失敗，可改為分別下載 5 個檔案。")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /下載單一檔案/ })).toHaveLength(5);
+    await user.click(screen.getByRole("button", { name: "下載單一檔案 bot-config.json" }));
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:single-file"));
   });
 });
 
@@ -188,11 +277,19 @@ describe("bot detail route", () => {
     expect(within(metrics).getAllByRole("article")).toHaveLength(9);
     expect(within(metrics).getByText("模擬回測資料，不代表未來績效")).toBeInTheDocument();
     expect(screen.getByRole("figure", { name: /Orbit DCA 累積收益曲線/ })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: /WEEX 市場基準曲線/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "策略與基準比較摘要" })).toHaveTextContent("期末淨值");
     expect(screen.getByRole("table", { name: "Orbit DCA 月度表現" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "策略原理" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "適用市場" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "風險說明" })).toBeInTheDocument();
     expect(screen.getAllByText("模擬回測資料，不代表未來績效").length).toBeGreaterThan(0);
+  });
+
+  it("derives a deterministic benchmark series beside each bot", () => {
+    expect(benchmarkSeries(BOT_CATALOG[0])).toEqual(benchmarkSeries(BOT_CATALOG[0]));
+    expect(benchmarkSeries(BOT_CATALOG[0])).toHaveLength(BOT_CATALOG[0].equityCurve.length);
+    expect(benchmarkSeries(BOT_CATALOG[0])).not.toEqual(BOT_CATALOG[0].equityCurve);
   });
 
   it("throws the framework 404 boundary for unknown ids", async () => {

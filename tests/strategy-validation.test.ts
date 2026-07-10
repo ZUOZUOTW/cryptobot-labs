@@ -3,21 +3,12 @@ import { STRATEGY_BLOCKS, STRATEGY_PRESETS } from "../data/strategies";
 import { validateConfig, validateJavaScript } from "../lib/strategy-validation";
 import type { BotConfig, StrategyBlock } from "../lib/types";
 
-const entryBlock: StrategyBlock = {
-  id: "rsi",
-  name: "RSI 反轉",
-  group: "entry",
-  description: "RSI 進入超賣區時進場。",
-  parameters: [{ key: "period", label: "RSI 週期", value: 14, min: 2, max: 100, step: 1 }],
+const cloneBlock = (id: string): StrategyBlock => {
+  const source = STRATEGY_BLOCKS.find((block) => block.id === id)!;
+  return { ...source, parameters: source.parameters.map((parameter) => ({ ...parameter })) };
 };
-
-const riskBlock: StrategyBlock = {
-  id: "stop-loss",
-  name: "固定停損",
-  group: "risk",
-  description: "跌幅達門檻時停損。",
-  parameters: [{ key: "stopLoss", label: "停損", value: 3, min: 0.5, max: 20, step: 0.5, suffix: "%" }],
-};
+const entryBlock = cloneBlock("rsi");
+const riskBlock = cloneBlock("stop-loss");
 
 const validConfig: BotConfig = {
   id: "validation-fixture",
@@ -154,6 +145,28 @@ describe("validateConfig", () => {
     expect(validateConfig({ ...validConfig, source }).valid).toBe(true);
     expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
   });
+
+  it("rejects unknown, duplicate, and self-described strategy metadata", () => {
+    const canonicalEntry = STRATEGY_BLOCKS.find((block) => block.id === "rsi")!;
+    const canonicalRisk = STRATEGY_BLOCKS.find((block) => block.id === "stop-loss")!;
+    const config = { ...validConfig, blocks: [canonicalEntry, canonicalRisk] };
+
+    expect(validateConfig({ ...config, blocks: [...config.blocks, canonicalEntry] }).errors)
+      .toContain("策略模組不得重複：rsi");
+    expect(validateConfig({ ...config, blocks: [{ ...canonicalEntry, id: "unknown" }, canonicalRisk] }).errors)
+      .toContain("未知策略模組：unknown");
+    expect(validateConfig({ ...config, blocks: [{ ...canonicalEntry, group: "confirm" }, canonicalRisk] }).errors)
+      .toContain("策略模組群組不正確：rsi");
+    expect(validateConfig({
+      ...config,
+      blocks: [{
+        ...canonicalEntry,
+        parameters: canonicalEntry.parameters.map((parameter) => (
+          parameter.key === "oversold" ? { ...parameter, max: 999, value: 80 } : parameter
+        )),
+      }, canonicalRisk],
+    }).errors).toContain("策略參數定義不正確：rsi.oversold");
+  });
 });
 
 describe("validateJavaScript", () => {
@@ -215,10 +228,10 @@ describe("validateJavaScript", () => {
       .toContain("偵測到非 WEEX 網域：weex.com.evil.example");
   });
 
-  it("does not use a dynamic template URL to qualify WEEX", () => {
+  it("folds a template whose interpolation is statically known", () => {
     const validation = validateJavaScript("const host = 'api.weex.com'; const endpoint = `https://${host}/v1`; ");
 
-    expect(validation.errors).toEqual(["策略程式碼必須明確指定 WEEX 交易所"]);
+    expect(validation.valid).toBe(true);
   });
 
   it.each([
@@ -257,6 +270,36 @@ describe("validateJavaScript", () => {
     const source = "const exchange = 'WEEX'; const endpoint = 'https://weex.com/?next=https://api.kucoin.com';";
 
     expect(validateJavaScript(source).errors).toContain("偵測到非 WEEX 網域：api.kucoin.com");
+  });
+
+  it.each([
+    "const note = 'Binance is unsupported'; const exchange = 'WEEX';",
+    "const okxClient = {}; const exchange = 'WEEX';",
+    String.raw`const note = '\x42ybit'; const exchange = 'WEEX';`,
+  ])("rejects known non-WEEX names in decoded strings and identifiers", (source) => {
+    expect(validateJavaScript(source).errors.some((error) => error.includes("非 WEEX"))).toBe(true);
+  });
+
+  it("folds static concatenations and templates before applying URL policy", () => {
+    expect(validateJavaScript("const exchange='WEEX'; fetch('https://' + 'api.binance.com/v1');").valid).toBe(false);
+    expect(validateJavaScript("const exchange='WE' + 'EX'; fetch('https://' + 'api.weex.com/v1');").valid).toBe(true);
+    expect(validateJavaScript("const exchange='WEEX'; const host='api.weex.com'; fetch(`https://${host}/v1`);").valid).toBe(true);
+  });
+
+  it.each([
+    "const exchange='WEEX'; fetch(endpoint);",
+    "const exchange='WEEX'; new WebSocket(getSocketUrl());",
+    "const exchange='WEEX'; new WebTransport(endpoint);",
+    "const exchange='WEEX'; fetch(`https://${window.host}/v1`);",
+  ])("conservatively rejects unresolved network destinations", (source) => {
+    expect(validateJavaScript(source).errors).toContain("網路目的地必須是可靜態確認的 WEEX 網址");
+  });
+
+  it("allows only approved schemes for resolved network APIs", () => {
+    expect(validateJavaScript("const exchange='WEEX'; fetch('wss://ws.weex.com/feed');").valid).toBe(false);
+    expect(validateJavaScript("const exchange='WEEX'; new WebSocket('wss://ws.weex.com/feed');").valid).toBe(true);
+    expect(validateJavaScript("const exchange='WEEX'; new EventSource('https://api.weex.com/events');").valid).toBe(true);
+    expect(validateJavaScript("const exchange='WEEX'; new WebTransport('https://api.weex.com/transport');").valid).toBe(true);
   });
 
   it.each([

@@ -1,12 +1,23 @@
 import type { BotDefinition, Market, RiskLevel, StrategyBlock } from "../lib/types";
+import { cloneStrategyBlock } from "./strategies";
 
 const DISCLAIMER = "模擬回測資料，不代表未來績效" as const;
 const months = ["7月", "8月", "9月", "10月", "11月", "12月", "1月", "2月", "3月", "4月", "5月", "6月"];
 const makeCurve = (values: number[]) => values.map((value, index) => ({ label: months[index], value }));
-const makeBlocks = (seed: Seed): StrategyBlock[] => [
-  { id: `${seed.id}-entry`, name: seed.tags[0], group: "entry", description: seed.explanation, parameters: [] },
-  { id: `${seed.id}-stop-loss`, name: "固定停損", group: "risk", description: "價格觸及停損幅度時離場。", parameters: [{ key:"stopLoss", label:"停損", value: seed.market === "spot" ? 5 : 3, min:1, max:20, step:0.5, suffix:"%" }] },
-];
+const BOT_BLOCKS: Record<string, string[]> = {
+  "orbit-dca": ["dca", "fixed-position", "maximum-daily-loss"],
+  "grid-navigator": ["grid", "fixed-position", "stop-loss", "take-profit"],
+  "golden-cross": ["sma-cross", "fixed-position", "stop-loss", "take-profit"],
+  "rsi-rebound": ["rsi", "fixed-position", "stop-loss", "take-profit"],
+  "bollinger-pulse": ["bollinger-breakout", "volume-confirmation", "stop-loss"],
+  "momentum-forge": ["macd", "atr-sizing", "stop-loss"],
+  "breakout-hunter": ["bollinger-breakout", "volume-confirmation", "trailing-stop"],
+  "atr-sentinel": ["sma-cross", "atr-sizing", "trailing-stop"],
+  "dual-side-ranger": ["grid", "atr-sizing", "stop-loss"],
+  "leverage-guardian": ["macd", "atr-sizing", "maximum-daily-loss", "take-profit"],
+};
+
+const makeBlocks = (seed: Seed): StrategyBlock[] => (BOT_BLOCKS[seed.id] ?? []).map(cloneStrategyBlock);
 
 type Seed = {
   id: string; name: string; market: Market; description: string; tags: string[];

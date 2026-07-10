@@ -18,6 +18,11 @@ interface PackageManifest {
   createdAt?: string;
 }
 
+export interface BotPackageFile {
+  name: (typeof REQUIRED_FILES)[number];
+  blob: Blob;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 const METRIC_FIELDS = [
@@ -78,7 +83,7 @@ const assertReport = (value: unknown): BacktestReport => {
   return value;
 };
 
-const reportsMatch = (report: BacktestReport, expected: BacktestReport): boolean => (
+export const reportsMatch = (report: BacktestReport, expected: BacktestReport): boolean => (
   report.seed === expected.seed
   && report.generatedAt === expected.generatedAt
   && report.disclaimer === expected.disclaimer
@@ -131,22 +136,35 @@ const packageReadme = (config: BotConfig): string => [
   "",
 ].join("\n");
 
-export const exportBotPackage = async (config: BotConfig, report: BacktestReport): Promise<Blob> => {
+export const buildBotPackageFiles = async (config: BotConfig, report: BacktestReport): Promise<BotPackageFile[]> => {
   const validConfig = assertConfig(config, true);
   const validReport = assertReport(report);
+  if (!reportsMatch(validReport, runBacktest(validConfig))) {
+    throw new Error("回測報告與策略設定不一致：backtest-report.json");
+  }
   const source = validConfig.source ?? defaultStrategySource(validConfig);
   assertSource(source);
 
+  const createdAt = new Date().toISOString();
+  const contents: Record<(typeof REQUIRED_FILES)[number], string> = {
+    "bot-config.json": JSON.stringify(validConfig, null, 2),
+    "strategy.js": source,
+    "backtest-report.json": JSON.stringify(validReport, null, 2),
+    "README-zh-TW.md": packageReadme(validConfig),
+    "manifest.json": JSON.stringify({ formatVersion: FORMAT_VERSION, exchange: "WEEX", createdAt }, null, 2),
+  };
+
+  return REQUIRED_FILES.map((name) => ({
+    name,
+    blob: new Blob([contents[name]], { type: name.endsWith(".json") ? "application/json" : "text/plain;charset=utf-8" }),
+  }));
+};
+
+export const exportBotPackage = async (config: BotConfig, report: BacktestReport): Promise<Blob> => {
+  const files = await buildBotPackageFiles(config, report);
+
   const zip = new JSZip();
-  zip.file("bot-config.json", JSON.stringify(validConfig, null, 2));
-  zip.file("strategy.js", source);
-  zip.file("backtest-report.json", JSON.stringify(validReport, null, 2));
-  zip.file("README-zh-TW.md", packageReadme(validConfig));
-  zip.file("manifest.json", JSON.stringify({
-    formatVersion: FORMAT_VERSION,
-    exchange: "WEEX",
-    createdAt: new Date().toISOString(),
-  }, null, 2));
+  for (const file of files) zip.file(file.name, await file.blob.arrayBuffer());
 
   return zip.generateAsync({ type: "blob" });
 };

@@ -72,6 +72,33 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByLabelText("匯入策略 ZIP 套件")).toHaveAttribute("accept", expect.stringContaining(".zip"));
   });
 
+  it("drops JavaScript source when switching to visual mode and exports the visual config", async () => {
+    const user = userEvent.setup();
+    const importedConfig = { ...cloneConfig(STRATEGY_PRESETS[0]), source: "const exchange = 'WEEX';" };
+    vi.spyOn(botPackage, "importBotPackage").mockResolvedValue({
+      config: importedConfig,
+      report: runBacktest(importedConfig),
+    });
+    const exportPackage = vi.spyOn(botPackage, "exportBotPackage").mockResolvedValue(new Blob(["zip"]));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:visual") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderWorkshop();
+
+    await user.upload(screen.getByLabelText("匯入策略 ZIP 套件"), new File(["zip"], "js.zip"));
+    await screen.findByRole("textbox", { name: "JavaScript 策略原始碼" });
+    await user.click(screen.getByRole("button", { name: "視覺化模式" }));
+    expect(screen.queryByRole("textbox", { name: "JavaScript 策略原始碼" })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("cryptobot-labs:draft:v1")!)).not.toHaveProperty("source");
+
+    await user.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    await completeBacktest();
+    await user.click(screen.getByRole("button", { name: "下載完整策略包" }));
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+    await waitFor(() => expect(exportPackage).toHaveBeenCalled());
+    expect(exportPackage.mock.calls[0][0]).not.toHaveProperty("source");
+  });
+
   it("treats JavaScript as inert text and blocks non-WEEX source", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -157,6 +184,7 @@ describe("multi-strategy workshop", () => {
     await user.click(screen.getByRole("button", { name: "確認下載" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("瀏覽器阻擋下載");
+    expect(screen.getAllByRole("button", { name: /下載單一檔案/ })).toHaveLength(5);
     expect(document.body.querySelector(`a[href="${objectUrl}"]`)).toBeNull();
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
   });
@@ -228,6 +256,29 @@ describe("multi-strategy workshop", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("retries a failed workshop ZIP download through a fresh confirmation", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(botPackage, "exportBotPackage")
+      .mockRejectedValueOnce(new Error("第一次失敗"))
+      .mockResolvedValueOnce(new Blob(["zip"]));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:retry") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "執行模擬回測" }));
+    await completeBacktest();
+    const trigger = screen.getByRole("button", { name: "下載完整策略包" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+    await screen.findByText("第一次失敗");
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "確認下載完整策略包" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+
+    expect(await screen.findByText("完整策略包已開始下載。")).toBeInTheDocument();
+  });
+
   it("only exports a report matching the current config fingerprint", async () => {
     const user = userEvent.setup();
     renderWorkshop();
@@ -264,7 +315,7 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
   });
 
-  it("keeps import restoration atomic when saving the imported draft fails", async () => {
+  it("retains a valid import in memory with immediate export when draft persistence fails", async () => {
     const user = userEvent.setup();
     const importedConfig = cloneConfig(STRATEGY_PRESETS[4]);
     vi.spyOn(botPackage, "importBotPackage").mockResolvedValue({
@@ -279,12 +330,11 @@ describe("multi-strategy workshop", () => {
       new File(["zip"], "cannot-save.zip", { type: "application/zip" }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("無法儲存策略草稿");
-    expect(screen.queryByText(/已匯入 cannot-save\.zip/)).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("SMA 均線交叉");
-    expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("MACD 動能");
-    expect(screen.queryByRole("region", { name: "回測結果" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
+    expect(await screen.findByText(/無法儲存匯入策略草稿，請立即下載策略套件備份/)).toBeInTheDocument();
+    expect(screen.getByText(/已匯入 cannot-save\.zip/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("MACD 動能");
+    expect(screen.getByRole("region", { name: "回測結果" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
   });
 
   it("allows retrying the same ZIP file after an import failure", async () => {
@@ -497,6 +547,41 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("ATR 波動倉位");
   });
 
+  it("restores an incomplete invalid-JavaScript draft without executing it", async () => {
+    const marker = "__invalidDraftExecuted";
+    delete (globalThis as Record<string, unknown>)[marker];
+    const draft = { ...cloneConfig(STRATEGY_PRESETS[0]), blocks: [], source: `globalThis.${marker}=true; const = ;` };
+    localStorage.setItem("cryptobot-labs:draft:v1", JSON.stringify(draft));
+
+    renderWorkshop();
+
+    const editor = await screen.findByRole("textbox", { name: "JavaScript 策略原始碼" });
+    expect(editor).toHaveValue(draft.source);
+    expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeDisabled();
+    expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+  });
+
+  it("gives new=1 precedence over catalog and saved draft and guides an empty config", async () => {
+    localStorage.setItem("cryptobot-labs:draft:v1", JSON.stringify(STRATEGY_PRESETS[4]));
+    window.history.replaceState(null, "", "/workshop?bot=momentum-forge&new=1");
+
+    renderWorkshop();
+
+    await waitFor(() => expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("尚未選擇策略模組"));
+    expect(screen.getByRole("region", { name: "策略摘要" })).toHaveTextContent("至少需要一個進場訊號");
+    expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeDisabled();
+  });
+
+  it("provides a visible action that deliberately resets to a blank visual config", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    await user.click(screen.getByRole("button", { name: "建立空白策略" }));
+
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("尚未選擇策略模組");
+    expect(screen.getByRole("button", { name: "視覺化模式" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("keeps the catalog and presets isolated from the editable current config", async () => {
     const catalogBefore = JSON.stringify(STRATEGY_BLOCKS);
     const presetsBefore = JSON.stringify(STRATEGY_PRESETS);
@@ -520,15 +605,34 @@ describe("multi-strategy workshop", () => {
     renderWorkshop();
 
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "idle");
+    expect(screen.getByText("等待執行")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "執行模擬回測" }));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "validating");
+    expect(screen.getByText("驗證設定")).toBeInTheDocument();
 
     act(() => vi.advanceTimersByTime(40));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "running");
+    expect(screen.getByText("模擬運行中")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("訊號流模擬中");
 
     act(() => vi.advanceTimersByTime(200));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "complete");
+    expect(screen.getByText("回測完成")).toBeInTheDocument();
+  });
+
+  it("offers functional mobile validation, backtest, and export actions with unique labels", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    const bar = screen.getByRole("region", { name: "手機版組裝操作" });
+    expect(within(bar).getByRole("button", { name: "行動列：檢查設定" })).toBeEnabled();
+    await user.click(within(bar).getByRole("button", { name: "行動列：執行回測" }));
+    expect(within(bar).getByText("正在驗證並執行模擬回測…")).toBeInTheDocument();
+    await completeBacktest();
+    expect(within(bar).getByText("回測完成，可下載策略套件")).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "行動列：下載套件" })).toBeEnabled();
+    await user.click(within(bar).getByRole("button", { name: "行動列：下載套件" }));
+    expect(screen.getByRole("dialog", { name: "確認下載完整策略包" })).toBeInTheDocument();
   });
 
   it("returns from validating to idle with guidance when validation rejects the run", () => {

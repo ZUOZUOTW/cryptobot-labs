@@ -113,6 +113,7 @@ export function StrategyPalette({ selected, onPreset, onAdd, onRemove, onMove }:
       <section className="selected-strategies" aria-label="已選策略">
         <h3>訊號流程</h3>
         <ol>
+          {selected.length === 0 && <li className="selected-strategies__empty">尚未選擇策略模組</li>}
           {selected.map((block, index) => (
             <li data-block-id={block.id} key={block.id}>
               <span className="selected-strategies__index">{String(index + 1).padStart(2, "0")}</span>

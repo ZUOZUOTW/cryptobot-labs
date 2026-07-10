@@ -18,7 +18,7 @@ const block = (
   parameters: StrategyParameter[],
 ): StrategyBlock => ({ id, name, group, description, parameters });
 
-export const STRATEGY_BLOCKS: StrategyBlock[] = [
+const strategyBlocks: StrategyBlock[] = [
   block("rsi", "RSI 反轉", "entry", "RSI 進入超賣區並反轉時進場。", [
     parameter("period", "RSI 週期", 14, 2, 100, 1),
     parameter("oversold", "超賣門檻", 30, 5, 50, 1),
@@ -69,7 +69,17 @@ export const STRATEGY_BLOCKS: StrategyBlock[] = [
   ]),
 ];
 
-const cloneBlock = (id: string): StrategyBlock => {
+const deepFreezeBlock = (strategy: StrategyBlock): StrategyBlock => {
+  strategy.parameters.forEach(Object.freeze);
+  Object.freeze(strategy.parameters);
+  return Object.freeze(strategy);
+};
+
+export const STRATEGY_BLOCKS: StrategyBlock[] = Object.freeze(
+  strategyBlocks.map(deepFreezeBlock),
+) as unknown as StrategyBlock[];
+
+export const cloneStrategyBlock = (id: string): StrategyBlock => {
   const strategy = STRATEGY_BLOCKS.find((candidate) => candidate.id === id);
   if (!strategy) throw new Error(`Unknown strategy block: ${id}`);
   return { ...strategy, parameters: strategy.parameters.map((item) => ({ ...item })) };
@@ -91,7 +101,7 @@ const preset = (
   timeframe,
   logicMode: "all",
   leverage,
-  blocks: blockIds.map(cloneBlock),
+  blocks: blockIds.map(cloneStrategyBlock),
 });
 
 export const STRATEGY_PRESETS: BotConfig[] = [

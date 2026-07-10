@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useState } from "react";
 import { runBacktest } from "../lib/backtest";
-import { exportBotPackage } from "../lib/bot-package";
+import { buildBotPackageFiles, exportBotPackage, type BotPackageFile } from "../lib/bot-package";
+import { downloadBlob } from "../lib/browser-download";
 import type { BotConfig, BotDefinition } from "../lib/types";
+import { PackageFallbackFiles } from "./PackageFallbackFiles";
 import { PerformanceChart } from "./PerformanceChart";
 
 interface BotCardProps {
   bot: BotDefinition;
+  favorite?: boolean;
+  onFavorite?: (botId: string) => void;
 }
 
 interface BotDownloadButtonProps {
@@ -34,45 +38,58 @@ const botConfig = (bot: BotDefinition): BotConfig => ({
 
 export function BotDownloadButton({ bot, label = "快速下載", className = "button button--secondary button--small" }: BotDownloadButtonProps) {
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [fallbackFiles, setFallbackFiles] = useState<BotPackageFile[]>([]);
 
   const download = async () => {
+    setConfirmationOpen(false);
     setStatus("working");
-    let objectUrl: string | undefined;
+    setMessage("");
+    setFallbackFiles([]);
+    const config = botConfig(bot);
+    const report = runBacktest(config);
     try {
-      const config = botConfig(bot);
-      const blob = await exportBotPackage(config, runBacktest(config));
-      objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = `${bot.id}-weex-strategy.zip`;
-      document.body.append(anchor);
-      try {
-        anchor.click();
-        setStatus("idle");
-      } finally {
-        anchor.remove();
-      }
-    } catch {
+      const blob = await exportBotPackage(config, report);
+      downloadBlob(blob, `${bot.id}-weex-strategy.zip`);
+      setStatus("idle");
+      setMessage("策略套件已開始下載。");
+    } catch (error) {
       setStatus("error");
-    } finally {
-      const urlToRevoke = objectUrl;
-      if (urlToRevoke !== undefined) {
-        window.setTimeout(() => URL.revokeObjectURL(urlToRevoke), 0);
+      setMessage(error instanceof Error ? error.message : "下載失敗，請重試。");
+      try {
+        setFallbackFiles(await buildBotPackageFiles(config, report));
+      } catch {
+        setFallbackFiles([]);
       }
     }
   };
 
   return (
     <span className="download-control">
-      <button className={className} disabled={status === "working"} onClick={download} type="button">
+      <button className={className} disabled={status === "working"} onClick={() => setConfirmationOpen(true)} type="button">
         {status === "working" ? "產生套件中…" : `${label} ${bot.name}`}
       </button>
-      {status === "error" && <span className="download-control__error" role="status">下載失敗，請重試。</span>}
+      {message && <span className="download-control__error" role="status">{message}</span>}
+      {fallbackFiles.length > 0 && <PackageFallbackFiles files={fallbackFiles} />}
+      {confirmationOpen && (
+        <div aria-labelledby={`quick-download-${bot.id}`} aria-modal="true" className="package-confirmation" role="dialog">
+          <div className="package-confirmation__card glass-panel">
+            <p className="eyebrow">SIMULATION PACKAGE</p>
+            <h3 id={`quick-download-${bot.id}`}>確認下載 {bot.name}</h3>
+            <p>此套件只包含模擬策略與回測資料，無法獨立交易，也不會代表未來績效。</p>
+            <div className="button-row">
+              <button className="button button--ghost" onClick={() => setConfirmationOpen(false)} type="button">取消</button>
+              <button className="button button--primary" onClick={download} type="button">確認下載</button>
+            </div>
+          </div>
+        </div>
+      )}
     </span>
   );
 }
 
-export function BotCard({ bot }: BotCardProps) {
+export function BotCard({ bot, favorite = false, onFavorite }: BotCardProps) {
   return (
     <article className="bot-card glass-panel" aria-labelledby={`bot-${bot.id}-title`}>
       <div className="bot-card__header">
@@ -80,7 +97,20 @@ export function BotCard({ bot }: BotCardProps) {
           <p className="eyebrow">{bot.exchange} / {bot.symbol}</p>
           <h3 id={`bot-${bot.id}-title`}>{bot.name}</h3>
         </div>
-        <span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span>
+        <div className="bot-card__badges">
+          {onFavorite && (
+            <button
+              aria-label={`${favorite ? "取消收藏" : "收藏"} ${bot.name}`}
+              aria-pressed={favorite}
+              className="favorite-button"
+              onClick={() => onFavorite(bot.id)}
+              type="button"
+            >
+              <span aria-hidden="true">{favorite ? "★" : "☆"}</span>
+            </button>
+          )}
+          <span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span>
+        </div>
       </div>
       <p className="bot-card__description">{bot.description}</p>
       <div className="tag-row">

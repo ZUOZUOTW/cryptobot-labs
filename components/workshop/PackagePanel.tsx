@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { exportBotPackage, importBotPackage } from "../../lib/bot-package";
+import { buildBotPackageFiles, exportBotPackage, importBotPackage, type BotPackageFile } from "../../lib/bot-package";
+import { downloadBlob } from "../../lib/browser-download";
 import { validateConfig } from "../../lib/strategy-validation";
 import type { BacktestReport, BotConfig } from "../../lib/types";
+import { PackageFallbackFiles } from "../PackageFallbackFiles";
 
 interface PackagePanelProps {
   config: BotConfig;
@@ -23,6 +25,7 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
   const [exportState, setExportState] = useState<WorkState>("idle");
   const [importState, setImportState] = useState<WorkState>("idle");
   const [message, setMessage] = useState("");
+  const [fallbackFiles, setFallbackFiles] = useState<BotPackageFile[]>([]);
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -67,29 +70,17 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
     setExportState("working");
     setImportState((current) => current === "error" ? "idle" : current);
     setMessage("");
-    let objectUrl: string | undefined;
     try {
       const blob = await exportBotPackage(config, report);
-      objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = packageFilename(config);
-      document.body.append(anchor);
-      try {
-        anchor.click();
-      } finally {
-        anchor.remove();
-      }
+      downloadBlob(blob, packageFilename(config));
+      setFallbackFiles([]);
       setExportState("complete");
       setMessage("完整策略包已開始下載。");
     } catch (error) {
       setExportState("error");
       setMessage(error instanceof Error ? error.message : "無法產生策略套件，請重試。");
-    } finally {
-      const urlToRevoke = objectUrl;
-      if (urlToRevoke !== undefined) {
-        window.setTimeout(() => URL.revokeObjectURL(urlToRevoke), 0);
-      }
+      try { setFallbackFiles(await buildBotPackageFiles(config, report)); }
+      catch { setFallbackFiles([]); }
     }
   };
 
@@ -137,6 +128,7 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
           <p>完成目前設定的模擬回測後，才能輸出包含設定、原始碼、報告、說明與版本資訊的套件。</p>
           <button
             className="button button--primary"
+            data-package-export-trigger="true"
             disabled={!canExport}
             onClick={() => {
               restoreAfterExportRef.current = false;
@@ -167,6 +159,7 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
       </div>
 
       {message && <p className="package-message" role={hasError ? "alert" : "status"}>{message}</p>}
+      {fallbackFiles.length > 0 && <PackageFallbackFiles files={fallbackFiles} />}
 
       {confirmationOpen && (
         <div

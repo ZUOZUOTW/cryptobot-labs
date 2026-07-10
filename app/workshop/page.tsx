@@ -38,6 +38,12 @@ const configFromBot = (bot: BotDefinition): BotConfig => ({
 });
 
 const DEFAULT_CONFIG = cloneConfig(STRATEGY_PRESETS[0]);
+const blankConfig = (): BotConfig => ({
+  ...cloneConfig(DEFAULT_CONFIG),
+  id: "untitled-strategy",
+  name: "未命名策略",
+  blocks: [],
+});
 type WorkshopMode = "visual" | "javascript";
 
 interface AssociatedReport {
@@ -50,13 +56,15 @@ export default function WorkshopPage() {
   const [draftError, setDraftError] = useState("");
   const [mode, setMode] = useState<WorkshopMode>("visual");
   const [associatedReport, setAssociatedReport] = useState<AssociatedReport | null>(null);
+  const [mobileMessage, setMobileMessage] = useState("");
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const search = new URLSearchParams(window.location.search);
       const draft = loadDraft();
       const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
-      const next = requestedBot ? configFromBot(requestedBot) : draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
+      const deliberateNew = search.get("new") === "1";
+      const next = deliberateNew ? blankConfig() : requestedBot ? configFromBot(requestedBot) : draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
       const requestedJavaScript = search.get("mode") === "javascript";
       if (requestedJavaScript && next.source === undefined) next.source = WEEX_JAVASCRIPT_TEMPLATE;
       setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
@@ -112,22 +120,42 @@ export default function WorkshopPage() {
 
   const selectMode = (nextMode: WorkshopMode) => {
     setMode(nextMode);
+    if (nextMode === "visual") {
+      updateConfig((current) => {
+        const visualConfig = { ...current };
+        delete visualConfig.source;
+        return visualConfig;
+      });
+      return;
+    }
     if (nextMode === "javascript" && config.source === undefined) {
       updateConfig((current) => ({ ...current, source: WEEX_JAVASCRIPT_TEMPLATE }));
     }
   };
 
   const updateSource = (source: string) => updateConfig((current) => ({ ...current, source }));
-  const acceptReport = (report: BacktestReport) => setAssociatedReport({ fingerprint: configFingerprint, report });
+  const acceptReport = (report: BacktestReport) => {
+    setAssociatedReport({ fingerprint: configFingerprint, report });
+    setMobileMessage("回測完成，可下載策略套件");
+  };
   const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
     const next = cloneConfig(importedConfig);
     const saved = saveDraft(next);
-    if (!saved.ok) return saved;
-    setDraftError("");
+    setDraftError(saved.ok ? "" : "無法儲存匯入策略草稿，請立即下載策略套件備份。記憶體中的匯入內容仍可立即匯出。");
     setConfig(next);
     setMode(next.source === undefined ? "visual" : "javascript");
     setAssociatedReport({ fingerprint: backtestConfigFingerprint(next), report });
-    return saved;
+    return { ok: true } as const;
+  };
+
+  const resetToBlank = () => {
+    const next = blankConfig();
+    const saved = saveDraft(next);
+    setDraftError(saved.ok ? "" : saved.reason);
+    setConfig(next);
+    setMode("visual");
+    setAssociatedReport(null);
+    setMobileMessage("已建立空白策略，請加入進場與出場或風控規則。");
   };
 
   return (
@@ -144,6 +172,7 @@ export default function WorkshopPage() {
       <div className="workshop-mode" aria-label="編輯模式" role="group">
         <button aria-pressed={mode === "visual"} onClick={() => selectMode("visual")} type="button">視覺化模式</button>
         <button aria-pressed={mode === "javascript"} onClick={() => selectMode("javascript")} type="button">JavaScript 模式</button>
+        <button onClick={resetToBlank} type="button">建立空白策略</button>
       </div>
 
       <div className="workshop-grid">
@@ -164,12 +193,22 @@ export default function WorkshopPage() {
           <BacktestPanel
             config={config}
             onReport={acceptReport}
+            onRun={() => setMobileMessage("正在驗證並執行模擬回測…")}
             restoredReport={currentReport}
             validation={validation}
           />
         </div>
         <PackagePanel config={config} onImport={acceptImport} report={currentReport} />
       </div>
+
+      <section className="workshop-mobile-actions" aria-label="手機版組裝操作">
+        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可下載策略套件" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
+        <div>
+          <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行模擬回測。" : validation.errors.join("；"))} type="button">檢查</button>
+          <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => document.querySelector<HTMLButtonElement>(".backtest-run")?.click()} type="button">回測</button>
+          <button aria-label="行動列：下載套件" disabled={!currentReport} onClick={() => document.querySelector<HTMLButtonElement>('[data-package-export-trigger="true"]')?.click()} type="button">下載</button>
+        </div>
+      </section>
     </div>
   );
 }

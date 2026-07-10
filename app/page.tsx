@@ -83,7 +83,7 @@ export default function Home() {
 
       <section className="landing-section landing-cta site-container">
         <p className="eyebrow">READY TO ASSEMBLE?</p><h2>下一個策略，從這裡開始。</h2>
-        <div className="button-row"><Link className="button button--primary" href="/bots">探索 10 組策略</Link><Link className="button button--secondary" href="/workshop">從空白開始</Link></div>
+        <div className="button-row"><Link className="button button--primary" href="/bots">探索 10 組策略</Link><Link className="button button--secondary" href="/workshop?new=1">從空白開始</Link></div>
       </section>
     </div>
   );

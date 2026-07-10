@@ -1,4 +1,5 @@
 import { parse } from "acorn";
+import { STRATEGY_BLOCKS } from "../data/strategies";
 import type { BotConfig } from "./types";
 
 export interface ValidationResult {
@@ -12,6 +13,12 @@ export type BotConfigCandidate = Omit<BotConfig, "exchange"> & { exchange: strin
 const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
 const NETWORK_URL_CANDIDATE_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/.*?(?=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/|[\s"'`<>]|$)/g;
 const SUPPORTED_NETWORK_SCHEMES = new Set(["http", "https", "ws", "wss"]);
+const FORBIDDEN_EXCHANGES = [
+  "binance", "okx", "bybit", "coinbase", "kraken", "kucoin", "bitget",
+  "gate.io", "gateio", "huobi", "htx", "mexc",
+] as const;
+const HTTP_SCHEMES = new Set(["http", "https"]);
+const WEBSOCKET_SCHEMES = new Set(["ws", "wss"]);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -68,19 +75,43 @@ type AstRecord = Record<string, unknown> & { type?: string };
 
 const astRecord = (value: unknown): AstRecord | null => isRecord(value) ? value : null;
 
-const staticStringValue = (value: unknown): string | undefined => {
+type StaticBindings = Map<string, string>;
+
+const staticStringValue = (value: unknown, bindings: StaticBindings = new Map(), seen = new Set<string>()): string | undefined => {
   const node = astRecord(value);
   if (!node) return undefined;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node.type === "TemplateElement") {
+    const cooked = astRecord(node.value)?.cooked;
+    return typeof cooked === "string" ? cooked : undefined;
+  }
+  if (node.type === "Identifier" && typeof node.name === "string") {
+    if (seen.has(node.name)) return undefined;
+    seen.add(node.name);
+    return bindings.get(node.name);
+  }
+  if (node.type === "BinaryExpression" && node.operator === "+") {
+    const left = staticStringValue(node.left, bindings, new Set(seen));
+    const right = staticStringValue(node.right, bindings, new Set(seen));
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
   if (
     node.type === "TemplateLiteral"
     && Array.isArray(node.expressions)
-    && node.expressions.length === 0
     && Array.isArray(node.quasis)
   ) {
-    const first = astRecord(node.quasis[0]);
-    const cooked = astRecord(first?.value)?.cooked;
-    return typeof cooked === "string" ? cooked : undefined;
+    let result = "";
+    for (let index = 0; index < node.quasis.length; index += 1) {
+      const quasi = staticStringValue(node.quasis[index], bindings, new Set(seen));
+      if (quasi === undefined) return undefined;
+      result += quasi;
+      if (index < node.expressions.length) {
+        const expression = staticStringValue(node.expressions[index], bindings, new Set(seen));
+        if (expression === undefined) return undefined;
+        result += expression;
+      }
+    }
+    return result;
   }
   return undefined;
 };
@@ -100,15 +131,15 @@ const assignmentTargetName = (value: unknown): string | undefined => {
   return undefined;
 };
 
-const exchangeValue = (node: AstRecord): string | undefined | null => {
+const exchangeValue = (node: AstRecord, bindings: StaticBindings): string | undefined | null => {
   if (node.type === "VariableDeclarator" && astName(node.id)?.toLowerCase() === "exchange") {
-    return astName(node.init) ?? null;
+    return staticStringValue(node.init, bindings) ?? null;
   }
   if (node.type === "Property" && astName(node.key)?.toLowerCase() === "exchange") {
-    return astName(node.value) ?? null;
+    return staticStringValue(node.value, bindings) ?? null;
   }
   if (node.type === "AssignmentExpression" && assignmentTargetName(node.left)?.toLowerCase() === "exchange") {
-    return astName(node.right) ?? null;
+    return staticStringValue(node.right, bindings) ?? null;
   }
   return undefined;
 };
@@ -124,6 +155,82 @@ const walkAst = (value: unknown, visit: (node: AstRecord) => void): void => {
   for (const [key, child] of Object.entries(node)) {
     if (key !== "loc" && key !== "start" && key !== "end") walkAst(child, visit);
   }
+};
+
+const forbiddenExchange = (value: string): string | undefined => {
+  const lowered = value.toLowerCase();
+  return FORBIDDEN_EXCHANGES.find((token) => lowered.includes(token));
+};
+
+const calleeName = (value: unknown): string | undefined => {
+  const node = astRecord(value);
+  if (!node) return undefined;
+  if (node.type === "Identifier") return astName(node);
+  if (node.type === "MemberExpression") return astName(node.property);
+  return undefined;
+};
+
+const networkDestination = (node: AstRecord): { value: unknown; schemes: Set<string> } | null => {
+  if (node.type === "CallExpression" && calleeName(node.callee)?.toLowerCase() === "fetch") {
+    return { value: Array.isArray(node.arguments) ? node.arguments[0] : undefined, schemes: HTTP_SCHEMES };
+  }
+  if (node.type !== "NewExpression") return null;
+  const name = calleeName(node.callee)?.toLowerCase();
+  if (name === "websocket") return { value: Array.isArray(node.arguments) ? node.arguments[0] : undefined, schemes: WEBSOCKET_SCHEMES };
+  if (name === "eventsource" || name === "request" || name === "webtransport") {
+    return { value: Array.isArray(node.arguments) ? node.arguments[0] : undefined, schemes: HTTP_SCHEMES };
+  }
+  return null;
+};
+
+const validateUrl = (candidate: string, schemes: Set<string>): string | null => {
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return `偵測到無效網路網址：${candidate}`;
+  }
+  const scheme = url.protocol.slice(0, -1).toLowerCase();
+  if (!schemes.has(scheme)) return `不支援的網路協定：${scheme}`;
+  if (url.username !== "" || url.password !== "") return "網路網址不得包含使用者資訊";
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "weex.com" && !hostname.endsWith(".weex.com")) return `偵測到非 WEEX 網域：${hostname}`;
+  return null;
+};
+
+const canonicalBlockErrors = (config: BotConfig, validateValues: boolean): string[] => {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const strategy of config.blocks) {
+    if (seen.has(strategy.id)) errors.push(`策略模組不得重複：${strategy.id}`);
+    seen.add(strategy.id);
+    const canonical = STRATEGY_BLOCKS.find((block) => block.id === strategy.id);
+    if (!canonical) {
+      errors.push(`未知策略模組：${strategy.id}`);
+      continue;
+    }
+    if (strategy.group !== canonical.group) errors.push(`策略模組群組不正確：${strategy.id}`);
+    const parameterKeys = new Set<string>();
+    for (const item of strategy.parameters) {
+      if (parameterKeys.has(item.key)) errors.push(`策略參數不得重複：${strategy.id}.${item.key}`);
+      parameterKeys.add(item.key);
+      const expected = canonical.parameters.find((parameter) => parameter.key === item.key);
+      if (!expected) {
+        errors.push(`未知策略參數：${strategy.id}.${item.key}`);
+        continue;
+      }
+      if (item.min !== expected.min || item.max !== expected.max || item.step !== expected.step) {
+        errors.push(`策略參數定義不正確：${strategy.id}.${item.key}`);
+      }
+      if (validateValues && (item.value < expected.min || item.value > expected.max)) {
+        errors.push(`${canonical.name}的${expected.label}必須介於 ${expected.min} 到 ${expected.max}`);
+      }
+    }
+    for (const expected of canonical.parameters) {
+      if (!parameterKeys.has(expected.key)) errors.push(`缺少策略參數：${strategy.id}.${expected.key}`);
+    }
+  }
+  return errors;
 };
 
 export const validateJavaScript = (source: string): SourceValidationResult => {
@@ -143,10 +250,30 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
 
   const errors: string[] = [];
   const exchangeErrors = new Set<string>();
+  const bindings: StaticBindings = new Map();
+  const compoundChildren = new Set<AstRecord>();
   let explicitlyWeex = false;
 
   walkAst(syntaxTree, (node) => {
-    const assignedExchange = exchangeValue(node);
+    if (node.type === "BinaryExpression") {
+      const left = astRecord(node.left);
+      const right = astRecord(node.right);
+      if (left) compoundChildren.add(left);
+      if (right) compoundChildren.add(right);
+    }
+    if (node.type === "TemplateLiteral") {
+      if (Array.isArray(node.quasis)) node.quasis.forEach((item) => { const child = astRecord(item); if (child) compoundChildren.add(child); });
+      if (Array.isArray(node.expressions)) node.expressions.forEach((item) => { const child = astRecord(item); if (child) compoundChildren.add(child); });
+    }
+    if (node.type !== "VariableDeclarator") return;
+    const name = astName(node.id);
+    if (!name) return;
+    const value = staticStringValue(node.init, bindings);
+    if (value !== undefined) bindings.set(name, value);
+  });
+
+  walkAst(syntaxTree, (node) => {
+    const assignedExchange = exchangeValue(node, bindings);
     if (assignedExchange !== undefined) {
       if (assignedExchange?.toUpperCase() === "WEEX") {
         explicitlyWeex = true;
@@ -155,8 +282,28 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
       }
     }
 
-    const staticValue = staticStringValue(node);
+    if (node.type === "Identifier" && typeof node.name === "string") {
+      const forbidden = forbiddenExchange(node.name);
+      if (forbidden) errors.push(`偵測到非 WEEX 交易所識別字：${forbidden}`);
+    }
+
+    const destination = networkDestination(node);
+    if (destination) {
+      const resolved = staticStringValue(destination.value, bindings);
+      if (resolved === undefined) {
+        errors.push("網路目的地必須是可靜態確認的 WEEX 網址");
+      } else {
+        const urlError = validateUrl(resolved, destination.schemes);
+        if (urlError) errors.push(urlError);
+        else explicitlyWeex = true;
+      }
+    }
+
+    const staticValue = staticStringValue(node, bindings);
     if (staticValue === undefined) return;
+    const forbidden = forbiddenExchange(staticValue);
+    if (forbidden) errors.push(`偵測到非 WEEX 交易所識別字：${forbidden}`);
+    if (node.type === "TemplateElement" || compoundChildren.has(node)) return;
     for (const match of staticValue.matchAll(NETWORK_URL_CANDIDATE_PATTERN)) {
       const candidate = match[0];
       const scheme = candidate.slice(0, candidate.indexOf(":")).toLowerCase();
@@ -193,6 +340,14 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
 
   exchangeErrors.forEach((exchange) => errors.push(`偵測到非 WEEX 交易所識別字：${exchange}`));
   if (!explicitlyWeex) errors.push("策略程式碼必須明確指定 WEEX 交易所");
+  return { valid: errors.length === 0, errors: [...new Set(errors)] };
+};
+
+export const validateDraftConfig = (value: unknown): ValidationResult => {
+  if (!hasBotConfigShape(value)) return { valid: false, errors: ["策略設定格式不正確"] };
+  const errors: string[] = [];
+  if (value.exchange !== "WEEX") errors.push("只支援 WEEX 交易所");
+  errors.push(...canonicalBlockErrors(value as BotConfig, false));
   return { valid: errors.length === 0, errors };
 };
 
@@ -202,6 +357,7 @@ export const validateConfig = (value: unknown): ValidationResult => {
   const errors: string[] = [];
 
   if (config.exchange !== "WEEX") errors.push("只支援 WEEX 交易所");
+  errors.push(...canonicalBlockErrors(config as BotConfig, true));
   if (!config.blocks.some((block) => block.group === "entry")) errors.push("至少需要一個進場訊號");
   if (!config.blocks.some((block) => block.group === "exit" || block.group === "risk")) {
     errors.push("至少需要一個出場或風控規則");
@@ -214,7 +370,7 @@ export const validateConfig = (value: unknown): ValidationResult => {
 
   for (const strategy of config.blocks) {
     for (const item of strategy.parameters) {
-      if (!Number.isFinite(item.value) || item.value < item.min || item.value > item.max) {
+      if (!Number.isFinite(item.value)) {
         errors.push(`${strategy.name}的${item.label}必須介於 ${item.min} 到 ${item.max}`);
       }
     }

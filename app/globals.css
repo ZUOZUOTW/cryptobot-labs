@@ -1053,6 +1053,12 @@ a {
   justify-content: space-between;
   gap: 1rem;
 }
+.bot-card__badges { display: flex; align-items: center; gap: 0.45rem; }
+.favorite-button { width: 2.75rem; min-width: 2.75rem; border: 1px solid var(--border); border-radius: 50%; background: rgb(139 99 255 / 8%); color: var(--cyan); cursor: pointer; }
+.package-fallback { width: 100%; margin-top: 0.75rem; padding: 0.75rem; border: 1px solid rgb(255 107 98 / 30%); border-radius: 0.8rem; background: rgb(255 107 98 / 6%); }
+.package-fallback p { margin: 0 0 0.6rem; font-size: 0.75rem; }
+.package-fallback__files { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.package-fallback__files button { min-height: 2.75rem; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 0.55rem; background: var(--panel); font-size: 0.68rem; cursor: pointer; }
 
 .bot-card h3 { margin: 0; font-size: 1.3rem; letter-spacing: -0.035em; }
 .bot-card__description { min-height: 2.8rem; color: var(--muted); font-size: 0.82rem; line-height: 1.65; }
@@ -1146,7 +1152,7 @@ a {
 
 .catalog-controls {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.8rem;
   margin-top: 2rem;
   padding: 1rem;
@@ -1176,6 +1182,10 @@ a {
 
 .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; }
 .detail-chart-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(18rem, 0.55fr); gap: 1rem; }
+.detail-performance-comparison__charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+.benchmark-summary { margin-top: 0.8rem; padding: 1rem; border-radius: 0.8rem; }
+.benchmark-summary h3 { margin: 0 0 0.45rem; font-size: 0.9rem; }
+.benchmark-summary p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.65; }
 .section-heading { margin-bottom: 1.5rem; }
 .direction-panel { padding: 1.4rem; border-radius: 1rem; }
 .direction-panel h2 { font-size: 1.6rem; }
@@ -1285,6 +1295,7 @@ a {
   .bot-grid--featured .bot-card:last-child { grid-column: 1 / -1; }
   .catalog-controls { grid-template-columns: repeat(2, 1fr); }
   .detail-chart-grid { grid-template-columns: 1fr; }
+  .detail-performance-comparison__charts { grid-template-columns: 1fr; }
   .leaderboard-controls { grid-template-columns: 1fr 1fr; }
   .leaderboard-controls__status { grid-column: 1 / -1; max-width: none; margin: 0; }
   .leaderboard-insights { grid-template-columns: 1fr; }

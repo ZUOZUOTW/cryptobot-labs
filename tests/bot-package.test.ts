@@ -1,8 +1,9 @@
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BOT_CATALOG } from "../data/bots";
 import { STRATEGY_PRESETS } from "../data/strategies";
 import { runBacktest } from "../lib/backtest";
-import { exportBotPackage, importBotPackage } from "../lib/bot-package";
+import { buildBotPackageFiles, exportBotPackage, importBotPackage } from "../lib/bot-package";
 import { loadDraft, saveDraft } from "../lib/storage";
 import type { BacktestReport, BotConfig } from "../lib/types";
 
@@ -44,6 +45,13 @@ describe("bot package", () => {
 
     const imported = await importBotPackage(new File([blob], "bot.zip"));
     expect(imported).toEqual({ config: configWithSource, report });
+  });
+
+  it("builds the same five validated files for individual-download fallback", async () => {
+    const files = await buildBotPackageFiles(configWithSource, runBacktest(configWithSource));
+
+    expect(files.map((file) => file.name).sort()).toEqual(requiredFiles);
+    expect(files.every((file) => file.blob instanceof Blob)).toBe(true);
   });
 
   it("preserves an absent config source while validating the generated strategy source", async () => {
@@ -242,6 +250,50 @@ describe("bot package", () => {
       .rejects.toThrow("回測報告格式無效：backtest-report.json");
   });
 
+  it("rejects a structurally valid but mismatched report before exporting", async () => {
+    const mismatched = runBacktest({ ...configWithSource, symbol: "ETHUSDT" });
+
+    await expect(exportBotPackage(configWithSource, mismatched))
+      .rejects.toThrow("回測報告與策略設定不一致：backtest-report.json");
+  });
+
+  it.each([
+    ["tampered bound", (config: BotConfig) => ({
+      ...config,
+      blocks: config.blocks.map((block, index) => index === 0 ? {
+        ...block,
+        parameters: block.parameters.map((parameter, parameterIndex) => parameterIndex === 0
+          ? { ...parameter, max: parameter.max + 100, value: parameter.max + 50 }
+          : parameter),
+      } : block),
+    })],
+    ["duplicate block", (config: BotConfig) => ({ ...config, blocks: [...config.blocks, config.blocks[0]] })],
+    ["unknown block", (config: BotConfig) => ({
+      ...config,
+      blocks: [{ ...config.blocks[0], id: "unknown-block" }, ...config.blocks.slice(1)],
+    })],
+  ])("rejects imported canonical strategy tampering: %s", async (_case, mutate) => {
+    const files = validPackageFiles();
+    const config = mutate(configWithSource);
+    files["bot-config.json"] = JSON.stringify(config);
+    files["backtest-report.json"] = JSON.stringify(runBacktest(configWithSource));
+
+    await expect(importBotPackage(await packageFile(files))).rejects.toThrow(/策略設定無效/);
+  });
+
+  it("round-trips every built-in bot with canonical strategy blocks", async () => {
+    for (const bot of BOT_CATALOG) {
+      const config: BotConfig = {
+        id: bot.id, name: bot.name, exchange: bot.exchange, market: bot.market,
+        symbol: bot.symbol, timeframe: bot.timeframe, logicMode: bot.logicMode,
+        leverage: bot.leverage, blocks: bot.blocks,
+      };
+      const report = runBacktest(config);
+      const blob = await exportBotPackage(config, report);
+      await expect(importBotPackage(new File([blob], `${bot.id}.zip`))).resolves.toEqual({ config, report });
+    }
+  });
+
   it("rejects configs that fail domain validation", async () => {
     const files = validPackageFiles();
     files["bot-config.json"] = JSON.stringify({ ...validConfig, blocks: [] });
@@ -298,5 +350,12 @@ describe("draft storage", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
 
     expect(loadDraft()).toBeNull();
+  });
+
+  it("persists and restores structurally safe incomplete and invalid-JavaScript drafts", () => {
+    const incomplete = { ...validConfig, blocks: [], source: "const = ;" };
+
+    expect(saveDraft(incomplete)).toEqual({ ok: true });
+    expect(loadDraft()).toEqual(incomplete);
   });
 });

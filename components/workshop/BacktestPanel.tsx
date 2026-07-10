@@ -26,7 +26,16 @@ interface BacktestPanelProps {
   executeBacktest?: typeof runBacktest;
   restoredReport?: BacktestReport | null;
   onReport?: (report: BacktestReport) => void;
+  onRun?: () => void;
 }
+
+const STATE_LABELS: Record<BacktestState, string> = {
+  idle: "等待執行",
+  validating: "驗證設定",
+  running: "模擬運行中",
+  complete: "回測完成",
+  error: "回測錯誤",
+};
 
 interface AssociatedReport {
   configFingerprint: string;
@@ -39,6 +48,7 @@ export function BacktestPanel({
   executeBacktest = runBacktest,
   restoredReport = null,
   onReport,
+  onRun,
 }: BacktestPanelProps) {
   const configFingerprint = backtestConfigFingerprint(config);
   const sessionKey = `${configFingerprint}:${restoredReport ? JSON.stringify(restoredReport) : ""}`;
@@ -50,6 +60,7 @@ export function BacktestPanel({
       executeBacktest={executeBacktest}
       key={sessionKey}
       onReport={onReport}
+      onRun={onRun}
       restoredReport={restoredReport}
       validation={validation}
     />
@@ -63,9 +74,10 @@ interface BacktestPanelSessionProps {
   validation: ValidationResult;
   restoredReport: BacktestReport | null;
   onReport?: (report: BacktestReport) => void;
+  onRun?: () => void;
 }
 
-function BacktestPanelSession({ config, configFingerprint, validation, executeBacktest, restoredReport, onReport }: BacktestPanelSessionProps) {
+function BacktestPanelSession({ config, configFingerprint, validation, executeBacktest, restoredReport, onReport, onRun }: BacktestPanelSessionProps) {
   const [state, setState] = useState<BacktestState>(restoredReport ? "complete" : "idle");
   const [completedReport, setCompletedReport] = useState<AssociatedReport | null>(restoredReport ? {
     configFingerprint,
@@ -106,6 +118,7 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
   }, [config, configFingerprint, executeBacktest, onReport, state]);
 
   const run = () => {
+    onRun?.();
     setErrors([]);
     setCompletedReport(null);
     setState("validating");
@@ -120,7 +133,7 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
           <p className="eyebrow">03 / SIMULATION</p>
           <h2>模擬回測</h2>
         </div>
-        <span className="backtest-state">{state}</span>
+        <span className="backtest-state">{STATE_LABELS[state]}</span>
       </div>
 
       <p className="backtest-panel__lead">使用固定種子模擬 36 個月策略表現；相同設定每次都會得到相同結果。</p>
