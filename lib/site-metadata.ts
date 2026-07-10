@@ -1,34 +1,72 @@
 import type { Metadata } from "next";
 
+export const SITE_TITLE = "CryptoBot Labs｜WEEX 自動交易策略實驗室";
+export const SITE_DESCRIPTION = "探索、比較並組裝 WEEX 專屬自動交易策略，透過可重現的模擬回測安全驗證交易想法。";
+export const SOCIAL_IMAGE_ALT = "CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX ONLY";
+
 const DEFAULT_SITE_METADATA = {
-  title: "CryptoBot Labs｜WEEX 自動交易策略實驗室",
-  description: "探索、比較並組裝 WEEX 專屬自動交易策略，透過可重現的模擬回測安全驗證交易想法。",
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
 } as const;
 
 const SOCIAL_IMAGE = {
   width: 1672,
   height: 941,
-  alt: "CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX ONLY",
+  alt: SOCIAL_IMAGE_ALT,
 } as const;
 
 type HeaderReader = Pick<Headers, "get">;
 type SiteMetadataCopy = typeof DEFAULT_SITE_METADATA;
 
-const firstHeaderValue = (value: string | null) => value?.split(",", 1)[0]?.trim() ?? "";
+const validPort = (port: string | undefined) => {
+  if (port === undefined) return true;
+  if (!/^[0-9]+$/.test(port)) return false;
+  const value = Number(port);
+  return value >= 1 && value <= 65_535;
+};
+
+const validIPv4 = (hostname: string) => {
+  const octets = hostname.split(".");
+  return octets.length === 4 && octets.every((octet) => (
+    /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255
+  ));
+};
+
+const validDomain = (hostname: string) => hostname.length <= 253 && hostname
+  .split(".")
+  .every((label) => (
+    label.length >= 1
+    && label.length <= 63
+    && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
+  ));
 
 export function requestOrigin(requestHeaders: HeaderReader): URL | null {
-  const forwardedHost = firstHeaderValue(requestHeaders.get("x-forwarded-host"));
-  const host = forwardedHost || firstHeaderValue(requestHeaders.get("host"));
-  if (!host || /[\\/?#@\s]/.test(host)) return null;
+  const host = requestHeaders.get("host");
+  if (!host || /[\u0000-\u0020\u007f,\\/?#@%]/.test(host)) return null;
 
-  const forwardedProtocol = firstHeaderValue(requestHeaders.get("x-forwarded-proto")).toLowerCase();
-  const protocol = forwardedProtocol === "http" || forwardedProtocol === "https"
-    ? forwardedProtocol
-    : "https";
+  let hostname: string;
+  if (host.startsWith("[") || host.includes("]")) {
+    const ipv6 = host.match(/^\[([0-9A-Fa-f:.]+)\](?::([0-9]+))?$/);
+    if (!ipv6 || !validPort(ipv6[2])) return null;
+    try {
+      hostname = new URL(`https://${host}`).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  } else {
+    const authority = host.match(/^([^:]+)(?::([^:]*))?$/);
+    if (!authority || !validPort(authority[2])) return null;
+    hostname = authority[1].toLowerCase();
+    const numericHostname = /^[0-9.]+$/.test(hostname);
+    if (numericHostname ? !validIPv4(hostname) : !validDomain(hostname)) return null;
+  }
+
+  const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  const protocol = loopback ? "http" : "https";
 
   try {
     const origin = new URL(`${protocol}://${host}`);
-    return origin.hostname && origin.pathname === "/" ? new URL(origin.origin) : null;
+    return new URL(origin.origin);
   } catch {
     return null;
   }
@@ -61,7 +99,7 @@ export function buildSiteMetadata(
       card: "summary_large_image",
       title: copy.title,
       description: copy.description,
-      ...(imageUrl ? { images: [imageUrl] } : {}),
+      ...(imageUrl ? { images: [{ url: imageUrl, ...SOCIAL_IMAGE }] } : {}),
     },
   };
 }

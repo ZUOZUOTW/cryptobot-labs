@@ -12,7 +12,7 @@ describe("CryptoBot Labs production shell", () => {
       readProjectFile("app/page.tsx"),
     ]);
 
-    expect(layout).toContain('title: "CryptoBot Labs｜WEEX 自動交易策略實驗室"');
+    expect(layout).toContain("title: SITE_TITLE");
     expect(layout).toContain('<html lang="zh-Hant">');
     expect(layout).toContain("<SiteHeader />");
     expect(layout).toContain("<SiteFooter />");
