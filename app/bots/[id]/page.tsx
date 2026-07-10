@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { BotDownloadButton } from "../../../components/BotCard";
 import { MetricCard } from "../../../components/MetricCard";
 import { PerformanceChart } from "../../../components/PerformanceChart";
@@ -25,18 +26,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const { id } = await params;
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
 
-  if (!bot) {
-    return (
-      <div className="not-found-page site-container">
-        <div className="empty-state glass-panel">
-          <p className="eyebrow">BOT NOT FOUND / 404</p>
-          <h1>找不到這台機器人</h1>
-          <p>目錄中沒有 ID 為 <code>{id}</code> 的策略。它可能已更名，或連結不完整。</p>
-          <Link className="button button--primary" href="/bots">返回機器人市場</Link>
-        </div>
-      </div>
-    );
-  }
+  if (!bot) notFound();
 
   const metrics = bot.metrics;
   const monthly = monthlyReturns(bot);
@@ -77,6 +67,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
           <MetricCard label="運行天數" value={metrics.runningDays} hint="固定模擬觀察期間" tone="cyan" />
           <MetricCard label="風險等級" value={bot.risk} hint={`穩定度 ${metrics.stability} / 100`} tone={bot.risk === "高" ? "danger" : "mint"} />
         </div>
+        <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
       </section>
 
       <section className="detail-section site-container detail-chart-grid">

@@ -44,17 +44,27 @@ export function BotDownloadButton({ bot, label = "快速下載", className = "bu
 
   const download = async () => {
     setStatus("working");
+    let objectUrl: string | undefined;
     try {
       const blob = await exportBotPackage(botConfig(bot), botReport(bot));
-      const url = URL.createObjectURL(blob);
+      objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
-      anchor.href = url;
+      anchor.href = objectUrl;
       anchor.download = `${bot.id}-weex-strategy.zip`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-      setStatus("idle");
+      document.body.append(anchor);
+      try {
+        anchor.click();
+        setStatus("idle");
+      } finally {
+        anchor.remove();
+      }
     } catch {
       setStatus("error");
+    } finally {
+      const urlToRevoke = objectUrl;
+      if (urlToRevoke !== undefined) {
+        window.setTimeout(() => URL.revokeObjectURL(urlToRevoke), 0);
+      }
     }
   };
 

@@ -1,12 +1,26 @@
+import { existsSync } from "node:fs";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
 import BotsPage from "../app/bots/page";
+import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
+import { BotDownloadButton } from "../components/BotCard";
 import { BOT_CATALOG } from "../data/bots";
 
-afterEach(cleanup);
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  if (originalCreateObjectURL) URL.createObjectURL = originalCreateObjectURL;
+  else Reflect.deleteProperty(URL, "createObjectURL");
+  if (originalRevokeObjectURL) URL.revokeObjectURL = originalRevokeObjectURL;
+  else Reflect.deleteProperty(URL, "revokeObjectURL");
+});
 
 describe("landing page", () => {
   it("introduces the approved WEEX-only discovery flow", () => {
@@ -88,6 +102,45 @@ describe("bot catalog route", () => {
     expect(screen.getAllByRole("heading", { level: 3 })[0]).toHaveTextContent("Orbit DCA");
     expect(screen.getByText("顯示 10 / 10 組策略")).toBeInTheDocument();
   });
+
+  it("downloads the real strategy package and revokes its object URL in a later task", async () => {
+    const bot = BOT_CATALOG[0];
+    const objectUrl = "blob:orbit-dca-package";
+    let clickedDownload = "";
+    let clickedHref = "";
+    let clickedWhileConnected = false;
+    let resolveClick!: () => void;
+    const clickObserved = new Promise<void>((resolve) => { resolveClick = resolve; });
+    const createObjectURL = vi.fn((blob: Blob) => {
+      expect(blob).toBeInstanceOf(Blob);
+      vi.useFakeTimers();
+      return objectUrl;
+    });
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      clickedDownload = this.download;
+      clickedHref = this.href;
+      clickedWhileConnected = this.isConnected;
+      resolveClick();
+    });
+
+    const user = userEvent.setup();
+    render(<BotDownloadButton bot={bot} />);
+    await user.click(screen.getByRole("button", { name: `快速下載 ${bot.name}` }));
+    await clickObserved;
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(clickedWhileConnected).toBe(true);
+    expect(clickedDownload).toBe("orbit-dca-weex-strategy.zip");
+    expect(clickedHref).toBe(objectUrl);
+    expect(document.body.querySelector('a[download="orbit-dca-weex-strategy.zip"]')).toBeNull();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    vi.runOnlyPendingTimers();
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+  });
 });
 
 describe("bot detail route", () => {
@@ -114,6 +167,7 @@ describe("bot detail route", () => {
 
     const metrics = screen.getByRole("region", { name: "完整績效指標" });
     expect(within(metrics).getAllByRole("article")).toHaveLength(9);
+    expect(within(metrics).getByText("模擬回測資料，不代表未來績效")).toBeInTheDocument();
     expect(screen.getByRole("figure", { name: /Orbit DCA 累積收益曲線/ })).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Orbit DCA 月度表現" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "策略原理" })).toBeInTheDocument();
@@ -122,12 +176,20 @@ describe("bot detail route", () => {
     expect(screen.getAllByText("模擬回測資料，不代表未來績效").length).toBeGreaterThan(0);
   });
 
-  it("renders a clear not-found state for unknown ids", async () => {
-    const view = await BotDetailPage({ params: Promise.resolve({ id: "unknown-bot" }) });
-    render(view);
+  it("throws the framework 404 boundary for unknown ids", async () => {
+    await expect(BotDetailPage({ params: Promise.resolve({ id: "unknown-bot" }) }))
+      .rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
 
-    expect(screen.getByRole("heading", { name: "找不到這台機器人" })).toBeInTheDocument();
-    expect(screen.getByText("unknown-bot")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "返回機器人市場" })).toHaveAttribute("href", "/bots");
+  it("provides an app-level not-found recovery route", () => {
+    expect(existsSync("app/not-found.tsx")).toBe(true);
+  });
+
+  it("renders Traditional Chinese recovery actions at the not-found boundary", () => {
+    render(<NotFoundPage />);
+
+    expect(screen.getByRole("heading", { name: "找不到這個頁面" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回首頁" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "探索機器人" })).toHaveAttribute("href", "/bots");
   });
 });
