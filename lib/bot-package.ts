@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { validateConfig } from "./strategy-validation";
+import { validateConfig, validateJavaScript } from "./strategy-validation";
 import type { BacktestReport, BotConfig } from "./types";
 
 const FORMAT_VERSION = 1;
@@ -17,24 +17,123 @@ interface PackageManifest {
   createdAt?: string;
 }
 
+type UnknownRecord = Record<string, unknown>;
+
+const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
+const METRIC_FIELDS = [
+  "totalReturn",
+  "annualizedReturn",
+  "maxDrawdown",
+  "winRate",
+  "profitFactor",
+  "sharpe",
+  "trades",
+  "runningDays",
+  "stability",
+] as const;
+
+const isRecord = (value: unknown): value is UnknownRecord => (
+  value !== null && typeof value === "object" && !Array.isArray(value)
+);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isNonEmptyString = (value: unknown): value is string => isString(value) && value.trim().length > 0;
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+const isManifest = (value: unknown): value is PackageManifest => (
+  isRecord(value)
+  && Number.isInteger(value.formatVersion)
+  && isNonEmptyString(value.exchange)
+  && (value.createdAt === undefined || isString(value.createdAt))
+);
+
+const isStrategyParameter = (value: unknown): boolean => (
+  isRecord(value)
+  && isNonEmptyString(value.key)
+  && isString(value.label)
+  && isFiniteNumber(value.value)
+  && isFiniteNumber(value.min)
+  && isFiniteNumber(value.max)
+  && isFiniteNumber(value.step)
+  && (value.suffix === undefined || isString(value.suffix))
+);
+
+const isStrategyBlock = (value: unknown): boolean => (
+  isRecord(value)
+  && isNonEmptyString(value.id)
+  && isNonEmptyString(value.name)
+  && isString(value.description)
+  && isString(value.group)
+  && STRATEGY_GROUPS.some((group) => group === value.group)
+  && Array.isArray(value.parameters)
+  && value.parameters.every(isStrategyParameter)
+);
+
+const hasBotConfigShape = (value: unknown): boolean => (
+  isRecord(value)
+  && isNonEmptyString(value.id)
+  && isNonEmptyString(value.name)
+  && isNonEmptyString(value.exchange)
+  && (value.market === "spot" || value.market === "futures")
+  && isNonEmptyString(value.symbol)
+  && isNonEmptyString(value.timeframe)
+  && (value.logicMode === "all" || value.logicMode === "any")
+  && isFiniteNumber(value.leverage)
+  && Array.isArray(value.blocks)
+  && value.blocks.every(isStrategyBlock)
+  && (value.source === undefined || isString(value.source))
+);
+
+const hasFiniteMetrics = (value: unknown): boolean => (
+  isRecord(value) && METRIC_FIELDS.every((field) => isFiniteNumber(value[field]))
+);
+
+const isBacktestReport = (value: unknown): value is BacktestReport => (
+  isRecord(value)
+  && isString(value.seed)
+  && isString(value.generatedAt)
+  && value.disclaimer === "模擬回測資料，不代表未來績效"
+  && hasFiniteMetrics(value.metrics)
+  && Array.isArray(value.equityCurve)
+  && value.equityCurve.every((point) => (
+    isRecord(point) && isString(point.label) && isFiniteNumber(point.value)
+  ))
+);
+
 const invalidConfigError = (errors: string[]): Error => new Error(`策略設定無效：${errors.join("；")}`);
 
-const validatePackageConfig = (config: BotConfig): void => {
+const assertConfig = (value: unknown, validateSource: boolean): BotConfig => {
+  if (!hasBotConfigShape(value)) throw new Error("策略設定無效：資料結構不正確");
+  const config = value as BotConfig;
+  const validation = validateConfig(validateSource ? config : { ...config, source: undefined });
+  if (!validation.valid) throw invalidConfigError(validation.errors);
+  return config;
+};
+
+const assertReport = (value: unknown): BacktestReport => {
+  if (!isBacktestReport(value)) throw new Error("回測報告格式無效：backtest-report.json");
+  return value;
+};
+
+const assertSource = (source: string): void => {
+  const validation = validateJavaScript(source);
+  if (!validation.valid) throw new Error(`策略程式碼無效：${validation.errors.join("；")}`);
+};
+
+const parseJsonFile = async (zip: JSZip, name: string): Promise<unknown> => {
   try {
-    const validation = validateConfig(config);
-    if (!validation.valid) throw invalidConfigError(validation.errors);
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("策略設定無效：")) throw error;
-    throw new Error("策略設定無效：資料結構不正確");
+    const contents = await zip.file(name)!.async("string");
+    return JSON.parse(contents) as unknown;
+  } catch {
+    throw new Error(`策略套件 JSON 格式無效：${name}`);
   }
 };
 
-const parseJsonFile = async <T>(zip: JSZip, name: string): Promise<T> => {
+const readStrategySource = async (zip: JSZip): Promise<string> => {
   try {
-    const contents = await zip.file(name)!.async("string");
-    return JSON.parse(contents) as T;
+    return await zip.file("strategy.js")!.async("string");
   } catch {
-    throw new Error(`策略套件 JSON 格式無效：${name}`);
+    throw new Error("無法讀取策略程式碼：strategy.js");
   }
 };
 
@@ -58,13 +157,17 @@ const packageReadme = (config: BotConfig): string => [
 ].join("\n");
 
 export const exportBotPackage = async (config: BotConfig, report: BacktestReport): Promise<Blob> => {
-  validatePackageConfig(config);
+  const validConfig = assertConfig(config, true);
+  const validReport = assertReport(report);
+  const source = validConfig.source ?? defaultStrategySource(validConfig);
+  assertSource(source);
+  const packagedConfig: BotConfig = { ...validConfig, source };
 
   const zip = new JSZip();
-  zip.file("bot-config.json", JSON.stringify(config, null, 2));
-  zip.file("strategy.js", config.source ?? defaultStrategySource(config));
-  zip.file("backtest-report.json", JSON.stringify(report, null, 2));
-  zip.file("README-zh-TW.md", packageReadme(config));
+  zip.file("bot-config.json", JSON.stringify(packagedConfig, null, 2));
+  zip.file("strategy.js", source);
+  zip.file("backtest-report.json", JSON.stringify(validReport, null, 2));
+  zip.file("README-zh-TW.md", packageReadme(validConfig));
   zip.file("manifest.json", JSON.stringify({
     formatVersion: FORMAT_VERSION,
     exchange: "WEEX",
@@ -86,15 +189,30 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
     if (zip.file(name) === null) throw new Error(`策略套件缺少必要檔案：${name}`);
   }
 
-  const manifest = await parseJsonFile<PackageManifest>(zip, "manifest.json");
+  const unexpectedEntry = Object.keys(zip.files).find((name) => (
+    !REQUIRED_FILES.some((required) => required === name) || zip.files[name].dir
+  ));
+  if (unexpectedEntry !== undefined) {
+    throw new Error(`策略套件包含未預期的項目：${unexpectedEntry}`);
+  }
+
+  const manifestValue = await parseJsonFile(zip, "manifest.json");
+  if (!isManifest(manifestValue)) throw new Error("策略套件資訊無效：manifest.json");
+  const manifest = manifestValue;
   if (manifest.formatVersion !== FORMAT_VERSION) {
     throw new Error(`不支援的策略套件版本：${String(manifest.formatVersion)}`);
   }
   if (manifest.exchange !== "WEEX") throw new Error("只支援 WEEX 交易所");
 
-  const config = await parseJsonFile<BotConfig>(zip, "bot-config.json");
-  const report = await parseJsonFile<BacktestReport>(zip, "backtest-report.json");
-  validatePackageConfig(config);
+  const configValue = await parseJsonFile(zip, "bot-config.json");
+  const config = assertConfig(configValue, false);
 
-  return { config, report };
+  const strategySource = await readStrategySource(zip);
+  assertSource(strategySource);
+  if (config.source !== strategySource) throw new Error("策略程式碼與設定不一致");
+
+  const reportValue = await parseJsonFile(zip, "backtest-report.json");
+  const report = assertReport(reportValue);
+
+  return { config: { ...config, source: strategySource }, report };
 };

@@ -5,16 +5,14 @@ const DRAFT_STORAGE_KEY = "cryptobot-labs:draft:v1";
 
 export type SaveDraftResult = { ok: true } | { ok: false; reason: string };
 
-const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
-
 export const saveDraft = (config: BotConfig): SaveDraftResult => {
   try {
     const validation = validateConfig(config);
     if (!validation.valid) return { ok: false, reason: `策略設定無效：${validation.errors.join("；")}` };
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(config));
     return { ok: true };
-  } catch (error) {
-    return { ok: false, reason: errorMessage(error) };
+  } catch {
+    return { ok: false, reason: "無法儲存策略草稿" };
   }
 };
 
