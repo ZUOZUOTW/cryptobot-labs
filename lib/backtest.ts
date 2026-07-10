@@ -1,4 +1,5 @@
 import type { BacktestReport, BotConfig, BotMetrics, EquityPoint } from "./types";
+import { validateConfig } from "./strategy-validation";
 
 const DISCLAIMER = "模擬回測資料，不代表未來績效" as const;
 const MONTHS = 36;
@@ -41,7 +42,7 @@ const seededRandom = (seed: number): (() => number) => {
 const round = (value: number): number => Number(value.toFixed(2));
 
 const maximumDrawdown = (curve: number[]): number => {
-  let peak = curve[0] ?? 100;
+  let peak = 100;
   let drawdown = 0;
   for (const equity of curve) {
     peak = Math.max(peak, equity);
@@ -79,6 +80,9 @@ const deriveMetrics = (returns: number[], curve: number[], strategyCount: number
 };
 
 export const runBacktest = (config: BotConfig): BacktestReport => {
+  const validation = validateConfig(config);
+  if (!validation.valid) throw new Error(`策略設定無效：${validation.errors.join("；")}`);
+
   const hash = hashString(stableStringify(config));
   const seed = hash.toString(16).padStart(8, "0");
   const random = seededRandom(hash);

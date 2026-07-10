@@ -90,6 +90,8 @@ describe("validateConfig", () => {
     expect(validateConfig({ ...validConfig, market: "spot", leverage: 2 }).valid).toBe(false);
     expect(validateConfig({ ...validConfig, leverage: 0 }).valid).toBe(false);
     expect(validateConfig({ ...validConfig, leverage: 21 }).valid).toBe(false);
+    expect(validateConfig({ ...validConfig, leverage: 1 }).valid).toBe(true);
+    expect(validateConfig({ ...validConfig, leverage: 20 }).valid).toBe(true);
   });
 
   it("rejects parameter values outside their declared range", () => {
@@ -98,6 +100,17 @@ describe("validateConfig", () => {
       parameters: [{ ...entryBlock.parameters[0], value: 101 }],
     };
     expect(validateConfig({ ...validConfig, blocks: [invalidEntry, riskBlock] }).valid).toBe(false);
+
+    const belowMinimumEntry = {
+      ...entryBlock,
+      parameters: [{ ...entryBlock.parameters[0], value: 1 }],
+    };
+    const nonFiniteEntry = {
+      ...entryBlock,
+      parameters: [{ ...entryBlock.parameters[0], value: Number.NaN }],
+    };
+    expect(validateConfig({ ...validConfig, blocks: [belowMinimumEntry, riskBlock] }).valid).toBe(false);
+    expect(validateConfig({ ...validConfig, blocks: [nonFiniteEntry, riskBlock] }).valid).toBe(false);
   });
 
   it("validates optional JavaScript source without executing it", () => {
