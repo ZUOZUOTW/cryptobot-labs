@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { runBacktest } from "./backtest";
-import { hasBotConfigShape, validateConfig, validateJavaScript } from "./strategy-validation";
+import { canonicalizeBotConfig, hasBotConfigShape, validateConfig, validateJavaScript } from "./strategy-validation";
 import type { BacktestReport, BotConfig } from "./types";
 
 const FORMAT_VERSION = 1;
@@ -197,13 +197,16 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
   if (manifest.exchange !== "WEEX") throw new Error("只支援 WEEX 交易所");
 
   const configValue = await parseJsonFile(zip, "bot-config.json");
-  const config = assertConfig(configValue, false);
+  const importedConfig = assertConfig(configValue, false);
 
   const strategySource = await readStrategySource(zip);
   assertSource(strategySource);
-  if (config.source !== undefined && config.source !== strategySource) {
+  if (importedConfig.source !== undefined && importedConfig.source !== strategySource) {
     throw new Error("策略程式碼與設定不一致");
   }
+  const configValidation = validateConfig(importedConfig);
+  if (!configValidation.valid) throw invalidConfigError(configValidation.errors);
+  const config = canonicalizeBotConfig(importedConfig);
 
   const reportValue = await parseJsonFile(zip, "backtest-report.json");
   const report = assertReport(reportValue);

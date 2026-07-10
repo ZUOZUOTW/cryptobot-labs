@@ -183,6 +183,27 @@ describe("bot package", () => {
       .rejects.toThrow("策略程式碼與設定不一致");
   });
 
+  it("rejects import when recognized source controls disagree with bot-config", async () => {
+    const files = validPackageFiles();
+    const source = "export const strategy={exchange:'WEEX',symbol:'ETHUSDT'};";
+    const config = { ...configWithSource, source };
+    files["bot-config.json"] = JSON.stringify(config);
+    files["strategy.js"] = source;
+    files["backtest-report.json"] = JSON.stringify(runBacktest(configWithSource));
+
+    await expect(importBotPackage(await packageFile(files)))
+      .rejects.toThrow("JavaScript 的交易對（ETHUSDT）與策略設定（BTCUSDT）不一致");
+  });
+
+  it("rejects export when recognized source controls disagree with bot-config", async () => {
+    const config = {
+      ...configWithSource,
+      source: "export const strategy={exchange:'WEEX',timeframe:'4h'};",
+    };
+    await expect(exportBotPackage(config, runBacktest(configWithSource)))
+      .rejects.toThrow("JavaScript 的時間週期（4h）與策略設定（1h）不一致");
+  });
+
   it("rejects incomplete backtest report shapes", async () => {
     const files = validPackageFiles();
     files["backtest-report.json"] = JSON.stringify({ seed: "incomplete" });
@@ -278,6 +299,17 @@ describe("bot package", () => {
     files["bot-config.json"] = JSON.stringify(config);
     files["backtest-report.json"] = JSON.stringify(runBacktest(configWithSource));
 
+    await expect(importBotPackage(await packageFile(files))).rejects.toThrow(/策略設定無效/);
+  });
+
+  it.each([
+    ["block name", (config: BotConfig) => ({ ...config, blocks: config.blocks.map((block, index) => index === 0 ? { ...block, name: "偽造名稱" } : block) })],
+    ["block description", (config: BotConfig) => ({ ...config, blocks: config.blocks.map((block, index) => index === 0 ? { ...block, description: "偽造說明" } : block) })],
+    ["parameter label", (config: BotConfig) => ({ ...config, blocks: config.blocks.map((block, index) => index === 0 ? { ...block, parameters: block.parameters.map((item, itemIndex) => itemIndex === 0 ? { ...item, label: "偽造標籤" } : item) } : block) })],
+    ["parameter suffix", (config: BotConfig) => ({ ...config, blocks: config.blocks.map((block, index) => index === 0 ? { ...block, parameters: block.parameters.map((item, itemIndex) => itemIndex === 0 ? { ...item, suffix: "BTC" } : item) } : block) })],
+  ])("rejects imported tampered canonical metadata: %s", async (_case, mutate) => {
+    const files = validPackageFiles();
+    files["bot-config.json"] = JSON.stringify(mutate(configWithSource));
     await expect(importBotPackage(await packageFile(files))).rejects.toThrow(/策略設定無效/);
   });
 

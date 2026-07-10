@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { runBacktest } from "../lib/backtest";
 import { buildBotPackageFiles, exportBotPackage, type BotPackageFile } from "../lib/bot-package";
 import { downloadBlob } from "../lib/browser-download";
 import type { BotConfig, BotDefinition } from "../lib/types";
+import { DownloadConfirmationDialog } from "./DownloadConfirmationDialog";
 import { PackageFallbackFiles } from "./PackageFallbackFiles";
 import { PerformanceChart } from "./PerformanceChart";
 
@@ -41,8 +42,17 @@ export function BotDownloadButton({ bot, label = "快速下載", className = "bu
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [fallbackFiles, setFallbackFiles] = useState<BotPackageFile[]>([]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const restoreAfterDownloadRef = useRef(false);
+
+  useEffect(() => {
+    if (confirmationOpen || status === "working" || !restoreAfterDownloadRef.current) return;
+    restoreAfterDownloadRef.current = false;
+    triggerRef.current?.focus();
+  }, [confirmationOpen, status]);
 
   const download = async () => {
+    restoreAfterDownloadRef.current = true;
     setConfirmationOpen(false);
     setStatus("working");
     setMessage("");
@@ -66,26 +76,24 @@ export function BotDownloadButton({ bot, label = "快速下載", className = "bu
   };
 
   return (
-    <span className="download-control">
-      <button className={className} disabled={status === "working"} onClick={() => setConfirmationOpen(true)} type="button">
+    <div className="download-control">
+      <button className={className} disabled={status === "working"} onClick={() => { restoreAfterDownloadRef.current = false; setConfirmationOpen(true); }} ref={triggerRef} type="button">
         {status === "working" ? "產生套件中…" : `${label} ${bot.name}`}
       </button>
-      {message && <span className="download-control__error" role="status">{message}</span>}
+      {message && <span className="download-control__message" data-tone={status === "error" ? "danger" : "success"} role={status === "error" ? "alert" : "status"}>{message}</span>}
       {fallbackFiles.length > 0 && <PackageFallbackFiles files={fallbackFiles} />}
       {confirmationOpen && (
-        <div aria-labelledby={`quick-download-${bot.id}`} aria-modal="true" className="package-confirmation" role="dialog">
-          <div className="package-confirmation__card glass-panel">
-            <p className="eyebrow">SIMULATION PACKAGE</p>
-            <h3 id={`quick-download-${bot.id}`}>確認下載 {bot.name}</h3>
-            <p>此套件只包含模擬策略與回測資料，無法獨立交易，也不會代表未來績效。</p>
-            <div className="button-row">
-              <button className="button button--ghost" onClick={() => setConfirmationOpen(false)} type="button">取消</button>
-              <button className="button button--primary" onClick={download} type="button">確認下載</button>
-            </div>
-          </div>
-        </div>
+        <DownloadConfirmationDialog
+          description="此套件只包含模擬策略與回測資料，無法獨立交易，也不會代表未來績效。"
+          id={`quick-download-${bot.id}`}
+          onCancel={() => setConfirmationOpen(false)}
+          onConfirm={download}
+          restoreFocusOnConfirm={false}
+          title={`確認下載 ${bot.name}`}
+          triggerRef={triggerRef}
+        />
       )}
-    </span>
+    </div>
   );
 }
 

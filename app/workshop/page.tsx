@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
-import { JavaScriptEditor, WEEX_JAVASCRIPT_TEMPLATE } from "../../components/workshop/JavaScriptEditor";
+import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
 import { PackagePanel } from "../../components/workshop/PackagePanel";
 import { StrategyPalette } from "../../components/workshop/StrategyPalette";
@@ -66,7 +66,7 @@ export default function WorkshopPage() {
       const deliberateNew = search.get("new") === "1";
       const next = deliberateNew ? blankConfig() : requestedBot ? configFromBot(requestedBot) : draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
       const requestedJavaScript = search.get("mode") === "javascript";
-      if (requestedJavaScript && next.source === undefined) next.source = WEEX_JAVASCRIPT_TEMPLATE;
+      if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next);
       setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
       setConfig(next);
     }, 0);
@@ -80,7 +80,7 @@ export default function WorkshopPage() {
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
     const next = createNext(config);
     const saved = saveDraft(next);
-    setDraftError(saved.ok ? "" : saved.reason);
+    setDraftError(saved.ok ? "" : `${saved.reason}，請立即下載策略套件備份。記憶體中的目前內容仍可立即匯出。`);
     setConfig(next);
   };
 
@@ -129,7 +129,7 @@ export default function WorkshopPage() {
       return;
     }
     if (nextMode === "javascript" && config.source === undefined) {
-      updateConfig((current) => ({ ...current, source: WEEX_JAVASCRIPT_TEMPLATE }));
+      updateConfig((current) => ({ ...current, source: createWeexJavaScriptTemplate(current) }));
     }
   };
 
@@ -185,7 +185,7 @@ export default function WorkshopPage() {
             selected={config.blocks}
           />
         ) : (
-          <JavaScriptEditor source={config.source ?? WEEX_JAVASCRIPT_TEMPLATE} onChange={updateSource} />
+          <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config)} onChange={updateSource} />
         )}
         <ParameterPanel config={config} onConfigField={updateField} onParameter={updateParameter} />
         <div className="workshop-grid__results">

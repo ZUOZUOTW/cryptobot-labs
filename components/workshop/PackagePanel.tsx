@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { buildBotPackageFiles, exportBotPackage, importBotPackage, type BotPackageFile } from "../../lib/bot-package";
 import { downloadBlob } from "../../lib/browser-download";
 import { validateConfig } from "../../lib/strategy-validation";
 import type { BacktestReport, BotConfig } from "../../lib/types";
+import { DownloadConfirmationDialog } from "../DownloadConfirmationDialog";
 import { PackageFallbackFiles } from "../PackageFallbackFiles";
 
 interface PackagePanelProps {
@@ -27,41 +28,14 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
   const [message, setMessage] = useState("");
   const [fallbackFiles, setFallbackFiles] = useState<BotPackageFile[]>([]);
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
   const restoreAfterExportRef = useRef(false);
   const canExport = report !== null && validateConfig(config).valid && exportState !== "working";
-
-  useEffect(() => {
-    if (!confirmationOpen) return;
-    const trigger = exportTriggerRef.current;
-    cancelRef.current?.focus();
-    return () => {
-      if (!restoreAfterExportRef.current) trigger?.focus();
-    };
-  }, [confirmationOpen]);
 
   useEffect(() => {
     if (confirmationOpen || exportState === "working" || !restoreAfterExportRef.current) return;
     restoreAfterExportRef.current = false;
     exportTriggerRef.current?.focus();
   }, [confirmationOpen, exportState]);
-
-  const handleConfirmationKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setConfirmationOpen(false);
-      return;
-    }
-    if (event.key !== "Tab") return;
-    if (event.shiftKey && document.activeElement === cancelRef.current) {
-      event.preventDefault();
-      confirmRef.current?.focus();
-    } else if (!event.shiftKey && document.activeElement === confirmRef.current) {
-      event.preventDefault();
-      cancelRef.current?.focus();
-    }
-  };
 
   const confirmExport = async () => {
     if (!report || !canExport) return;
@@ -158,27 +132,19 @@ export function PackagePanel({ config, report, onImport }: PackagePanelProps) {
         </section>
       </div>
 
-      {message && <p className="package-message" role={hasError ? "alert" : "status"}>{message}</p>}
+      {message && <p className="package-message" data-tone={hasError ? "danger" : "success"} role={hasError ? "alert" : "status"}>{message}</p>}
       {fallbackFiles.length > 0 && <PackageFallbackFiles files={fallbackFiles} />}
 
       {confirmationOpen && (
-        <div
-          aria-labelledby="package-confirmation-title"
-          aria-modal="true"
-          className="package-confirmation"
-          onKeyDown={handleConfirmationKeyDown}
-          role="dialog"
-        >
-          <div className="package-confirmation__card glass-panel">
-            <p className="eyebrow">SIMULATION PACKAGE</p>
-            <h3 id="package-confirmation-title">確認下載完整策略包</h3>
-            <p>此套件只包含模擬策略與回測資料，無法獨立交易，也不會代表未來績效。</p>
-            <div className="button-row">
-              <button className="button button--ghost" onClick={() => setConfirmationOpen(false)} ref={cancelRef} type="button">取消</button>
-              <button className="button button--primary" onClick={confirmExport} ref={confirmRef} type="button">確認下載</button>
-            </div>
-          </div>
-        </div>
+        <DownloadConfirmationDialog
+          description="此套件只包含模擬策略與回測資料，無法獨立交易，也不會代表未來績效。"
+          id="package-confirmation-title"
+          onCancel={() => setConfirmationOpen(false)}
+          onConfirm={confirmExport}
+          restoreFocusOnConfirm={false}
+          title="確認下載完整策略包"
+          triggerRef={exportTriggerRef}
+        />
       )}
     </section>
   );

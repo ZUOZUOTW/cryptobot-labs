@@ -198,7 +198,8 @@ describe("bot catalog route", () => {
 
     const user = userEvent.setup();
     render(<BotDownloadButton bot={bot} />);
-    await user.click(screen.getByRole("button", { name: `快速下載 ${bot.name}` }));
+    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
+    await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
     expect(dialog).toHaveTextContent("無法獨立交易");
     expect(createObjectURL).not.toHaveBeenCalled();
@@ -229,6 +230,39 @@ describe("bot catalog route", () => {
     expect(bot.metrics.totalReturn).toBe(48.6);
 
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "success");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("makes quick-download confirmation keyboard complete and restores focus", async () => {
+    const bot = BOT_CATALOG[0];
+    const user = userEvent.setup();
+    render(<BotDownloadButton bot={bot} />);
+    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
+    const cancel = within(dialog).getByRole("button", { name: "取消" });
+    const confirm = within(dialog).getByRole("button", { name: "確認下載" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(dialog).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("uses alert/danger for quick-download failures and status/success for completion", async () => {
+    const bot = BOT_CATALOG[0];
+    const user = userEvent.setup();
+    vi.spyOn(botPackage, "exportBotPackage").mockRejectedValueOnce(new Error("ZIP 失敗"));
+    render(<BotDownloadButton bot={bot} />);
+    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "確認下載" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("data-tone", "danger");
   });
 
   it("offers five individual files when a quick ZIP download fails", async () => {
@@ -241,10 +275,13 @@ describe("bot catalog route", () => {
     const user = userEvent.setup();
     render(<BotDownloadButton bot={bot} />);
 
-    await user.click(screen.getByRole("button", { name: `快速下載 ${bot.name}` }));
+    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
+    await user.click(trigger);
     await user.click(screen.getByRole("button", { name: "確認下載" }));
 
     expect(await screen.findByText("ZIP 下載失敗，可改為分別下載 5 個檔案。")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveAttribute("data-tone", "danger");
+    expect(trigger).toHaveFocus();
     expect(screen.getAllByRole("button", { name: /下載單一檔案/ })).toHaveLength(5);
     await user.click(screen.getByRole("button", { name: "下載單一檔案 bot-config.json" }));
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:single-file"));

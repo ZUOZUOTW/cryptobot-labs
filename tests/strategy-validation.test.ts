@@ -167,6 +167,24 @@ describe("validateConfig", () => {
       }, canonicalRisk],
     }).errors).toContain("策略參數定義不正確：rsi.oversold");
   });
+
+  it.each([
+    ["name", { ...entryBlock, name: "偽造名稱" }, "策略模組名稱不正確：rsi"],
+    ["description", { ...entryBlock, description: "偽造說明" }, "策略模組說明不正確：rsi"],
+    ["label", { ...entryBlock, parameters: entryBlock.parameters.map((item, index) => index === 0 ? { ...item, label: "偽造標籤" } : item) }, "策略參數標籤不正確：rsi.period"],
+    ["suffix", { ...entryBlock, parameters: entryBlock.parameters.map((item, index) => index === 0 ? { ...item, suffix: "BTC" } : item) }, "策略參數單位不正確：rsi.period"],
+  ])("rejects tampered canonical %s metadata", (_field, tampered, error) => {
+    expect(validateConfig({ ...validConfig, blocks: [tampered, riskBlock] }).errors).toContain(error);
+  });
+
+  it.each([
+    ["market", "spot", "JavaScript 的市場（spot）與策略設定（futures）不一致"],
+    ["symbol", "ETHUSDT", "JavaScript 的交易對（ETHUSDT）與策略設定（BTCUSDT）不一致"],
+    ["timeframe", "4h", "JavaScript 的時間週期（4h）與策略設定（1h）不一致"],
+  ])("rejects a recognized JavaScript %s that differs from bot-config", (field, sourceValue, error) => {
+    const source = `export const strategy = { exchange: 'WEEX', ${field}: '${sourceValue}' };`;
+    expect(validateConfig({ ...validConfig, source }).errors).toContain(error);
+  });
 });
 
 describe("validateJavaScript", () => {
@@ -293,6 +311,17 @@ describe("validateJavaScript", () => {
     "const exchange='WEEX'; fetch(`https://${window.host}/v1`);",
   ])("conservatively rejects unresolved network destinations", (source) => {
     expect(validateJavaScript(source).errors).toContain("網路目的地必須是可靜態確認的 WEEX 網址");
+  });
+
+  it.each([
+    "let endpoint='https://api.weex.com/v1'; fetch(endpoint);",
+    "var endpoint='https://api.weex.com/v1'; fetch(endpoint);",
+    "const endpoint='https://api.weex.com/v1'; endpoint='https://evil.example'; fetch(endpoint);",
+    "const endpoint='https://api.weex.com/v1'; const alias=endpoint; alias += '/orders'; fetch(alias);",
+    "const endpoint='https://api.weex.com/v1'; const alias=endpoint; endpoint='https://evil.example'; fetch(alias);",
+  ])("does not trust mutable or reassigned network bindings", (source) => {
+    expect(validateJavaScript(`const exchange='WEEX'; ${source}`).errors)
+      .toContain("網路目的地必須是可靜態確認的 WEEX 網址");
   });
 
   it("allows only approved schemes for resolved network APIs", () => {

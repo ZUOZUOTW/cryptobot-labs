@@ -131,6 +131,25 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
   });
 
+  it("creates JavaScript from current controls and blocks adjacent control drift", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+    await user.selectOptions(screen.getByRole("combobox", { name: "市場" }), "futures");
+    await user.selectOptions(screen.getByRole("combobox", { name: "交易對" }), "ETHUSDT");
+    await user.selectOptions(screen.getByRole("combobox", { name: "時間週期" }), "4h");
+    await user.click(screen.getByRole("button", { name: "JavaScript 模式" }));
+
+    const source = screen.getByRole("textbox", { name: "JavaScript 策略原始碼" });
+    expect((source as HTMLTextAreaElement).value).toContain('market: "futures"');
+    expect((source as HTMLTextAreaElement).value).toContain('symbol: "ETHUSDT"');
+    expect((source as HTMLTextAreaElement).value).toContain('timeframe: "4h"');
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "交易對" }), "SOLUSDT");
+    expect(screen.getByRole("list", { name: "設定問題" })).toHaveTextContent("JavaScript 的交易對（ETHUSDT）與策略設定（SOLUSDT）不一致");
+    expect(screen.getByRole("button", { name: "執行模擬回測" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
+  });
+
   it("confirms simulation limits, downloads a ZIP, and revokes the object URL", async () => {
     const user = userEvent.setup();
     const objectUrl = "blob:workshop-package";
@@ -523,7 +542,8 @@ describe("multi-strategy workshop", () => {
 
     await user.click(screen.getByRole("button", { name: "加入 RSI Rebound" }));
 
-    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿");
+    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿，請立即下載策略套件備份");
+    expect(screen.getByRole("status")).toHaveTextContent("記憶體中的目前內容仍可立即匯出");
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("RSI Rebound");
   });
 

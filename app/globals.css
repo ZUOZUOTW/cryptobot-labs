@@ -1112,7 +1112,9 @@ a {
 .bot-card__actions { align-items: stretch; }
 .bot-card__actions > * { flex: 1 1 calc(50% - 0.4rem); }
 .bot-card__actions .download-control { display: grid; }
-.download-control__error { display: block; margin-top: 0.35rem; color: var(--danger); font-size: 0.65rem; }
+.download-control__message { display: block; margin-top: 0.35rem; font-size: 0.65rem; }
+.download-control__message[data-tone="danger"] { color: var(--danger); }
+.download-control__message[data-tone="success"] { color: var(--mint); }
 
 .leaderboard-preview {
   margin-top: 2rem;

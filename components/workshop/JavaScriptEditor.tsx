@@ -2,17 +2,18 @@
 
 import { useMemo } from "react";
 import { validateJavaScript } from "../../lib/strategy-validation";
+import type { BotConfig } from "../../lib/types";
 
-export const WEEX_JAVASCRIPT_TEMPLATE = [
+export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | "symbol" | "timeframe">) => [
   "/**",
   " * CryptoBot Labs 的 WEEX 模擬策略範例。",
   " * 原始碼只會被靜態檢查，不會在瀏覽器中執行。",
   " */",
   "export const strategy = {",
   "  exchange: \"WEEX\",",
-  "  market: \"spot\",",
-  "  symbol: \"BTCUSDT\",",
-  "  timeframe: \"1h\",",
+  `  market: ${JSON.stringify(config.market)},`,
+  `  symbol: ${JSON.stringify(config.symbol)},`,
+  `  timeframe: ${JSON.stringify(config.timeframe)},`,
   "  signal: \"SMA crossover\"",
   "};",
   "",

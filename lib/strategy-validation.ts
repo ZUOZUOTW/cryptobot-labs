@@ -77,6 +77,11 @@ const astRecord = (value: unknown): AstRecord | null => isRecord(value) ? value 
 
 type StaticBindings = Map<string, string>;
 
+interface StaticBindingDefinition {
+  init: unknown;
+  immutable: boolean;
+}
+
 const staticStringValue = (value: unknown, bindings: StaticBindings = new Map(), seen = new Set<string>()): string | undefined => {
   const node = astRecord(value);
   if (!node) return undefined;
@@ -157,6 +162,44 @@ const walkAst = (value: unknown, visit: (node: AstRecord) => void): void => {
   }
 };
 
+const immutableStaticBindings = (syntaxTree: unknown): StaticBindings => {
+  const definitions = new Map<string, StaticBindingDefinition>();
+  const writes = new Set<string>();
+  walkAst(syntaxTree, (node) => {
+    if (node.type === "VariableDeclaration" && Array.isArray(node.declarations)) {
+      for (const declarationValue of node.declarations) {
+        const declaration = astRecord(declarationValue);
+        const name = declaration && astName(declaration.id);
+        if (!declaration || !name) continue;
+        const prior = definitions.get(name);
+        definitions.set(name, {
+          init: declaration.init,
+          immutable: node.kind === "const" && prior === undefined,
+        });
+      }
+    }
+    if (node.type === "AssignmentExpression" || node.type === "UpdateExpression") {
+      const target = astRecord(node.type === "AssignmentExpression" ? node.left : node.argument);
+      if (target?.type === "Identifier" && typeof target.name === "string") writes.add(target.name);
+    }
+  });
+
+  const bindings: StaticBindings = new Map();
+  for (let pass = 0; pass < definitions.size; pass += 1) {
+    let changed = false;
+    for (const [name, definition] of definitions) {
+      if (!definition.immutable || writes.has(name) || bindings.has(name)) continue;
+      const value = staticStringValue(definition.init, bindings);
+      if (value !== undefined) {
+        bindings.set(name, value);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return bindings;
+};
+
 const forbiddenExchange = (value: string): string | undefined => {
   const lowered = value.toLowerCase();
   return FORBIDDEN_EXCHANGES.find((token) => lowered.includes(token));
@@ -209,6 +252,8 @@ const canonicalBlockErrors = (config: BotConfig, validateValues: boolean): strin
       errors.push(`未知策略模組：${strategy.id}`);
       continue;
     }
+    if (strategy.name !== canonical.name) errors.push(`策略模組名稱不正確：${strategy.id}`);
+    if (strategy.description !== canonical.description) errors.push(`策略模組說明不正確：${strategy.id}`);
     if (strategy.group !== canonical.group) errors.push(`策略模組群組不正確：${strategy.id}`);
     const parameterKeys = new Set<string>();
     for (const item of strategy.parameters) {
@@ -219,6 +264,8 @@ const canonicalBlockErrors = (config: BotConfig, validateValues: boolean): strin
         errors.push(`未知策略參數：${strategy.id}.${item.key}`);
         continue;
       }
+      if (item.label !== expected.label) errors.push(`策略參數標籤不正確：${strategy.id}.${item.key}`);
+      if (item.suffix !== expected.suffix) errors.push(`策略參數單位不正確：${strategy.id}.${item.key}`);
       if (item.min !== expected.min || item.max !== expected.max || item.step !== expected.step) {
         errors.push(`策略參數定義不正確：${strategy.id}.${item.key}`);
       }
@@ -250,7 +297,7 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
 
   const errors: string[] = [];
   const exchangeErrors = new Set<string>();
-  const bindings: StaticBindings = new Map();
+  const bindings = immutableStaticBindings(syntaxTree);
   const compoundChildren = new Set<AstRecord>();
   let explicitlyWeex = false;
 
@@ -265,11 +312,6 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
       if (Array.isArray(node.quasis)) node.quasis.forEach((item) => { const child = astRecord(item); if (child) compoundChildren.add(child); });
       if (Array.isArray(node.expressions)) node.expressions.forEach((item) => { const child = astRecord(item); if (child) compoundChildren.add(child); });
     }
-    if (node.type !== "VariableDeclarator") return;
-    const name = astName(node.id);
-    if (!name) return;
-    const value = staticStringValue(node.init, bindings);
-    if (value !== undefined) bindings.set(name, value);
   });
 
   walkAst(syntaxTree, (node) => {
@@ -343,6 +385,64 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
   return { valid: errors.length === 0, errors: [...new Set(errors)] };
 };
 
+const SOURCE_CONFIG_FIELDS = {
+  market: "市場",
+  symbol: "交易對",
+  timeframe: "時間週期",
+} as const;
+
+const sourceConfigErrors = (source: string, config: BotConfig): string[] => {
+  let syntaxTree: unknown;
+  try {
+    syntaxTree = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  } catch {
+    return [];
+  }
+  const bindings = immutableStaticBindings(syntaxTree);
+  const found = new Map<keyof typeof SOURCE_CONFIG_FIELDS, string>();
+  walkAst(syntaxTree, (node) => {
+    let key: string | undefined;
+    let rawValue: unknown;
+    if (node.type === "VariableDeclarator") {
+      key = astName(node.id);
+      rawValue = node.init;
+    } else if (node.type === "Property") {
+      key = astName(node.key);
+      rawValue = node.value;
+    } else if (node.type === "AssignmentExpression") {
+      key = assignmentTargetName(node.left);
+      rawValue = node.right;
+    }
+    const normalized = key?.toLowerCase() as keyof typeof SOURCE_CONFIG_FIELDS | undefined;
+    if (!normalized || !(normalized in SOURCE_CONFIG_FIELDS)) return;
+    const resolved = staticStringValue(rawValue, bindings);
+    if (resolved !== undefined) found.set(normalized, resolved);
+  });
+  const errors: string[] = [];
+  for (const field of Object.keys(SOURCE_CONFIG_FIELDS) as Array<keyof typeof SOURCE_CONFIG_FIELDS>) {
+    const sourceValue = found.get(field);
+    if (sourceValue !== undefined && sourceValue !== config[field]) {
+      errors.push(`JavaScript 的${SOURCE_CONFIG_FIELDS[field]}（${sourceValue}）與策略設定（${config[field]}）不一致`);
+    }
+  }
+  return errors;
+};
+
+export const canonicalizeBotConfig = (config: BotConfig): BotConfig => ({
+  ...config,
+  blocks: config.blocks.map((block) => {
+    const canonical = STRATEGY_BLOCKS.find((item) => item.id === block.id)!;
+    const values = new Map(block.parameters.map((parameter) => [parameter.key, parameter.value]));
+    return {
+      ...canonical,
+      parameters: canonical.parameters.map((parameter) => ({
+        ...parameter,
+        value: values.get(parameter.key) ?? parameter.value,
+      })),
+    };
+  }),
+});
+
 export const validateDraftConfig = (value: unknown): ValidationResult => {
   if (!hasBotConfigShape(value)) return { valid: false, errors: ["策略設定格式不正確"] };
   const errors: string[] = [];
@@ -392,7 +492,10 @@ export const validateConfig = (value: unknown): ValidationResult => {
     }
   }
 
-  if (config.source !== undefined) errors.push(...validateJavaScript(config.source).errors);
+  if (config.source !== undefined) {
+    errors.push(...validateJavaScript(config.source).errors);
+    errors.push(...sourceConfigErrors(config.source, config as BotConfig));
+  }
 
   return { valid: errors.length === 0, errors };
 };
