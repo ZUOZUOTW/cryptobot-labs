@@ -26,3 +26,8 @@ export {
   type CommandRecord,
   type CommandAcknowledgementRecord,
 } from "./deployments";
+export {
+  createActivityRepository,
+  type HeartbeatRecord,
+  type AuditEventRecord,
+} from "./activity";
