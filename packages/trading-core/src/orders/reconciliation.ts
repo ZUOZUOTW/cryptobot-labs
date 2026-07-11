@@ -57,10 +57,16 @@ function validateSnapshotDecimals(local: TrackedOrder, snapshot: ExchangeOrderSn
   if (snapshot.fees !== undefined && !isDecimal(snapshot.fees)) throw new TypeError("invalid fees decimal");
 
   const cumulative = new ExactDecimal(snapshot.cumulativeFilledQuantity);
+  const previous = new ExactDecimal(local.cumulativeFilledQuantity);
   if (cumulative.lt(local.cumulativeFilledQuantity)) throw new Error("stale cumulative fill snapshot");
   if (cumulative.gt(local.approvedIntent.quantity)) throw new Error("cumulative fill exceeds order quantity");
-  if (cumulative.gt(0) && snapshot.averageFillPrice === undefined && local.averageFillPrice === undefined) {
-    throw new TypeError("average fill price is required for a nonzero fill");
+  if (cumulative.gt(previous)) {
+    if (snapshot.averageFillPrice === undefined) {
+      throw new TypeError("fresh average fill price is required when cumulative fill increases");
+    }
+    if (snapshot.fees === undefined) {
+      throw new TypeError("fresh fees are required when cumulative fill increases");
+    }
   }
 }
 
@@ -104,6 +110,11 @@ function materialFromSnapshot(local: TrackedOrder, snapshot: ExchangeOrderSnapsh
       throw new Error("unknown exchange status");
   }
 
+  if (local.status === "cancel-pending" &&
+      (status === "acknowledged" || status === "partially-filled")) {
+    status = "cancel-pending";
+  }
+
   return {
     status,
     exchangeOrderId: snapshot.exchangeOrderId,
@@ -143,7 +154,9 @@ export function reconcileOrder(input: ReconciliationInput): ReconciliationResult
     throw new Error("invalid reconciliation time");
   }
   if (input.snapshot === null) {
-    if (input.local.status !== "unknown") throw new Error("missing snapshot is only valid for unknown orders");
+    if (input.local.status !== "unknown" && input.local.status !== "cancel-pending") {
+      throw new Error("missing snapshot is only valid for ambiguous orders");
+    }
     return { state: input.local, resolution: "unresolved" };
   }
   return { state: reconcileSnapshot(input.local, input.snapshot, input.at), resolution: "resolved" };

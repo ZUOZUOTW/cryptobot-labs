@@ -82,8 +82,13 @@ function assertFill(order: TrackedOrder, event: Extract<OrderEvent, { type: "fil
   const quantity = new ExactDecimal(order.approvedIntent.quantity);
   if (next.lt(current)) throw new Error("stale cumulative fill snapshot");
   if (next.gt(quantity)) throw new Error("cumulative fill exceeds order quantity");
-  if (next.gt(0) && event.averageFillPrice === undefined && order.averageFillPrice === undefined) {
-    throw new TypeError("average fill price is required for a nonzero fill");
+  if (next.gt(current)) {
+    if (event.averageFillPrice === undefined) {
+      throw new TypeError("fresh average fill price is required when cumulative fill increases");
+    }
+    if (event.fees === undefined) {
+      throw new TypeError("fresh fees are required when cumulative fill increases");
+    }
   }
 }
 
@@ -105,8 +110,15 @@ export function transitionOrder(order: TrackedOrder, event: OrderEvent): Tracked
       if (order.status !== "proposed") throw new Error("illegal submit start");
       return update(order, event.at, { status: "submitting" });
     case "submit-acknowledged":
-      if (order.status !== "submitting" || !ID.test(event.exchangeOrderId)) throw new Error("illegal submit acknowledgement");
-      return update(order, event.at, { status: "acknowledged", exchangeOrderId: event.exchangeOrderId });
+      if (!ID.test(event.exchangeOrderId)) throw new Error("illegal submit acknowledgement");
+      if (order.status === "submitting") {
+        return update(order, event.at, { status: "acknowledged", exchangeOrderId: event.exchangeOrderId });
+      }
+      if (["acknowledged", "partially-filled", "cancel-pending"].includes(order.status)) {
+        if (order.exchangeOrderId === event.exchangeOrderId) return order;
+        throw new Error("exchange order id mismatch on acknowledgement replay");
+      }
+      throw new Error("illegal submit acknowledgement");
     case "submit-rejected":
       if (order.status !== "submitting" || !reason(event.reason)) throw new Error("illegal submit rejection");
       return update(order, event.at, { status: "rejected", reason: event.reason });

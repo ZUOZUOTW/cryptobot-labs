@@ -32,6 +32,21 @@ describe("order reconciliation", () => {
     expect(result.state.status).toBe("unknown");
   });
 
+  it("keeps cancel-pending unresolved when a lookup is missing", () => {
+    const pending = transitionOrder(
+      reconcileOrder({
+        local: unknown(),
+        snapshot: {
+          clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+          side: "buy", quantity: "2", status: "NEW", cumulativeFilledQuantity: "0",
+        }, at: 14,
+      }).state,
+      { type: "cancel-request", at: 15 },
+    );
+    expect(reconcileOrder({ local: pending, snapshot: null, at: 16 }))
+      .toEqual({ state: pending, resolution: "unresolved" });
+  });
+
   it.each([
     ["NEW", "acknowledged", "0"],
     ["PARTIALLY_FILLED", "partially-filled", "1"],
@@ -72,6 +87,38 @@ describe("order reconciliation", () => {
     expect(nextReconciliationAction(local)).toBe("none");
   });
 
+  it("preserves cancel-pending for transient NEW and PARTIALLY_FILLED snapshots", () => {
+    const acknowledged = reconcileOrder({
+      local: unknown(),
+      snapshot: {
+        clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+        side: "buy", quantity: "2", status: "NEW", cumulativeFilledQuantity: "0",
+      }, at: 14,
+    }).state;
+    const pending = transitionOrder(acknowledged, { type: "cancel-request", at: 15 });
+    const newReplay = reconcileOrder({
+      local: pending,
+      snapshot: {
+        clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+        side: "buy", quantity: "2", status: "NEW", cumulativeFilledQuantity: "0",
+      }, at: 16,
+    }).state;
+    expect(newReplay).toBe(pending);
+
+    const partial = reconcileOrder({
+      local: pending,
+      snapshot: {
+        clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+        side: "buy", quantity: "2", status: "PARTIALLY_FILLED",
+        cumulativeFilledQuantity: "1", averageFillPrice: "101", fees: "0.1",
+      }, at: 17,
+    }).state;
+    expect(partial).toMatchObject({
+      status: "cancel-pending", cumulativeFilledQuantity: "1", averageFillPrice: "101", fees: "0.1",
+    });
+    expect(transitionOrder(partial, { type: "cancel-acknowledged", at: 18 }).status).toBe("cancelled");
+  });
+
   it.each([
     ["NEW", "0", undefined],
     ["PARTIALLY_FILLED", "1", "101"],
@@ -96,7 +143,7 @@ describe("order reconciliation", () => {
     const filledSnapshot = {
       clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
       side: "buy" as const, quantity: "2", status: "FILLED" as const,
-      cumulativeFilledQuantity: "2", averageFillPrice: "101",
+      cumulativeFilledQuantity: "2", averageFillPrice: "101", fees: "0.2",
     };
     const filled = reconcileOrder({ local: unknown(), snapshot: filledSnapshot, at: 14 }).state;
     expect(() => reconcileOrder({
@@ -112,7 +159,7 @@ describe("order reconciliation", () => {
       snapshot: {
         clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
         side: "buy", quantity: "2", status: "PARTIALLY_FILLED",
-        cumulativeFilledQuantity: "1", averageFillPrice: "101",
+        cumulativeFilledQuantity: "1", averageFillPrice: "101", fees: "0.1",
       }, at: 14,
     }).state;
     expect(() => reconcileOrder({
@@ -156,5 +203,19 @@ describe("order reconciliation", () => {
         ...decimalOverrides,
       }, at: 14,
     })).toThrow(/fill|price|fees|decimal/i);
+  });
+
+  it("requires fresh average price and fees when reconciliation advances a cumulative fill", () => {
+    const base = {
+      clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+      side: "buy" as const, quantity: "2", status: "PARTIALLY_FILLED" as const,
+      cumulativeFilledQuantity: "1",
+    };
+    expect(() => reconcileOrder({
+      local: unknown(), snapshot: { ...base, averageFillPrice: "101" }, at: 14,
+    })).toThrow(/fees/i);
+    expect(() => reconcileOrder({
+      local: unknown(), snapshot: { ...base, fees: "0.1" }, at: 14,
+    })).toThrow(/average/i);
   });
 });

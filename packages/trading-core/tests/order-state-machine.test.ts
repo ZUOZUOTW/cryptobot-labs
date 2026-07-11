@@ -92,11 +92,11 @@ describe("order state machine", () => {
 
   it("resolves a cancel/fill race in favor of a complete fill", () => {
     const partial = transitionOrder(acknowledged(), {
-      type: "fill-snapshot", cumulativeFilledQuantity: "1", averageFillPrice: "100", at: 103,
+      type: "fill-snapshot", cumulativeFilledQuantity: "1", averageFillPrice: "100", fees: "0.1", at: 103,
     });
     const pending = transitionOrder(partial, { type: "cancel-request", at: 104 });
     const filled = transitionOrder(pending, {
-      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", at: 105,
+      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", fees: "0.2", at: 105,
     });
     expect(filled.status).toBe("filled");
     expect(() => transitionOrder(filled, { type: "cancel-acknowledged", at: 106 })).toThrow();
@@ -112,12 +112,49 @@ describe("order state machine", () => {
     expect(() => transitionOrder(rejected, { ...duplicate, reason: "different", at: 103 })).toThrow();
 
     const filled = transitionOrder(acknowledged(), {
-      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", at: 103,
+      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", fees: "0.2", at: 103,
     });
     expect(transitionOrder(filled, {
-      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", at: 999,
+      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", fees: "0.2", at: 999,
     })).toBe(filled);
   });
+
+  it("requires fresh cumulative economics whenever filled quantity increases", () => {
+    const ack = acknowledged();
+    expect(() => transitionOrder(ack, {
+      type: "fill-snapshot", cumulativeFilledQuantity: "1", averageFillPrice: "100", at: 103,
+    })).toThrow(/fees/i);
+    expect(() => transitionOrder(ack, {
+      type: "fill-snapshot", cumulativeFilledQuantity: "1", fees: "0.1", at: 103,
+    })).toThrow(/average/i);
+    const partial = transitionOrder(ack, {
+      type: "fill-snapshot", cumulativeFilledQuantity: "1", averageFillPrice: "100", fees: "0.1", at: 103,
+    });
+    expect(transitionOrder(partial, {
+      type: "fill-snapshot", cumulativeFilledQuantity: "1", at: 104,
+    })).toBe(partial);
+  });
+
+  it.each(["acknowledged", "partially-filled", "cancel-pending"] as const)(
+    "treats REST/WS acknowledgement replay from %s as idempotent",
+    (targetStatus) => {
+      let state = acknowledged();
+      if (targetStatus !== "acknowledged") {
+        state = transitionOrder(state, {
+          type: "fill-snapshot", cumulativeFilledQuantity: "1", averageFillPrice: "100", fees: "0.1", at: 103,
+        });
+      }
+      if (targetStatus === "cancel-pending") {
+        state = transitionOrder(state, { type: "cancel-request", at: 104 });
+      }
+      expect(transitionOrder(state, {
+        type: "submit-acknowledged", exchangeOrderId: "ex-1", at: 200,
+      })).toBe(state);
+      expect(() => transitionOrder(state, {
+        type: "submit-acknowledged", exchangeOrderId: "ex-conflict", at: 200,
+      })).toThrow(/exchange|acknowledgement/i);
+    },
+  );
 
   it("rejects illegal transitions, backward timestamps and invalid decimals", () => {
     expect(() => transitionOrder(proposed(), { type: "submit-acknowledged", exchangeOrderId: "x", at: 101 })).toThrow();
