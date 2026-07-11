@@ -49,6 +49,18 @@ describe("createFetchTransport", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("cannot authorize an arbitrary production origin through options", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ ok: true }));
+    const transport = createFetchTransport({
+      fetchImpl,
+      // @ts-expect-error The production origin allowlist is intentionally not configurable.
+      allowedOrigins: ["https://evil.example"],
+    });
+    await expect(transport.send({ method: "GET", url: "https://evil.example/data", headers: {} }))
+      .rejects.toMatchObject({ category: "validation" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("maps network and malformed JSON failures predictably", async () => {
     const network = createFetchTransport({ fetchImpl: vi.fn(async () => { throw new Error("offline"); }) });
     await expect(network.send({ method: "GET", url: "https://api-spot.weex.com/x", headers: {} }))

@@ -9,7 +9,7 @@ import type {
 
 import { WeexApiError } from "./errors";
 import { fetchInstrumentRules } from "./instruments";
-import { parseCandleRows, parseIntervalMs } from "./schemas";
+import { parseFuturesCandleRows, parseIntervalMs, parseSpotCandleRows } from "./schemas";
 import type { HttpTransport } from "./transport";
 
 const ENDPOINTS = {
@@ -99,7 +99,9 @@ export class WeexPublicClient {
       url: candleUrl(request),
       headers: { Accept: "application/json" },
     });
-    return parseCandleRows(response.body, parseIntervalMs(request.interval), this.now());
+    return request.market === "spot"
+      ? parseSpotCandleRows(response.body, this.now())
+      : parseFuturesCandleRows(response.body, this.now());
   }
 
   async collectHistoricalCandles(request: HistoricalCandleRequest): Promise<HistoricalDataset> {
@@ -142,7 +144,8 @@ export class WeexPublicClient {
       complete,
       validation,
       provenance: {
-        source: "weex-public-api",
+        provider: "WEEX",
+        sourceKind: "public-api",
         endpoint,
         collectedAt: this.now(),
         singleResponse: request.market === "spot" || !paginated,

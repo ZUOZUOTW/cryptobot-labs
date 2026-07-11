@@ -14,11 +14,13 @@ class RecordingTransport implements HttpTransport {
   }
 }
 
-const ok = (data: unknown): HttpResponse => ({ status: 200, headers: {}, body: { code: "00000", msg: "success", data } });
+const ok = (body: unknown): HttpResponse => ({ status: 200, headers: {}, body });
+const row = (openTime: number, open = "1", high = "2", low = "0.5", close = "1.5", volume = "10") =>
+  [openTime, open, high, low, close, volume, openTime + 59_999, "15", 4, "5", "7.5"];
 
 describe("WeexPublicClient", () => {
   it("uses only documented symbol and interval query parameters for spot candles", async () => {
-    const transport = new RecordingTransport([ok([[0, "1", "2", "0.5", "1.5", "10"]])]);
+    const transport = new RecordingTransport([ok([row(0)])]);
     const client = new WeexPublicClient(transport, () => 30_000);
     const candles = await client.fetchCandles({
       market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 60_000, limit: 50,
@@ -28,7 +30,7 @@ describe("WeexPublicClient", () => {
   });
 
   it("uses documented futures history parameters and rejects invalid limits", async () => {
-    const transport = new RecordingTransport([ok([[60_000, "2", "3", "1", "2.5", "20"]])]);
+    const transport = new RecordingTransport([ok([row(60_000, "2", "3", "1", "2.5", "20")])]);
     const client = new WeexPublicClient(transport, () => 200_000);
     await client.fetchCandles({ market: "futures", symbol: "cmt_btcusdt", interval: "1m", startTime: 60_000, endTime: 120_000, limit: 100 });
     expect(transport.requests[0]?.url).toBe("https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=cmt_btcusdt&interval=1m&startTime=60000&endTime=120000&limit=100");
@@ -38,27 +40,20 @@ describe("WeexPublicClient", () => {
 
   it("normalizes reversed futures pages, deduplicates, excludes incomplete candles, and reports provenance", async () => {
     const transport = new RecordingTransport([
-      ok([
-        [120_000, "3", "4", "2", "3.5", "30"],
-        [60_000, "2", "3", "1", "2.5", "20"],
-        [0, "1", "2", "0.5", "1.5", "10"],
-      ]),
-      ok([
-        [180_000, "4", "5", "3", "4.5", "40"],
-        [120_000, "3", "4", "2", "3.5", "30"],
-      ]),
+      ok([row(120_000, "3", "4", "2", "3.5", "30"), row(60_000, "2", "3", "1", "2.5", "20"), row(0)]),
+      ok([row(180_000, "4", "5", "3", "4.5", "40"), row(120_000, "3", "4", "2", "3.5", "30")]),
     ]);
     const dataset = await new WeexPublicClient(transport, () => 210_000).collectHistoricalCandles({
       market: "futures", symbol: "cmt_btcusdt", interval: "1m", startTime: 0, endTime: 240_000, limit: 3,
     });
     expect(dataset.candles.map((candle) => candle.openTime)).toEqual([0, 60_000, 120_000]);
     expect(dataset.validation).toMatchObject({ duplicates: [120_000], gaps: [], incompleteCount: 1 });
-    expect(dataset.provenance).toMatchObject({ source: "weex-public-api", endpoint: "/capi/v3/market/historyKlines", paginated: true });
+    expect(dataset.provenance).toMatchObject({ provider: "WEEX", sourceKind: "public-api", endpoint: "/capi/v3/market/historyKlines", paginated: true });
     expect(dataset.complete).toBe(false);
   });
 
   it("truthfully marks spot single-response coverage incomplete when the range cannot be proven", async () => {
-    const transport = new RecordingTransport([ok([[60_000, "1", "2", "0.5", "1.5", "10"]])]);
+    const transport = new RecordingTransport([ok([row(60_000)])]);
     const dataset = await new WeexPublicClient(transport, () => 200_000).collectHistoricalCandles({
       market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 120_000,
     });
@@ -69,8 +64,8 @@ describe("WeexPublicClient", () => {
 
   it("gets strict spot and futures instrument rules without coercing decimals", async () => {
     const transport = new RecordingTransport([
-      ok({ symbols: [{ symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", pricePrecision: "0.01", quantityPrecision: "0.0001", minQuantity: "0.0001", minNotional: "5" }] }),
-      ok({ symbols: [{ symbol: "cmt_btcusdt", baseAsset: "BTC", quoteAsset: "USDT", pricePrecision: "0.1", quantityPrecision: "0.001", minQuantity: "0.001", minNotional: "5", maxLeverage: "125" }] }),
+      ok({ timezone: "UTC", serverTime: 1, rateLimits: [], symbols: [{ symbol: "BTCUSDT", status: "TRADING", baseAsset: "BTC", baseAssetPrecision: 8, quoteAsset: "USDT", quoteAssetPrecision: 8, tickSize: "0.01", stepSize: "0.0001", minTradeAmount: "0.0001" }] }),
+      ok({ assets: [], rateLimits: [], symbols: [{ symbol: "cmt_btcusdt", displaySymbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", marginAsset: "USDT", pricePrecision: 1, quantityPrecision: 3, baseAssetPrecision: 3, quotePrecision: 8, contractVal: 0.000001, delivery: [], forwardContractFlag: true, minLeverage: 1, maxLeverage: 125, minOrderSize: 0.001 }] }),
     ]);
     const client = new WeexPublicClient(transport);
     await expect(client.getInstrumentRules("spot", "BTCUSDT")).resolves.toMatchObject({ tickSize: "0.01", stepSize: "0.0001" });
@@ -79,6 +74,13 @@ describe("WeexPublicClient", () => {
       "https://api-spot.weex.com/api/v3/exchangeInfo",
       "https://api-contract.weex.com/capi/v3/market/exchangeInfo",
     ]);
+  });
+
+  it("rejects wrong-market instrument shapes", async () => {
+    const spotShape = { timezone: "UTC", serverTime: 1, rateLimits: [], symbols: [{ symbol: "BTCUSDT", status: "TRADING", baseAsset: "BTC", baseAssetPrecision: 8, quoteAsset: "USDT", quoteAssetPrecision: 8, tickSize: "0.01", stepSize: "0.0001", minTradeAmount: "0.0001" }] };
+    const transport = new RecordingTransport([ok(spotShape)]);
+    await expect(new WeexPublicClient(transport).getInstrumentRules("futures", "BTCUSDT"))
+      .rejects.toMatchObject({ category: "schema" });
   });
 });
 
@@ -94,8 +96,14 @@ describe("validateCandleDataset", () => {
   });
 
   it("rejects malformed decimal and OHLC rows", async () => {
-    const transport = new RecordingTransport([ok([[0, "NaN", "2", "0.5", "1.5", "10"]])]);
+    const transport = new RecordingTransport([ok([row(0, "NaN")])]);
     await expect(new WeexPublicClient(transport).fetchCandles({ market: "spot", symbol: "BTCUSDT", interval: "1m" }))
+      .rejects.toMatchObject({ category: "schema" });
+  });
+
+  it("rejects candle rows with extra undocumented entries", async () => {
+    const transport = new RecordingTransport([ok([[...row(0), "extra"]])]);
+    await expect(new WeexPublicClient(transport).fetchCandles({ market: "futures", symbol: "BTCUSDT", interval: "1m" }))
       .rejects.toMatchObject({ category: "schema" });
   });
 });

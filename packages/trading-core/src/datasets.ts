@@ -17,7 +17,7 @@ export interface InstrumentRules {
   tickSize: string;
   stepSize: string;
   minimumQuantity: string;
-  minimumNotional: string;
+  minimumNotional?: string;
   maximumLeverage?: string;
 }
 
@@ -34,7 +34,8 @@ export interface DatasetValidation {
 }
 
 export interface HistoricalDatasetProvenance {
-  source: "weex-public-api";
+  provider: string;
+  sourceKind: "public-api";
   endpoint: string;
   collectedAt: number;
   singleResponse: boolean;

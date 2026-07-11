@@ -26,24 +26,11 @@ export const WEEX_PUBLIC_ORIGINS = [
 
 export interface FetchTransportOptions {
   fetchImpl?: typeof fetch;
-  allowedOrigins?: readonly string[];
-}
-
-function validateOrigins(origins: readonly string[]): Set<string> {
-  const normalized = new Set<string>();
-  for (const origin of origins) {
-    const url = new URL(origin);
-    if (url.protocol !== "https:" || url.username || url.password || url.origin !== origin) {
-      throw new TypeError("Allowed origins must be credential-free HTTPS origins");
-    }
-    normalized.add(url.origin);
-  }
-  return normalized;
 }
 
 export function createFetchTransport(options: FetchTransportOptions = {}): HttpTransport {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const allowedOrigins = validateOrigins(options.allowedOrigins ?? WEEX_PUBLIC_ORIGINS);
+  const allowedOrigins = new Set<string>(WEEX_PUBLIC_ORIGINS);
 
   return {
     async send(request): Promise<HttpResponse> {
