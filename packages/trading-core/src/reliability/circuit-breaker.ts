@@ -44,7 +44,9 @@ interface ActiveAcquisition {
 const MIN_DURATION_MS = 1_000;
 const MAX_DURATION_MS = 3_600_000;
 const MAX_FAILURE_THRESHOLD = 100;
-const MAX_UINT32 = 0xffff_ffff;
+const BIGINT_ZERO = BigInt(0);
+const BIGINT_ONE = BigInt(1);
+const MAX_TOKEN_SEQUENCE = BigInt(36) ** BigInt(128) - BIGINT_ONE;
 
 export const MAX_IN_FLIGHT_ACQUISITIONS = 1_024;
 
@@ -107,6 +109,18 @@ function assertTimestamp(now: number): void {
   }
 }
 
+function assertInitialTokenSequence(sequence: bigint): void {
+  if (
+    typeof sequence !== "bigint" ||
+    sequence < BIGINT_ZERO ||
+    sequence > MAX_TOKEN_SEQUENCE
+  ) {
+    throw new TypeError(
+      "initialTokenSequence must be a non-negative bigint of at most 128 base36 digits",
+    );
+  }
+}
+
 /** A deterministic, generation-scoped circuit breaker with an injected clock. */
 export class CircuitBreaker {
   readonly #policy: Readonly<CircuitBreakerPolicy>;
@@ -117,12 +131,21 @@ export class CircuitBreaker {
   #lastTimestamp: number | null = null;
   #permanentlyOpen = false;
   #generation = 0;
-  #nextTokenSequence = 0;
+  #nextTokenSequence: bigint;
   readonly #activeAcquisitions = new Map<string, ActiveAcquisition>();
 
-  constructor(policy: CircuitBreakerPolicy) {
+  /**
+   * `initialTokenSequence` restores a persisted lifetime sequence and also
+   * permits deterministic boundary testing. It is the last allocated value.
+   */
+  constructor(
+    policy: CircuitBreakerPolicy,
+    initialTokenSequence: bigint = BIGINT_ZERO,
+  ) {
     assertPolicy(policy);
+    assertInitialTokenSequence(initialTokenSequence);
     this.#policy = Object.freeze({ ...policy });
+    this.#nextTokenSequence = initialTokenSequence;
   }
 
   get state(): CircuitBreakerState {
@@ -235,20 +258,15 @@ export class CircuitBreaker {
       return { allowed: false, reason: "too-many-in-flight" };
     }
 
-    // The active set is strictly bounded, so a free uint32 sequence is found
-    // after inspecting at most active-size + 1 candidates, including on wrap.
-    for (let attempts = 0; attempts <= this.#activeAcquisitions.size; attempts += 1) {
-      this.#nextTokenSequence =
-        this.#nextTokenSequence === MAX_UINT32 ? 0 : this.#nextTokenSequence + 1;
-      const token = `cb:${this.#generation}:${this.#nextTokenSequence}`;
-      if (!this.#activeAcquisitions.has(token)) {
-        this.#activeAcquisitions.set(token, { generation: this.#generation, kind });
-        return { allowed: true, token };
-      }
+    if (this.#nextTokenSequence >= MAX_TOKEN_SEQUENCE) {
+      this.#failClosed();
+      return { allowed: false, reason: "fail-closed" };
     }
 
-    this.#failClosed();
-    return { allowed: false, reason: "fail-closed" };
+    this.#nextTokenSequence += BIGINT_ONE;
+    const token = `cb:${this.#generation}:${this.#nextTokenSequence.toString(36)}`;
+    this.#activeAcquisitions.set(token, { generation: this.#generation, kind });
+    return { allowed: true, token };
   }
 
   #open(now: number): void {

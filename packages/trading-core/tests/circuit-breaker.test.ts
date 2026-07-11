@@ -155,6 +155,35 @@ describe("CircuitBreaker", () => {
     expect(tokens.has(replacement)).toBe(false);
   });
 
+  it("never reuses tokens when the lifetime sequence crosses the old uint32 boundary", () => {
+    const oldBoundary = BigInt(0xffff_ffff);
+    const breaker = new CircuitBreaker(policy, oldBoundary - BigInt(1));
+    const delayed = acquireToken(breaker, 0);
+    const fatal = acquireToken(breaker, 0);
+
+    expect(delayed.endsWith(`:${oldBoundary.toString(36)}`)).toBe(true);
+    expect(fatal.endsWith(`:${(oldBoundary + BigInt(1)).toString(36)}`)).toBe(
+      true,
+    );
+    expect(fatal).not.toBe(delayed);
+
+    breaker.recordFailure(fatal, "authentication", 1);
+    const probe = acquireToken(breaker, 1_001);
+    expect(probe.endsWith(`:${(oldBoundary + BigInt(2)).toString(36)}`)).toBe(
+      true,
+    );
+    expect(breaker.recordSuccess(probe, 1_002)).toBe(true);
+    expect(breaker.recordFailure(delayed, "authentication", 1_003)).toBe(false);
+    expect(breaker.state).toBe("closed");
+  });
+
+  it("validates and bounds restored lifetime token sequences", () => {
+    expect(() => new CircuitBreaker(policy, BigInt(-1))).toThrow(TypeError);
+    expect(() => new CircuitBreaker(policy, 0 as unknown as bigint)).toThrow(TypeError);
+    expect(() => new CircuitBreaker(policy, BigInt(36) ** BigInt(128))).toThrow(TypeError);
+    expect(() => new CircuitBreaker(policy, BigInt(36) ** BigInt(127))).not.toThrow();
+  });
+
   it("keeps canSubmit observational and returns false on timestamp regression", () => {
     const breaker = new CircuitBreaker(policy);
     const token = acquireToken(breaker, 10);
