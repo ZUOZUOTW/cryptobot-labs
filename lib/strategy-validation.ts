@@ -272,6 +272,15 @@ const canonicalBlockErrors = (config: BotConfig, validateValues: boolean): strin
       if (validateValues && (item.value < expected.min || item.value > expected.max)) {
         errors.push(`${canonical.name}的${expected.label}必須介於 ${expected.min} 到 ${expected.max}`);
       }
+      if (validateValues && Number.isFinite(item.value)) {
+        const steps = (item.value - expected.min) / expected.step;
+        if (!Number.isFinite(steps) || Math.abs(steps - Math.round(steps)) > 1e-8) {
+          errors.push(`${canonical.name}的${expected.label}必須符合步進 ${expected.step}`);
+        }
+        if ((/period/i.test(item.key) || /count/i.test(item.key) || item.key === "intervalDays") && !Number.isInteger(item.value)) {
+          errors.push(`${canonical.name}的${expected.label}必須是整數`);
+        }
+      }
     }
     for (const expected of canonical.parameters) {
       if (!parameterKeys.has(expected.key)) errors.push(`缺少策略參數：${strategy.id}.${expected.key}`);

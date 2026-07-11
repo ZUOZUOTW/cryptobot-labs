@@ -3,7 +3,7 @@ import type { Market, SignalAction, StrategyEvaluator } from "../contracts";
 
 export type GapPolicy = "fail" | "disclose";
 export type PositionSide = "long" | "short";
-export type TradeExitReason = "signal" | "opposite-signal" | "end-of-data";
+export type TradeExitReason = "signal" | "opposite-signal" | "partial-reduction" | "end-of-data";
 
 export interface FundingEvent {
   timestamp: number;
@@ -53,7 +53,7 @@ export interface SignalEvent {
   evaluatedAt: number;
   executionTime?: number;
   status: "accepted" | "rejected";
-  effect: "queued" | "opened" | "closed" | "held" | "ignored-end-of-data" | "none";
+  effect: "queued" | "opened" | "added" | "reduced" | "closed" | "held" | "ignored-end-of-data" | "none";
   reason: string;
 }
 
@@ -93,6 +93,11 @@ export interface HistoricalBacktestProvenance {
   configHash: string;
   strategyHash: string;
   datasetDigest: string;
+  executionConvention: {
+    signalEvaluation: "completed-candle-close";
+    signalExecution: "next-candle-open";
+    riskTrigger: "close-only-not-intrabar";
+  };
 }
 
 export interface HistoricalBacktestResult {

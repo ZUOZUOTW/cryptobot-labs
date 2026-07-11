@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { Candle, HistoricalDataset, StrategyEvaluator, StrategyInput } from "../src";
-import { runHistoricalBacktest } from "../src/backtest/engine";
+import { MAX_DECIMAL_STRING_LENGTH, MAX_HISTORICAL_CANDLES, runHistoricalBacktest } from "../src/backtest/engine";
 import fixedCandles from "./fixtures/btcusdt-1h.json";
 
 function dataset(
@@ -53,6 +53,17 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 describe("historical backtest", () => {
+  const generatedCandles = (prices: Array<{ open: number; close: number }>, intervalMs = 3_600_000): Candle[] => prices.map((price, index) => ({
+    openTime: index * intervalMs,
+    closeTime: (index + 1) * intervalMs - 1,
+    open: String(price.open),
+    high: String(Math.max(price.open, price.close) + 1),
+    low: String(Math.min(price.open, price.close) - 1),
+    close: String(price.close),
+    volume: "100",
+    complete: true,
+  }));
+
   it("evaluates candle N and fills its signal at candle N+1 open", async () => {
     const seen: number[] = [];
     const base = request();
@@ -130,6 +141,107 @@ describe("historical backtest", () => {
     expect(Number(quarter.trades[0]!.quantity)).toBeCloseTo(Number(full.trades[0]!.quantity) * 0.25, 12);
   });
 
+  it("adds at a weighted entry and partially reduces a layered position", async () => {
+    const items = generatedCandles([
+      { open: 100, close: 100 }, { open: 100, close: 100 }, { open: 200, close: 200 },
+      { open: 160, close: 160 }, { open: 150, close: 150 },
+    ]);
+    const actions = [
+      { action: "buy" as const, allocationRate: 0.2 },
+      { action: "buy" as const, allocationRate: 0.25, positionEffect: "add" as const },
+      { action: "sell" as const, positionEffect: "reduce" as const, reductionRate: 0.5 },
+      { action: "close" as const },
+      { action: "hold" as const },
+    ];
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items), feeRate: "0", slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: `layer-${candles.length}`, reason: "layer", createdAt: candles.at(-1)!.closeTime, ...actions[candles.length - 1]! };
+      } },
+    }));
+    expect(result.signalEvents.map((event) => event.effect)).toContain("added");
+    expect(result.signalEvents.map((event) => event.effect)).toContain("reduced");
+    expect(result.trades).toHaveLength(2);
+    expect(result.trades[0]).toMatchObject({ entryPrice: "138.4615384615384615384615384615384615385", quantity: "1.625", exitReason: "partial-reduction" });
+    expect(result.trades[1]).toMatchObject({ quantity: "1.625", exitReason: "signal" });
+  });
+
+  it("splits accrued funding proportionally across partial and final closes", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items, "futures"), feeRate: "0", slippageRate: "0", leverage: "2",
+      funding: [{ timestamp: 4_000_000, rate: "0.1", markPrice: "100" }],
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        const signal = candles.length === 1
+          ? { action: "buy" as const }
+          : candles.length === 2
+            ? { action: "sell" as const, positionEffect: "reduce" as const, reductionRate: 0.5 }
+            : { action: "hold" as const };
+        return { id: `fund-${candles.length}`, reason: "fund", createdAt: candles.at(-1)!.closeTime, ...signal };
+      } },
+    }));
+    expect(result.trades.map((trade) => trade.funding)).toEqual(["-100", "-100"]);
+    expect(result.provenance.fundingTreatment.netFunding).toBe("-200");
+  });
+
+  it("rejects layered additions once all collateral is reserved", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items), feeRate: "0", slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        const action = candles.length === 1
+          ? { action: "buy" as const, allocationRate: 1 }
+          : { action: "buy" as const, allocationRate: 1, positionEffect: "add" as const };
+        return { id: `capacity-${candles.length}`, reason: "capacity", createdAt: candles.at(-1)!.closeTime, ...action };
+      } },
+    }));
+    expect(result.signalEvents.find((event) => event.signalId === "capacity-2")).toMatchObject({
+      status: "rejected", effect: "none", reason: "insufficient-available-equity",
+    });
+    expect(result.trades[0]!.quantity).toBe("10");
+  });
+
+  it("latches daily loss until the next UTC day even after equity recovers", async () => {
+    const intervalMs = 6 * 3_600_000;
+    const items = generatedCandles([
+      { open: 100, close: 100 }, { open: 100, close: 80 }, { open: 80, close: 100 },
+      { open: 100, close: 100 }, { open: 100, close: 100 },
+    ], intervalMs);
+    const flags: boolean[] = [];
+    const result = await runHistoricalBacktest(request({
+      dataset: { ...dataset(items), intervalMs, request: { market: "spot", symbol: "BTCUSDT", interval: "6h" } },
+      feeRate: "0", slippageRate: "0",
+      evaluator: {
+        riskPolicy: { maximumDailyLossRate: 0.05 },
+        async evaluate(strategyInput: Readonly<StrategyInput>) {
+          flags.push(strategyInput.portfolio!.dailyLossBreached ?? false);
+          const action = strategyInput.candles.length === 1 ? "buy" : strategyInput.portfolio!.dailyLossBreached && strategyInput.portfolio!.position ? "close" : "hold";
+          return { id: `latch-${strategyInput.now}`, action, reason: "latch", createdAt: strategyInput.now };
+        },
+      },
+    }));
+    expect(flags).toEqual([false, true, true, true, false]);
+    expect(result.trades).toHaveLength(1);
+  });
+
+  it("bounds visual lookback and discloses close-to-next-open execution", async () => {
+    const items = generatedCandles(Array.from({ length: 1_100 }, () => ({ open: 100, close: 100 })));
+    const seen: number[] = [];
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items),
+      evaluator: { maximumLookback: 1024, async evaluate({ candles, now }: Readonly<StrategyInput>) {
+        seen.push(candles.length);
+        return { id: `bounded-${now}`, action: "hold", reason: "bounded", createdAt: now };
+      } },
+    }));
+    expect(Math.max(...seen)).toBe(1024);
+    expect(result.provenance.executionConvention).toEqual({
+      signalEvaluation: "completed-candle-close",
+      signalExecution: "next-candle-open",
+      riskTrigger: "close-only-not-intrabar",
+    });
+  });
+
   it("provides frozen real position state and resets day-start equity on UTC boundaries", async () => {
     const shifted = (fixedCandles as Candle[]).map((candle, index) => ({
       ...candle,
@@ -201,6 +313,18 @@ describe("historical backtest", () => {
     for (const [field, value] of [["initialCapital", "0"], ["feeRate", "-1"], ["slippageRate", "1"], ["leverage", "0"]] as const) {
       await expect(runHistoricalBacktest({ ...base, [field]: value })).rejects.toThrow();
     }
+  });
+
+  it("rejects oversized datasets and decimal strings before evaluation", async () => {
+    const evaluator = { evaluate: vi.fn(request().evaluator.evaluate) };
+    await expect(runHistoricalBacktest(request({
+      dataset: dataset(Array.from({ length: MAX_HISTORICAL_CANDLES + 1 }, () => fixedCandles[0] as Candle)), evaluator,
+    }))).rejects.toThrow(/at most/i);
+    const oversized = "1".repeat(MAX_DECIMAL_STRING_LENGTH + 1);
+    await expect(runHistoricalBacktest(request({
+      dataset: dataset([{ ...fixedCandles[0], open: oversized }, fixedCandles[1]] as Candle[]), evaluator,
+    }))).rejects.toThrow(/decimal string limit/i);
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe candle timestamps at the engine boundary", async () => {

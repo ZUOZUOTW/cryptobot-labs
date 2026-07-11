@@ -76,6 +76,18 @@ export const StrategySignalSchema = z.strictObject({
   reason: z.string().min(1),
   createdAt: finiteTimestampSchema,
   allocationRate: z.number().finite().gt(0).lte(1).optional(),
+  positionEffect: z.enum(["add", "reduce"]).optional(),
+  reductionRate: z.number().finite().gt(0).lte(1).optional(),
+}).superRefine((signal, context) => {
+  if (signal.reductionRate !== undefined && signal.positionEffect !== "reduce") {
+    context.addIssue({ code: "custom", path: ["reductionRate"], message: "reductionRate requires positionEffect reduce" });
+  }
+  if (signal.positionEffect === "add" && signal.action === "close") {
+    context.addIssue({ code: "custom", path: ["positionEffect"], message: "close cannot add to a position" });
+  }
+  if (signal.positionEffect !== undefined && signal.action !== "buy" && signal.action !== "sell") {
+    context.addIssue({ code: "custom", path: ["positionEffect"], message: "positionEffect requires buy or sell" });
+  }
 });
 
 export const StrategyInputSchema = z.strictObject({
@@ -84,16 +96,20 @@ export const StrategyInputSchema = z.strictObject({
   symbol: z.string().min(1),
   now: finiteTimestampSchema,
   timeframe: z.string().min(1).optional(),
+  leverage: PositiveDecimalStringSchema.optional(),
   portfolio: z.strictObject({
     equity: z.string().regex(signedDecimalPattern),
     dayStartEquity: z.string().regex(signedDecimalPattern),
     utcDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    dailyLossBreached: z.boolean().optional(),
+    availableEquity: z.string().regex(signedDecimalPattern).optional(),
     position: z.strictObject({
       side: z.enum(["long", "short"]),
       entryPrice: PositiveDecimalStringSchema,
       peakPrice: PositiveDecimalStringSchema,
       troughPrice: PositiveDecimalStringSchema,
       quantity: PositiveDecimalStringSchema,
+      usedMargin: PositiveDecimalStringSchema,
     }).optional(),
   }).optional(),
 });

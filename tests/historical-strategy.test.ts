@@ -49,6 +49,7 @@ const input = (items: Candle[], market: "spot" | "futures" = "spot", portfolio?:
   market,
   symbol: "BTCUSDT",
   timeframe: "1h",
+  leverage: market === "spot" ? "1" : "2",
   now: items.at(-1)!.closeTime,
   ...(portfolio ? { portfolio } : {}),
 });
@@ -75,6 +76,13 @@ describe("visual historical strategy evaluator", () => {
   it("requires dataset market, symbol, and timeframe to match the config", async () => {
     const evaluator = createVisualHistoricalEvaluator(config());
     await expect(evaluator.evaluate({ ...input(candles([100, 90, 80, 85])), timeframe: "4h" })).rejects.toThrow(/match/i);
+    await expect(evaluator.evaluate({ ...input(candles([100, 90, 80, 85])), leverage: "2" })).rejects.toThrow(/match/i);
+  });
+
+  it("rejects off-step, fractional period, and non-finite parameters", () => {
+    expect(() => createVisualHistoricalEvaluator(setParameter(withBlocks(["grid", "fixed-position"]), "fixed-position", "positionSize", 10.5))).toThrow(/步進/);
+    expect(() => createVisualHistoricalEvaluator(setParameter(withBlocks(["rsi"]), "rsi", "period", 2.5))).toThrow(/步進|整數/);
+    expect(() => createVisualHistoricalEvaluator(setParameter(withBlocks(["rsi"]), "rsi", "oversold", Number.NaN))).toThrow(/invalid|格式/i);
   });
 
   it.each([
@@ -144,7 +152,7 @@ describe("visual historical strategy evaluator", () => {
       let candidate = withBlocks(["grid", "fixed-position"]);
       candidate = setParameter(setParameter(setParameter(candidate, "grid", "gridCount", 2), "grid", "range", 2), "fixed-position", "positionSize", percentage);
       const signal = await createVisualHistoricalEvaluator(candidate).evaluate(input(candles([100, 98])));
-      expect(signal.allocationRate).toBeCloseTo(percentage / 100, 12);
+      expect(signal.allocationRate).toBeCloseTo(Math.min(percentage / 100, 0.5), 12);
     }
   });
 
@@ -202,7 +210,7 @@ describe("visual historical strategy evaluator", () => {
       equity: "1000",
       dayStartEquity: "1000",
       utcDay: "1970-01-01",
-      position: { side: "long", entryPrice: "100", peakPrice: peak, troughPrice: trough, quantity: "1" },
+      position: { side: "long", entryPrice: "100", peakPrice: peak, troughPrice: trough, quantity: "1", usedMargin: "100" },
     }));
     expect(result).toMatchObject({ action: "close", reason: id });
   });
@@ -215,8 +223,52 @@ describe("visual historical strategy evaluator", () => {
     expect(await evaluator.evaluate(input(candles([100, 100]), "spot", portfolio))).toMatchObject({ action: "hold", reason: /suppress/ });
     expect(await evaluator.evaluate(input(candles([100, 100]), "spot", {
       ...portfolio,
-      position: { side: "long", entryPrice: "100", peakPrice: "100", troughPrice: "100", quantity: "1" },
+      position: { side: "long", entryPrice: "100", peakPrice: "100", troughPrice: "100", quantity: "1", usedMargin: "100" },
     }))).toMatchObject({ action: "close", reason: /maximum-daily-loss/ });
+  });
+
+  it("uses linear short returns at the exact take-profit and stop-loss boundaries", async () => {
+    const snapshot = (close: number) => input(candles([100, close]), "futures", {
+      equity: "1000", dayStartEquity: "1000", utcDay: "1970-01-01",
+      position: { side: "short", entryPrice: "100", peakPrice: "105", troughPrice: "95", quantity: "1", usedMargin: "50" },
+    });
+    let takeProfit = withBlocks(["dca", "take-profit"], "futures");
+    takeProfit = setParameter(takeProfit, "take-profit", "takeProfit", 5);
+    let stopLoss = withBlocks(["dca", "stop-loss"], "futures");
+    stopLoss = setParameter(stopLoss, "stop-loss", "stopLoss", 5);
+    expect(await createVisualHistoricalEvaluator(takeProfit).evaluate(snapshot(95))).toMatchObject({ action: "close", reason: "take-profit" });
+    expect(await createVisualHistoricalEvaluator(stopLoss).evaluate(snapshot(105))).toMatchObject({ action: "close", reason: "stop-loss" });
+    await expect(createVisualHistoricalEvaluator(stopLoss).evaluate({
+      ...snapshot(105),
+      portfolio: { ...snapshot(105).portfolio!, position: { ...snapshot(105).portfolio!.position!, entryPrice: "0" } },
+    })).rejects.toThrow(/positive/);
+  });
+
+  it("runs repeated DCA tranches and grid add/reduce layers through the engine", async () => {
+    const run = async (candidate: BotConfig, items: Candle[], intervalMs: number) => runHistoricalBacktest({
+      dataset: {
+        request: { market: candidate.market, symbol: candidate.symbol, interval: candidate.timeframe },
+        candles: items, intervalMs, complete: true,
+        validation: { duplicates: [], ordered: true, gaps: [], incompleteCount: 0 },
+        provenance: { provider: "WEEX", sourceKind: "public-api", endpoint: "/candles", collectedAt: 1, singleResponse: true, paginated: false, truncated: false },
+      },
+      evaluator: createVisualHistoricalEvaluator(candidate), initialCapital: "1000", feeRate: "0", slippageRate: "0",
+      leverage: String(candidate.leverage), funding: [], gapPolicy: "fail", engineVersion: "visual", configHash: "config", strategyHash: "strategy",
+    });
+
+    const day = 86_400_000;
+    const dcaCandles = candles([100, 100, 100, 100, 100]).map((candle, index) => ({ ...candle, openTime: index * day, closeTime: (index + 1) * day - 1 }));
+    let dca = { ...withBlocks(["dca", "fixed-position"]), timeframe: "1d" };
+    dca = setParameter(setParameter(setParameter(dca, "dca", "intervalDays", 1), "fixed-position", "positionSize", 20), "stop-loss", "stopLoss", 20);
+    const dcaResult = await run(dca, dcaCandles, day);
+    expect(dcaResult.signalEvents.map((event) => event.effect)).toContain("added");
+
+    let grid = withBlocks(["grid", "fixed-position"]);
+    grid = setParameter(setParameter(setParameter(setParameter(grid, "grid", "gridCount", 2), "grid", "range", 2), "fixed-position", "positionSize", 50), "stop-loss", "stopLoss", 20);
+    const gridResult = await run(grid, candles([100, 98, 96, 98, 100, 100]), 3_600_000);
+    expect(gridResult.signalEvents.map((event) => event.effect)).toContain("added");
+    expect(gridResult.signalEvents.map((event) => event.effect)).toContain("reduced");
+    expect(gridResult.trades.some((trade) => trade.exitReason === "partial-reduction")).toBe(true);
   });
 
   it("permits bearish futures entries but never emits a spot short", async () => {

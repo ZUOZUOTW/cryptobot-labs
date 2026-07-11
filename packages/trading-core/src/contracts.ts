@@ -20,6 +20,10 @@ export interface StrategySignal {
   createdAt: number;
   /** Fraction of usable equity to allocate to a newly opened position. */
   allocationRate?: number;
+  /** Explicit opt-in for layered strategies. Omitted preserves legacy behavior. */
+  positionEffect?: "add" | "reduce";
+  /** Fraction of the current position to close when positionEffect is reduce. */
+  reductionRate?: number;
 }
 
 export interface StrategyPositionSnapshot {
@@ -28,12 +32,15 @@ export interface StrategyPositionSnapshot {
   peakPrice: string;
   troughPrice: string;
   quantity: string;
+  usedMargin: string;
 }
 
 export interface StrategyPortfolioSnapshot {
   equity: string;
   dayStartEquity: string;
   utcDay: string;
+  dailyLossBreached?: boolean;
+  availableEquity?: string;
   position?: Readonly<StrategyPositionSnapshot>;
 }
 
@@ -43,9 +50,12 @@ export interface StrategyInput {
   symbol: string;
   now: number;
   timeframe?: string;
+  leverage?: string;
   portfolio?: Readonly<StrategyPortfolioSnapshot>;
 }
 
 export interface StrategyEvaluator {
   evaluate(input: Readonly<StrategyInput>): Promise<StrategySignal>;
+  readonly maximumLookback?: number;
+  readonly riskPolicy?: Readonly<{ maximumDailyLossRate?: number }>;
 }

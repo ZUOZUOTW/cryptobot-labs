@@ -62,8 +62,17 @@ const cloneAndFreezeConfig = (value: BotConfig): Readonly<BotConfig> => {
 };
 
 const number = (value: string): number => {
+  if (value.length > 128 || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) {
+    throw new TypeError("Historical strategy received an invalid decimal string");
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new TypeError("Historical strategy received a non-finite candle value");
+  return parsed;
+};
+
+const positiveNumber = (value: string): number => {
+  const parsed = number(value);
+  if (parsed <= 0) throw new RangeError("Historical strategy requires positive market values");
   return parsed;
 };
 
@@ -71,7 +80,7 @@ const parameter = (block: Readonly<StrategyBlock>, key: string): number => (
   block.parameters.find((item) => item.key === key)!.value
 );
 
-const closes = (candles: readonly Candle[]): number[] => candles.map((candle) => number(candle.close));
+const closes = (candles: readonly Candle[]): number[] => candles.map((candle) => positiveNumber(candle.close));
 
 const average = (values: readonly number[]): number => values.reduce((sum, value) => sum + value, 0) / values.length;
 
@@ -184,8 +193,8 @@ const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle
 const volumeConfirmed = (block: Readonly<StrategyBlock>, candles: readonly Candle[]): boolean => {
   const period = parameter(block, "period");
   if (candles.length <= period) return false;
-  const priorVolumes = candles.slice(-period - 1, -1).map((candle) => number(candle.volume));
-  return number(candles.at(-1)!.volume) >= average(priorVolumes) * parameter(block, "multiplier");
+  const priorVolumes = candles.slice(-period - 1, -1).map((candle) => positiveNumber(candle.volume));
+  return positiveNumber(candles.at(-1)!.volume) >= average(priorVolumes) * parameter(block, "multiplier");
 };
 
 const trueRangeAverage = (candles: readonly Candle[], period: number): number | undefined => {
@@ -193,9 +202,9 @@ const trueRangeAverage = (candles: readonly Candle[], period: number): number | 
   const ranges: number[] = [];
   for (let index = candles.length - period; index < candles.length; index += 1) {
     const candle = candles[index]!;
-    const priorClose = number(candles[index - 1]!.close);
-    const high = number(candle.high);
-    const low = number(candle.low);
+    const priorClose = positiveNumber(candles[index - 1]!.close);
+    const high = positiveNumber(candle.high);
+    const low = positiveNumber(candle.low);
     ranges.push(Math.max(high - low, Math.abs(high - priorClose), Math.abs(low - priorClose)));
   }
   return average(ranges);
@@ -203,7 +212,7 @@ const trueRangeAverage = (candles: readonly Candle[], period: number): number | 
 
 const allocationRate = (config: Readonly<BotConfig>, candles: readonly Candle[]): number | undefined => {
   const allocations: number[] = [];
-  const close = number(candles.at(-1)!.close);
+  const close = positiveNumber(candles.at(-1)!.close);
   for (const block of config.blocks) {
     if (block.id === "fixed-position") allocations.push(parameter(block, "positionSize") / 100);
     if (block.id === "atr-sizing") {
@@ -219,6 +228,8 @@ const allocationRate = (config: Readonly<BotConfig>, candles: readonly Candle[])
     const drawdown = peak === 0 ? 0 : Math.max(0, 1 - close / peak);
     allocation *= 1 + drawdown * (parameter(dca, "drawdownBoost") / 100);
   }
+  const grid = config.blocks.find((block) => block.id === "grid");
+  if (grid) allocation = Math.min(allocation, 1 / parameter(grid, "gridCount"));
   return Math.max(Number.EPSILON, Math.min(1, allocation));
 };
 
@@ -229,14 +240,14 @@ const riskExit = (config: Readonly<BotConfig>, input: Readonly<StrategyInput>): 
   const equity = number(portfolio.equity);
   const dayStartEquity = number(portfolio.dayStartEquity);
   const dailyLoss = config.blocks.find((block) => block.id === "maximum-daily-loss");
-  if (dailyLoss && equity <= dayStartEquity * (1 - parameter(dailyLoss, "maximumDailyLoss") / 100)) {
+  if (dailyLoss && (portfolio.dailyLossBreached === true || equity <= dayStartEquity * (1 - parameter(dailyLoss, "maximumDailyLoss") / 100))) {
     return position ? "maximum-daily-loss:close" : "maximum-daily-loss:suppress";
   }
   if (!position) return undefined;
 
-  const close = number(input.candles.at(-1)!.close);
-  const entry = number(position.entryPrice);
-  const signedReturn = position.side === "long" ? close / entry - 1 : entry / close - 1;
+  const close = positiveNumber(input.candles.at(-1)!.close);
+  const entry = positiveNumber(position.entryPrice);
+  const signedReturn = position.side === "long" ? close / entry - 1 : 1 - close / entry;
   const takeProfit = config.blocks.find((block) => block.id === "take-profit");
   if (takeProfit && signedReturn >= parameter(takeProfit, "takeProfit") / 100) return "take-profit";
   const stopLoss = config.blocks.find((block) => block.id === "stop-loss");
@@ -245,8 +256,8 @@ const riskExit = (config: Readonly<BotConfig>, input: Readonly<StrategyInput>): 
   if (trailing) {
     const distance = parameter(trailing, "trailingDistance") / 100;
     const stopped = position.side === "long"
-      ? close <= number(position.peakPrice) * (1 - distance)
-      : close >= number(position.troughPrice) * (1 + distance);
+      ? close <= positiveNumber(position.peakPrice) * (1 - distance)
+      : close >= positiveNumber(position.troughPrice) * (1 + distance);
     if (stopped) return "trailing-stop";
   }
   return undefined;
@@ -254,6 +265,8 @@ const riskExit = (config: Readonly<BotConfig>, input: Readonly<StrategyInput>): 
 
 export interface VisualHistoricalEvaluator extends StrategyEvaluator {
   readonly config: Readonly<BotConfig>;
+  readonly maximumLookback: 1024;
+  readonly riskPolicy: Readonly<{ maximumDailyLossRate?: number }>;
 }
 
 export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHistoricalEvaluator => {
@@ -264,12 +277,19 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
   const validation = validateConfig(candidate);
   if (!validation.valid) throw new TypeError(`Invalid BotConfig: ${validation.errors.join("; ")}`);
   const config = cloneAndFreezeConfig(candidate);
+  const maximumDailyLoss = config.blocks.find((block) => block.id === "maximum-daily-loss");
+  const riskPolicy = Object.freeze({
+    ...(maximumDailyLoss ? { maximumDailyLossRate: parameter(maximumDailyLoss, "maximumDailyLoss") / 100 } : {}),
+  });
 
   return Object.freeze({
     config,
+    maximumLookback: 1024 as const,
+    riskPolicy,
     async evaluate(input: Readonly<StrategyInput>): Promise<StrategySignal> {
-      if (input.market !== config.market || input.symbol !== config.symbol || input.timeframe !== config.timeframe) {
-        throw new TypeError("Historical dataset does not match BotConfig market, symbol, and timeframe");
+      if (input.market !== config.market || input.symbol !== config.symbol || input.timeframe !== config.timeframe ||
+          input.leverage === undefined || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(input.leverage) || Number(input.leverage) !== config.leverage) {
+        throw new TypeError("Historical dataset does not match BotConfig market, symbol, timeframe, and leverage");
       }
       const exit = riskExit(config, input);
       if (exit) {
@@ -281,10 +301,6 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
           createdAt: input.now,
         };
       }
-      if (input.portfolio?.position) {
-        return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-open:no-exit", createdAt: input.now };
-      }
-
       const entryBlocks = config.blocks.filter((block) => block.group === "entry");
       const directions = entryBlocks.map((block) => entryDirection(block, input.candles));
       let direction: Direction = 0;
@@ -300,7 +316,7 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
         .filter((block) => block.id === "volume-confirmation")
         .map((block) => volumeConfirmed(block, input.candles));
       const confirmed = confirmations.length === 0 || (config.logicMode === "all" ? confirmations.every(Boolean) : confirmations.some(Boolean));
-      if (direction === 0 || !confirmed || (direction === -1 && config.market === "spot")) {
+      if (direction === 0 || !confirmed || (direction === -1 && config.market === "spot" && !input.portfolio?.position)) {
         const reason = direction === 0 ? `entry:${config.logicMode}:not-triggered` : !confirmed ? "confirm:volume:not-triggered" : "spot:bearish-signal-suppressed";
         return { id: `visual-${input.now}-hold`, action: "hold", reason, createdAt: input.now };
       }
@@ -309,12 +325,25 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
       if (allocation === undefined) {
         return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-sizing:atr-not-ready", createdAt: input.now };
       }
+      const position = input.portfolio?.position;
+      const layered = entryBlocks.some((block) => block.id === "grid" || block.id === "dca");
+      if (position && !layered) {
+        return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-open:no-exit", createdAt: input.now };
+      }
+      const sameDirection = position && ((position.side === "long" && action === "buy") || (position.side === "short" && action === "sell"));
+      const reducing = position && !sameDirection;
+      const grid = config.blocks.find((block) => block.id === "grid");
       return {
         id: `visual-${input.now}-${action}`,
         action,
         reason: `entry:${config.logicMode}:${entryBlocks.map((block) => block.id).join("+")}`,
         createdAt: input.now,
         allocationRate: allocation,
+        ...(sameDirection ? { positionEffect: "add" as const } : {}),
+        ...(reducing ? {
+          positionEffect: "reduce" as const,
+          reductionRate: grid ? 1 / parameter(grid, "gridCount") : allocation,
+        } : {}),
       };
     },
   });

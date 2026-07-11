@@ -25,6 +25,7 @@ interface Position {
   funding: Decimal;
   peakPrice: Decimal;
   troughPrice: Decimal;
+  usedMargin: Decimal;
 }
 
 interface PendingSignal {
@@ -35,6 +36,8 @@ interface PendingSignal {
 const UNSIGNED_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const MAX_ECMASCRIPT_TIMESTAMP = 8_640_000_000_000_000;
+export const MAX_HISTORICAL_CANDLES = 10_000;
+export const MAX_DECIMAL_STRING_LENGTH = 128;
 
 function numeric(value: string, label: string, options: { positive?: boolean; belowOne?: boolean; signed?: boolean } = {}): Decimal {
   const pattern = options.signed ? SIGNED_DECIMAL : UNSIGNED_DECIMAL;
@@ -95,6 +98,7 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
   }
 
   if (dataset.candles.length < 2) throw new RangeError("Historical backtests require at least two completed candles");
+  if (dataset.candles.length > MAX_HISTORICAL_CANDLES) throw new RangeError(`Historical backtests support at most ${MAX_HISTORICAL_CANDLES} candles`);
   for (const candle of dataset.candles) {
     if (!Number.isSafeInteger(candle.openTime) || !Number.isSafeInteger(candle.closeTime) ||
         candle.openTime < 0 || candle.closeTime <= candle.openTime || candle.closeTime > MAX_ECMASCRIPT_TIMESTAMP) {
@@ -102,6 +106,11 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
     }
     if (candle.closeTime - candle.openTime !== dataset.intervalMs - 1) {
       throw new TypeError("Candle duration must exactly match intervalMs");
+    }
+    for (const field of ["open", "high", "low", "close", "volume"] as const) {
+      if (typeof candle[field] !== "string" || candle[field].length > MAX_DECIMAL_STRING_LENGTH) {
+        throw new TypeError(`Candle ${field} exceeds the decimal string limit`);
+      }
     }
   }
   const parsed = dataset.candles.map((candle) => CandleSchema.parse(candle));
@@ -171,51 +180,78 @@ export async function runHistoricalBacktest(
   const equityCurve: EquityPoint[] = [];
   const signalEvents: SignalEvent[] = [];
 
-  function closePosition(referencePrice: string, timestamp: number, reason: TradeExitReason): void {
+  function reducePosition(referencePrice: string, timestamp: number, reason: TradeExitReason, requestedRate = 1): void {
     if (!position) return;
+    const rate = Decimal.min(1, Decimal.max(0, requestedRate));
+    const quantity = position.quantity.times(rate);
+    if (quantity.lte(0)) return;
     const orderSide = position.side === "long" ? "sell" : "buy";
     const exitPrice = adverseFill(referencePrice, orderSide, slippageRate);
-    const exitFee = exitPrice.times(position.quantity).times(feeRate);
-    const grossPnl = positionPnl(position.side, position.entryPrice, exitPrice, position.quantity);
+    const exitFee = exitPrice.times(quantity).times(feeRate);
+    const grossPnl = positionPnl(position.side, position.entryPrice, exitPrice, quantity);
     balance = balance.plus(grossPnl).minus(exitFee);
-    const fees = position.entryFee.plus(exitFee);
-    const realizedPnl = grossPnl.minus(fees).plus(position.funding);
+    const entryFee = position.entryFee.times(rate);
+    const funding = position.funding.times(rate);
+    const fees = entryFee.plus(exitFee);
+    const realizedPnl = grossPnl.minus(fees).plus(funding);
     trades.push({
       side: position.side,
       entryTime: position.entryTime,
       exitTime: timestamp,
       entryPrice: decimalString(position.entryPrice),
       exitPrice: decimalString(exitPrice),
-      quantity: decimalString(position.quantity),
-      entryFee: decimalString(position.entryFee),
+      quantity: decimalString(quantity),
+      entryFee: decimalString(entryFee),
       exitFee: decimalString(exitFee),
       fees: decimalString(fees),
-      funding: decimalString(position.funding),
+      funding: decimalString(funding),
       realizedPnl: decimalString(realizedPnl),
       exitReason: reason,
     });
-    position = undefined;
+    if (rate.eq(1)) {
+      position = undefined;
+    } else {
+      position.quantity = position.quantity.minus(quantity);
+      position.entryFee = position.entryFee.minus(entryFee);
+      position.funding = position.funding.minus(funding);
+      position.usedMargin = position.usedMargin.times(decimal(1).minus(rate));
+    }
   }
 
-  function openPosition(side: PositionSide, referencePrice: string, timestamp: number, allocationRate = 1): void {
+  function closePosition(referencePrice: string, timestamp: number, reason: TradeExitReason): void {
+    reducePosition(referencePrice, timestamp, reason, 1);
+  }
+
+  function addPosition(side: PositionSide, referencePrice: string, timestamp: number, allocationRate = 1): boolean {
     const orderSide = side === "long" ? "buy" : "sell";
     const entryPrice = adverseFill(referencePrice, orderSide, slippageRate);
-    // Allocate all usable equity while reserving the entry fee (and futures margin).
     const marginRate = market === "futures" ? decimal(1).div(leverage) : decimal(1);
-    const notional = balance.times(allocationRate).div(marginRate.plus(feeRate));
+    const accountEquity = position
+      ? balance.plus(unrealizedPnl(position.side, position.entryPrice, referencePrice, position.quantity))
+      : balance;
+    const available = Decimal.max(0, accountEquity.minus(position?.usedMargin ?? 0));
+    const notional = available.times(allocationRate).div(marginRate.plus(feeRate));
+    if (notional.lte(0)) return false;
     const quantity = notional.div(entryPrice);
     const entryFee = notional.times(feeRate);
+    const usedMargin = notional.times(marginRate);
     balance = balance.minus(entryFee);
-    position = {
-      side,
-      entryTime: timestamp,
-      entryPrice,
-      quantity,
-      entryFee,
-      funding: decimal(0),
-      peakPrice: entryPrice,
-      troughPrice: entryPrice,
-    };
+    if (!position) {
+      position = {
+        side, entryTime: timestamp, entryPrice, quantity, entryFee, funding: decimal(0),
+        peakPrice: entryPrice, troughPrice: entryPrice, usedMargin,
+      };
+    } else {
+      const priorQuantity = position.quantity;
+      const totalQuantity = priorQuantity.plus(quantity);
+      position.entryPrice = position.entryPrice.times(priorQuantity).plus(entryPrice.times(quantity)).div(totalQuantity);
+      position.quantity = totalQuantity;
+      position.entryFee = position.entryFee.plus(entryFee);
+      position.usedMargin = position.usedMargin.plus(usedMargin);
+      position.peakPrice = Decimal.max(position.peakPrice, entryPrice);
+      position.troughPrice = Decimal.min(position.troughPrice, entryPrice);
+    }
+    return true;
   }
 
   function executePending(candle: Readonly<Candle>): void {
@@ -224,14 +260,18 @@ export async function runHistoricalBacktest(
     pending = undefined;
     event.executionTime = candle.openTime;
     if (!position) {
-      if (signal.action === "buy") {
+      if (signal.positionEffect === "reduce") {
+        event.status = "rejected";
+        event.effect = "none";
+        event.reason = "no-position-to-reduce";
+      } else if (signal.action === "buy") {
         if (balance.lte(0)) {
           event.status = "rejected";
           event.effect = "none";
           event.reason = "nonpositive-equity";
         } else {
-          openPosition("long", candle.open, candle.openTime, signal.allocationRate);
-          event.effect = "opened";
+          event.effect = addPosition("long", candle.open, candle.openTime, signal.allocationRate) ? "opened" : "none";
+          if (event.effect === "none") { event.status = "rejected"; event.reason = "insufficient-available-equity"; }
         }
       } else if (signal.action === "sell" && market === "futures") {
         if (balance.lte(0)) {
@@ -239,8 +279,8 @@ export async function runHistoricalBacktest(
           event.effect = "none";
           event.reason = "nonpositive-equity";
         } else {
-          openPosition("short", candle.open, candle.openTime, signal.allocationRate);
-          event.effect = "opened";
+          event.effect = addPosition("short", candle.open, candle.openTime, signal.allocationRate) ? "opened" : "none";
+          if (event.effect === "none") { event.status = "rejected"; event.reason = "insufficient-available-equity"; }
         }
       } else {
         event.status = "rejected";
@@ -252,7 +292,19 @@ export async function runHistoricalBacktest(
 
     const opposite = (position.side === "long" && signal.action === "sell") ||
       (position.side === "short" && signal.action === "buy");
-    if (signal.action === "close" || opposite) {
+    const sameDirection = (position.side === "long" && signal.action === "buy") ||
+      (position.side === "short" && signal.action === "sell");
+    if (sameDirection && signal.positionEffect === "add") {
+      event.effect = addPosition(position.side, candle.open, candle.openTime, signal.allocationRate) ? "added" : "none";
+      if (event.effect === "none") {
+        event.status = "rejected";
+        event.reason = "insufficient-available-equity";
+      }
+    } else if (opposite && signal.positionEffect === "reduce") {
+      const fullyClosed = (signal.reductionRate ?? 1) === 1;
+      reducePosition(candle.open, candle.openTime, fullyClosed ? "signal" : "partial-reduction", signal.reductionRate);
+      event.effect = fullyClosed ? "closed" : "reduced";
+    } else if (signal.action === "close" || opposite) {
       closePosition(candle.open, candle.openTime, opposite ? "opposite-signal" : "signal");
       event.effect = "closed";
     } else {
@@ -264,6 +316,15 @@ export async function runHistoricalBacktest(
 
   let utcDay = "";
   let dayStartEquity = initialCapital;
+  let dailyLossBreached = false;
+  const maximumDailyLossRate = request.evaluator.riskPolicy?.maximumDailyLossRate;
+  const maximumLookback = request.evaluator.maximumLookback;
+  if (maximumLookback !== undefined && (!Number.isSafeInteger(maximumLookback) || maximumLookback < 2 || maximumLookback > MAX_HISTORICAL_CANDLES)) {
+    throw new TypeError("Evaluator maximumLookback is invalid");
+  }
+  if (maximumDailyLossRate !== undefined && (!Number.isFinite(maximumDailyLossRate) || maximumDailyLossRate <= 0 || maximumDailyLossRate > 1)) {
+    throw new TypeError("Evaluator maximumDailyLossRate is invalid");
+  }
   for (let index = 0; index < validated.candles.length; index += 1) {
     const candle = validated.candles[index]!;
     const currentUtcDay = new Date(candle.closeTime).toISOString().slice(0, 10);
@@ -272,6 +333,7 @@ export async function runHistoricalBacktest(
       dayStartEquity = equityCurve.length === 0
         ? initialCapital
         : decimal(equityCurve.at(-1)!.equity);
+      dailyLossBreached = false;
     }
     executePending(candle);
 
@@ -298,22 +360,32 @@ export async function runHistoricalBacktest(
     const equity = position
       ? balance.plus(unrealizedPnl(position.side, position.entryPrice, candle.close, position.quantity))
       : balance;
+    if (maximumDailyLossRate !== undefined && !dailyLossBreached &&
+        equity.lte(dayStartEquity.times(decimal(1).minus(maximumDailyLossRate)))) {
+      dailyLossBreached = true;
+    }
     equityCurve.push({ timestamp: candle.closeTime, equity: decimalString(equity), funding: decimalString(periodFunding) });
 
     const evaluatedAt = candle.closeTime;
     let signal: StrategySignal;
     try {
-      const inputCandles = Object.freeze(validated.candles.slice(0, index + 1));
+      const inputCandles = Object.freeze(validated.candles.slice(
+        maximumLookback === undefined ? 0 : Math.max(0, index + 1 - maximumLookback),
+        index + 1,
+      ));
       const candidate = await request.evaluator.evaluate(Object.freeze({
         candles: inputCandles,
         market,
         symbol: dataset.request.symbol,
         now: evaluatedAt,
         timeframe: dataset.request.interval,
+        leverage: decimalString(leverage),
         portfolio: Object.freeze({
           equity: decimalString(equity),
           dayStartEquity: decimalString(dayStartEquity),
           utcDay,
+          dailyLossBreached,
+          availableEquity: decimalString(Decimal.max(0, equity.minus(position?.usedMargin ?? 0))),
           ...(position ? {
             position: Object.freeze({
               side: position.side,
@@ -321,6 +393,7 @@ export async function runHistoricalBacktest(
               peakPrice: decimalString(position.peakPrice),
               troughPrice: decimalString(position.troughPrice),
               quantity: decimalString(position.quantity),
+              usedMargin: decimalString(position.usedMargin),
             }),
           } : {}),
         }),
@@ -408,6 +481,11 @@ export async function runHistoricalBacktest(
       configHash: request.configHash,
       strategyHash: request.strategyHash,
       datasetDigest: digest,
+      executionConvention: {
+        signalEvaluation: "completed-candle-close",
+        signalExecution: "next-candle-open",
+        riskTrigger: "close-only-not-intrabar",
+      },
     },
   };
 }
