@@ -1,7 +1,7 @@
 # CryptoBot Labs Live Execution Design
 
 **Date:** 2026-07-11
-**Status:** Pending written-spec review
+**Status:** Approved for implementation
 **Scope:** Historical backtesting, recommended WEEX API integration, Windows/macOS local execution agent, simulated and live automated ordering
 
 ## Product intent
