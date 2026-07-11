@@ -5,6 +5,13 @@ import { publicKeyJwkJson } from "../../db/repositories/shared";
 export const DEVICE_SIGNATURE_MAX_BODY_BYTES = 1_048_576;
 export const DEVICE_SIGNATURE_MAX_PAST_MS = 300_000;
 export const DEVICE_SIGNATURE_MAX_FUTURE_MS = 30_000;
+export const DEVICE_SIGNATURE_HEADER_NAMES = Object.freeze({
+  authorization: "Authorization",
+  deviceId: "X-CBL-Device-Id",
+  timestamp: "X-CBL-Device-Timestamp",
+  nonce: "X-CBL-Device-Nonce",
+  signature: "X-CBL-Device-Signature",
+} as const);
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const CREDENTIAL = /^cred_[A-Za-z0-9_-]{43}$/;
@@ -124,6 +131,30 @@ const header = (headers: Headers, name: string, maximum: number): string => {
   return value;
 };
 
+export interface DeviceSignatureHeadersInput {
+  credential: string;
+  deviceId: string;
+  timestamp: number;
+  nonce: string;
+  signature: string;
+}
+
+/** Builds the exact wire headers used by both the desktop agent and server verifier contract. */
+export function createDeviceSignatureHeaders(input: DeviceSignatureHeadersInput): Headers {
+  if (!CREDENTIAL.test(input.credential) || !DEVICE_ID.test(input.deviceId)
+    || !NONCE.test(input.nonce) || !Number.isSafeInteger(input.timestamp) || input.timestamp < 0) {
+    throw new DeviceAuthenticationError();
+  }
+  decodeBase64url(input.signature, 64);
+  return new Headers({
+    [DEVICE_SIGNATURE_HEADER_NAMES.authorization]: `Device ${input.credential}`,
+    [DEVICE_SIGNATURE_HEADER_NAMES.deviceId]: input.deviceId,
+    [DEVICE_SIGNATURE_HEADER_NAMES.timestamp]: String(input.timestamp),
+    [DEVICE_SIGNATURE_HEADER_NAMES.nonce]: input.nonce,
+    [DEVICE_SIGNATURE_HEADER_NAMES.signature]: input.signature,
+  });
+}
+
 const strictVerificationJwk = (encoded: string): JsonWebKey => {
   if (typeof encoded !== "string" || encoded.length > 2_048) throw new DeviceAuthenticationError();
   let parsed: unknown;
@@ -191,29 +222,33 @@ export function createDeviceRequestVerifier(dependencies: DeviceRequestVerifierD
   if (allowed.size !== dependencies.capabilities.length || [...allowed].some((item) => !/^[a-z][a-z0-9.-]{0,63}$/.test(item))) {
     throw new Error("device capability allowlist is invalid");
   }
-  if (![maxPastMs, maxFutureMs, nonceTtlMs, purgeLimit].every(Number.isSafeInteger)
-    || maxPastMs < 0 || maxFutureMs < 0 || nonceTtlMs < 1 || purgeLimit < 1 || purgeLimit > 100) {
+  const replayWindowMs = maxPastMs + maxFutureMs;
+  if (![maxPastMs, maxFutureMs, nonceTtlMs, purgeLimit, replayWindowMs].every(Number.isSafeInteger)
+    || maxPastMs < 1 || maxFutureMs < 1 || nonceTtlMs <= replayWindowMs
+    || purgeLimit < 1 || purgeLimit > 100) {
     throw new Error("device verifier bounds are invalid");
   }
 
   return async (input: VerifyDeviceRequestInput): Promise<VerifiedDeviceIdentity> => {
     try {
       if (!allowed.has(input.capability)) throw new DeviceAuthenticationError();
+      if (input.headers.has("x-cbl-timestamp") || input.headers.has("x-cbl-nonce")
+        || input.headers.has("x-cbl-signature")) throw new DeviceAuthenticationError();
       const authorization = header(input.headers, "authorization", 128);
       const match = /^Device (cred_[A-Za-z0-9_-]{43})$/.exec(authorization);
       if (!match || !CREDENTIAL.test(match[1])) throw new DeviceAuthenticationError();
       const credential = match[1];
       const deviceId = header(input.headers, "x-cbl-device-id", 128);
       if (!DEVICE_ID.test(deviceId)) throw new DeviceAuthenticationError();
-      const timestampText = header(input.headers, "x-cbl-timestamp", 16);
+      const timestampText = header(input.headers, "x-cbl-device-timestamp", 16);
       if (!DECIMAL.test(timestampText)) throw new DeviceAuthenticationError();
       const timestamp = Number(timestampText);
       strictTimestamp(timestamp);
       const observedNow = strictTimestamp(now());
       if (observedNow - timestamp > maxPastMs || timestamp - observedNow > maxFutureMs) throw new DeviceAuthenticationError();
-      const nonce = header(input.headers, "x-cbl-nonce", 256);
+      const nonce = header(input.headers, "x-cbl-device-nonce", 256);
       if (!NONCE.test(nonce)) throw new DeviceAuthenticationError();
-      const signature = decodeBase64url(header(input.headers, "x-cbl-signature", 86), 64);
+      const signature = decodeBase64url(header(input.headers, "x-cbl-device-signature", 86), 64);
       const credentialHash = await sha256Hex(credential, implementation);
       const row = await dependencies.database.prepare(`SELECT d.id AS deviceId,d.user_id AS userId,
         d.public_key_jwk AS publicKeyJwk,d.status,d.revoked_at AS revokedAt,
@@ -232,8 +267,13 @@ export function createDeviceRequestVerifier(dependencies: DeviceRequestVerifierD
       }
       const nonceHash = await sha256Hex(`${row.userId}\n${row.deviceId}\n${nonce}`, implementation);
       await nonces.purgeExpired(row.userId, row.deviceId, observedNow, purgeLimit);
+      const timestampExpiry = timestamp + nonceTtlMs;
+      const minimumExpiry = observedNow + 1;
+      if (!Number.isSafeInteger(timestampExpiry) || !Number.isSafeInteger(minimumExpiry)) {
+        throw new DeviceAuthenticationError();
+      }
       const claimed = await nonces.claim({ id: `nonce_${nonceHash}`, userId: row.userId, deviceId: row.deviceId,
-        nonce, timestamp, expiresAt: Math.max(observedNow + 1, timestamp + nonceTtlMs), now: observedNow });
+        nonce, timestamp, expiresAt: Math.max(minimumExpiry, timestampExpiry), now: observedNow });
       if (!claimed) throw new DeviceAuthenticationError();
       return { userId: row.userId, deviceId: row.deviceId, capability: input.capability };
     } catch (error) {

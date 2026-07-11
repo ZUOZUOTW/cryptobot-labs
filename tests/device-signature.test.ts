@@ -8,6 +8,7 @@ import {
   canonicalBootstrapProof,
   canonicalDeviceRequest,
   createBootstrapProofVerifier,
+  createDeviceSignatureHeaders,
   createDeviceRequestVerifier,
   DeviceAuthenticationError,
   type DeviceCrypto,
@@ -77,12 +78,12 @@ const signedHeaders = async (pair: KeyPair, options: { method?: string; url?: st
   const canonical = await canonicalDeviceRequest({ method: options.method ?? "POST", url: options.url ?? url,
     timestamp, nonce, body: options.body ?? body, crypto: subtle });
   const signature = new Uint8Array(await webcrypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, encoder.encode(canonical)));
-  return new Headers({
-    Authorization: `Device ${options.credential ?? credential}`,
-    "X-CBL-Device-Id": options.deviceId ?? deviceId,
-    "X-CBL-Timestamp": String(timestamp),
-    "X-CBL-Nonce": nonce,
-    "X-CBL-Signature": base64url(signature),
+  return createDeviceSignatureHeaders({
+    credential: options.credential ?? credential,
+    deviceId: options.deviceId ?? deviceId,
+    timestamp,
+    nonce,
+    signature: base64url(signature),
   });
 };
 
@@ -131,6 +132,55 @@ describe("device signature", () => {
     expect(database.raw.prepare("SELECT count(*) AS count FROM device_nonces").get()).toEqual({ count: 1 });
   });
 
+  it("uses only the exact Device-prefixed timestamp, nonce, and signature headers", async () => {
+    const verify = createDeviceRequestVerifier({ database, capabilities: ["heartbeat.write"], crypto: subtle, now: () => now });
+    const exact = await signedHeaders(keys.pair, { nonce: "nonce_exact_headers_12" });
+    expect([...exact.keys()]).toEqual(expect.arrayContaining([
+      "authorization", "x-cbl-device-id", "x-cbl-device-timestamp", "x-cbl-device-nonce", "x-cbl-device-signature",
+    ]));
+    const legacy = new Headers({
+      Authorization: exact.get("Authorization")!,
+      "X-CBL-Device-Id": exact.get("X-CBL-Device-Id")!,
+      "X-CBL-Timestamp": exact.get("X-CBL-Device-Timestamp")!,
+      "X-CBL-Nonce": exact.get("X-CBL-Device-Nonce")!,
+      "X-CBL-Signature": exact.get("X-CBL-Device-Signature")!,
+    });
+    await expect(verify({ headers: legacy, method: "POST", url, body, capability: "heartbeat.write" }))
+      .rejects.toBeInstanceOf(DeviceAuthenticationError);
+    exact.set("X-CBL-Nonce", exact.get("X-CBL-Device-Nonce")!);
+    await expect(verify({ headers: exact, method: "POST", url, body, capability: "heartbeat.write" }))
+      .rejects.toBeInstanceOf(DeviceAuthenticationError);
+  });
+
+  it("fails closed on unsafe windows and retains a nonce for the entire accepted replay window", async () => {
+    const dependency = { database, capabilities: ["heartbeat.write"], crypto: subtle, now: () => now } as const;
+    for (const config of [
+      { maxPastMs: 0, maxFutureMs: 20, nonceTtlMs: 21 },
+      { maxPastMs: 100, maxFutureMs: 0, nonceTtlMs: 101 },
+      { maxPastMs: 100, maxFutureMs: 20, nonceTtlMs: 120 },
+      { maxPastMs: Number.MAX_SAFE_INTEGER, maxFutureMs: 1, nonceTtlMs: Number.MAX_SAFE_INTEGER },
+      { maxPastMs: 100.5, maxFutureMs: 20, nonceTtlMs: 122 },
+    ]) expect(() => createDeviceRequestVerifier({ ...dependency, ...config })).toThrow(/bounds/i);
+
+    let clock = now - 20;
+    const verify = createDeviceRequestVerifier({ ...dependency, now: () => clock,
+      maxPastMs: 100, maxFutureMs: 20, nonceTtlMs: 121 });
+    const headers = await signedHeaders(keys.pair, { timestamp: now, nonce: "nonce_full_window_123" });
+    await expect(verify({ headers, method: "POST", url, body, capability: "heartbeat.write" })).resolves.toBeTruthy();
+    clock = now + 100;
+    await expect(verify({ headers, method: "POST", url, body, capability: "heartbeat.write" }))
+      .rejects.toBeInstanceOf(DeviceAuthenticationError);
+    expect(database.raw.prepare("SELECT count(*) AS count FROM device_nonces").get()).toEqual({ count: 1 });
+
+    database.raw.exec("DELETE FROM device_nonces");
+    clock = Number.MAX_SAFE_INTEGER - 10;
+    database.raw.prepare("UPDATE device_credentials SET expires_at=?").run(Number.MAX_SAFE_INTEGER);
+    const overflow = await signedHeaders(keys.pair, { timestamp: clock, nonce: "nonce_expiry_overflow" });
+    await expect(verify({ headers: overflow, method: "POST", url, body, capability: "heartbeat.write" }))
+      .rejects.toBeInstanceOf(DeviceAuthenticationError);
+    expect(database.raw.prepare("SELECT count(*) AS count FROM device_nonces").get()).toEqual({ count: 0 });
+  });
+
   it("does not burn a nonce for a bad signature and signs method, path, query, and body", async () => {
     const verify = createDeviceRequestVerifier({ database, capabilities: ["heartbeat.write"], crypto: subtle, now: () => now });
     const nonce = "nonce_unburned_123456";
@@ -149,12 +199,12 @@ describe("device signature", () => {
         capability: "heartbeat.write" })).rejects.toBeInstanceOf(DeviceAuthenticationError);
     }
     const nonceTamper = await signedHeaders(keys.pair, { nonce: "nonce_signed_original12" });
-    nonceTamper.set("X-CBL-Nonce", "nonce_signed_tampered12");
+    nonceTamper.set("X-CBL-Device-Nonce", "nonce_signed_tampered12");
     await expect(verify({ headers: nonceTamper, method: "POST", url, body, capability: "heartbeat.write" }))
       .rejects.toBeInstanceOf(DeviceAuthenticationError);
     const signatureTamper = await signedHeaders(keys.pair, { nonce: "nonce_signature_tamper" });
-    const original = signatureTamper.get("X-CBL-Signature")!;
-    signatureTamper.set("X-CBL-Signature", `${original[0] === "A" ? "B" : "A"}${original.slice(1)}`);
+    const original = signatureTamper.get("X-CBL-Device-Signature")!;
+    signatureTamper.set("X-CBL-Device-Signature", `${original[0] === "A" ? "B" : "A"}${original.slice(1)}`);
     await expect(verify({ headers: signatureTamper, method: "POST", url, body, capability: "heartbeat.write" }))
       .rejects.toBeInstanceOf(DeviceAuthenticationError);
   });
@@ -171,7 +221,7 @@ describe("device signature", () => {
       await expect(verify({ headers, method: "POST", url, body, capability: "heartbeat.write" })).rejects.toBeInstanceOf(DeviceAuthenticationError);
     }
     const leadingZero = await signedHeaders(keys.pair, { nonce: "nonce_leading_zero_123" });
-    leadingZero.set("X-CBL-Timestamp", `0${now}`);
+    leadingZero.set("X-CBL-Device-Timestamp", `0${now}`);
     await expect(verify({ headers: leadingZero, method: "POST", url, body, capability: "heartbeat.write" }))
       .rejects.toBeInstanceOf(DeviceAuthenticationError);
   });
@@ -201,7 +251,7 @@ describe("device signature", () => {
   it("rejects malformed headers, signatures, JWKs, and oversized bodies with one safe error", async () => {
     const verify = createDeviceRequestVerifier({ database, capabilities: ["heartbeat.write"], crypto: subtle, now: () => now });
     const cases = [
-      ["Authorization", credential], ["X-CBL-Nonce", "short"], ["X-CBL-Signature", "A".repeat(86)],
+      ["Authorization", credential], ["X-CBL-Device-Nonce", "short"], ["X-CBL-Device-Signature", "A".repeat(86)],
       ["X-CBL-Device-Id", "bad device"],
     ] as const;
     for (const [name, value] of cases) {
