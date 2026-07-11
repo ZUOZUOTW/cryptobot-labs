@@ -14,17 +14,19 @@ import type { HttpRequest, HttpResponse, HttpTransport } from "../src/transport"
 
 class ScriptedTransport implements HttpTransport {
   readonly requests: HttpRequest[] = [];
-  constructor(private readonly steps: Array<HttpResponse | Error>) {}
+  constructor(private readonly steps: Array<HttpResponse | Error | (() => Promise<HttpResponse>)>) {}
   async send(request: HttpRequest): Promise<HttpResponse> {
     this.requests.push(request);
     const step = this.steps.shift();
     if (!step) throw new Error("unexpected request");
     if (step instanceof Error) throw step;
+    if (typeof step === "function") return await step();
     return step;
   }
 }
 
 const ok = (body: unknown): HttpResponse => ({ status: 200, headers: {}, body });
+const verifiedSpotAccount = ok({ canTrade: true, canWithdraw: false, balances: [] });
 const clock = {
   now: () => 1_700_000_000_000,
   assertPrivateRequestWindow: vi.fn(),
@@ -46,15 +48,16 @@ const request: ExchangeSubmitRequest = {
 
 describe("WeexPrivateClient", () => {
   it("signs and transmits the exact canonical spot body", async () => {
-    const transport = new ScriptedTransport([ok({ orderId: "42", clientOrderId: "cbl-1" })]);
+    const transport = new ScriptedTransport([verifiedSpotAccount, ok({ orderId: "42", clientOrderId: "cbl-1" })]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder(request)).resolves.toEqual({ status: "acknowledged", exchangeOrderId: "42" });
-    expect(transport.requests[0]).toMatchObject({
+    expect(transport.requests[1]).toMatchObject({
       method: "POST",
       url: "https://api-spot.weex.com/api/v3/order",
       body: '{"newClientOrderId":"cbl-1","price":"30000.1","quantity":"0.001","side":"BUY","symbol":"BTCUSDT","timeInForce":"GTC","type":"LIMIT"}',
     });
-    expect(transport.requests[0]?.headers).toMatchObject({
+    expect(transport.requests[1]?.headers).toMatchObject({
       "ACCESS-KEY": "api-key", "ACCESS-PASSPHRASE": "passphrase",
       "ACCESS-TIMESTAMP": "1700000000000",
     });
@@ -63,10 +66,12 @@ describe("WeexPrivateClient", () => {
 
   it("does not resubmit after an ambiguous POST timeout", async () => {
     const transport = new ScriptedTransport([
+      verifiedSpotAccount,
       new WeexApiError("timeout after send", { category: "network", retryable: true }),
       ok({ orderId: "late", clientOrderId: "cbl-1" }),
     ]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder(request)).resolves.toMatchObject({ status: "unknown" });
     expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
   });
@@ -113,6 +118,7 @@ describe("WeexPrivateClient", () => {
 
   it("looks up a spot order directly and validates its full remembered identity", async () => {
     const transport = new ScriptedTransport([
+      verifiedSpotAccount,
       ok({ orderId: "42", clientOrderId: "cbl-1" }),
       ok({
         orderId: "42", clientOrderId: "cbl-1", symbol: "BTCUSDT", side: "BUY",
@@ -120,11 +126,12 @@ describe("WeexPrivateClient", () => {
       }),
     ]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
     await client.submitOrder(request);
     await expect(client.findOrderByClientOrderId({
       target: request.target, symbol: "BTCUSDT", clientOrderId: "cbl-1",
     })).resolves.toMatchObject({ status: "PARTIALLY_FILLED", side: "buy", quantity: "0.001" });
-    expect(transport.requests[1]?.url).toBe(
+    expect(transport.requests[2]?.url).toBe(
       "https://api-spot.weex.com/api/v3/order?origClientOrderId=cbl-1",
     );
   });
@@ -172,14 +179,15 @@ describe("WeexPrivateClient", () => {
   });
 
   it("accepts a risk-approved spot exit while omitting unsupported reduceOnly", async () => {
-    const transport = new ScriptedTransport([ok({ orderId: "44", clientOrderId: "spot-exit" })]);
+    const transport = new ScriptedTransport([verifiedSpotAccount, ok({ orderId: "44", clientOrderId: "spot-exit" })]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder({
       ...request,
       clientOrderId: "spot-exit",
       intent: { ...request.intent, side: "sell", reduceOnly: true },
     })).resolves.toMatchObject({ status: "acknowledged" });
-    expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
+    expect(JSON.parse(transport.requests[1]?.body ?? "{}")).toEqual({
       newClientOrderId: "spot-exit", price: "30000.1", quantity: "0.001",
       side: "SELL", symbol: "BTCUSDT", timeInForce: "GTC", type: "LIMIT",
     });
@@ -277,26 +285,35 @@ describe("WeexPrivateClient", () => {
       .rejects.toMatchObject({ category: "authentication" });
     expect(authTransport.requests).toHaveLength(1);
 
-    const preflightTransport = new ScriptedTransport([]);
+    const preflightTransport = new ScriptedTransport([verifiedSpotAccount]);
+    let privateChecks = 0;
     const preflightClock = {
       now: () => 1_700_000_000_000,
-      assertPrivateRequestWindow: () => { throw new WeexApiError("stale", { category: "clock", retryable: false }); },
+      assertPrivateRequestWindow: () => {
+        privateChecks += 1;
+        if (privateChecks > 1) throw new WeexApiError("stale", { category: "clock", retryable: false });
+      },
     };
     const preflightClient = new WeexPrivateClient({
       transport: preflightTransport, credentials, clock: preflightClock, rulesProvider,
     });
+    await preflightClient.verifyAccount({ market: "spot", mode: "live" });
     await expect(preflightClient.submitOrder(request)).rejects.toMatchObject({ category: "clock" });
-    expect(preflightTransport.requests).toHaveLength(0);
+    expect(preflightTransport.requests).toHaveLength(1);
   });
 
   it("fails closed on stale rules and malformed account schemas before trading", async () => {
-    const transport = new ScriptedTransport([ok({ canTrade: true, canWithdraw: false, balances: [{}] })]);
+    const transport = new ScriptedTransport([
+      verifiedSpotAccount,
+      ok({ canTrade: true, canWithdraw: false, balances: [{}] }),
+    ]);
     const client = new WeexPrivateClient({
       transport, credentials, clock,
       rulesProvider: async () => ({ rules, verifiedAt: 1_699_999_000_000 }),
     });
+    await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
-    expect(transport.requests).toHaveLength(0);
+    expect(transport.requests).toHaveLength(1);
     await expect(client.verifyAccount({ market: "spot", mode: "live" })).rejects.toMatchObject({ category: "schema" });
   });
 
@@ -376,6 +393,93 @@ describe("WeexPrivateClient", () => {
       target: { market: "futures", mode: "live" }, symbol: "BTCUSDT",
       clientOrderId: "future-cancel", exchangeOrderId: "52",
     })).resolves.toMatchObject({ status: "unknown" });
+  });
+
+  it("requires a fresh safe spot account gate and revokes it before failed re-verification", async () => {
+    const unverifiedTransport = new ScriptedTransport([]);
+    const unverified = new WeexPrivateClient({ transport: unverifiedTransport, credentials, clock, rulesProvider });
+    await expect(unverified.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
+    expect(unverifiedTransport.requests).toHaveLength(0);
+
+    for (const account of [
+      { canTrade: false, canWithdraw: false, balances: [] },
+      { canTrade: true, canWithdraw: true, balances: [] },
+    ]) {
+      const unsafeTransport = new ScriptedTransport([ok(account)]);
+      const unsafe = new WeexPrivateClient({ transport: unsafeTransport, credentials, clock, rulesProvider });
+      await unsafe.verifyAccount({ market: "spot", mode: "live" });
+      await expect(unsafe.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
+      expect(unsafeTransport.requests).toHaveLength(1);
+    }
+
+    let now = 1_700_000_000_000;
+    const staleTransport = new ScriptedTransport([verifiedSpotAccount]);
+    const stale = new WeexPrivateClient({ transport: staleTransport, credentials, clock, rulesProvider, now: () => now });
+    await stale.verifyAccount({ market: "spot", mode: "live" });
+    now += 5 * 60_000 + 1;
+    await expect(stale.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
+    expect(staleTransport.requests).toHaveLength(1);
+
+    const revokedTransport = new ScriptedTransport([
+      verifiedSpotAccount,
+      new WeexApiError("revoked", { category: "authentication", retryable: false }),
+    ]);
+    const revoked = new WeexPrivateClient({ transport: revokedTransport, credentials, clock, rulesProvider });
+    await revoked.verifyAccount({ market: "spot", mode: "live" });
+    await expect(revoked.verifyAccount({ market: "spot", mode: "live" })).rejects.toMatchObject({ category: "authentication" });
+    const beforeSubmit = revokedTransport.requests.length;
+    await expect(revoked.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
+    expect(revokedTransport.requests).toHaveLength(beforeSubmit);
+  });
+
+  it("coalesces identical concurrent client ids and rejects a different identity before dispatch", async () => {
+    let release!: (response: HttpResponse) => void;
+    const pending = new Promise<HttpResponse>((resolve) => { release = resolve; });
+    const transport = new ScriptedTransport([verifiedSpotAccount, () => pending]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
+    const first = client.submitOrder(request);
+    const identical = client.submitOrder(request);
+    const collision = client.submitOrder({ ...request, intent: { ...request.intent, quantity: "0.002" } });
+    await expect(collision).rejects.toMatchObject({ category: "validation" });
+    release(ok({ orderId: "77", clientOrderId: "cbl-1" }));
+    await expect(Promise.all([first, identical])).resolves.toEqual([
+      { status: "acknowledged", exchangeOrderId: "77" },
+      { status: "acknowledged", exchangeOrderId: "77" },
+    ]);
+    expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
+    await expect(client.submitOrder({ ...request, intent: { ...request.intent, side: "sell", reduceOnly: true } }))
+      .rejects.toMatchObject({ category: "validation" });
+    await expect(client.submitOrder(request)).resolves.toEqual({ status: "acknowledged", exchangeOrderId: "77" });
+    expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
+  });
+
+  it("retains an ambiguous client id claim and never dispatches a reuse", async () => {
+    const transport = new ScriptedTransport([
+      verifiedSpotAccount,
+      new WeexApiError("timeout", { category: "network", retryable: true }),
+    ]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
+    await expect(client.submitOrder(request)).resolves.toMatchObject({ status: "unknown" });
+    await expect(client.submitOrder(request)).resolves.toMatchObject({ status: "unknown" });
+    await expect(client.submitOrder({ ...request, intent: { ...request.intent, quantity: "0.002" } }))
+      .rejects.toMatchObject({ category: "validation" });
+    expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
+  });
+
+  it("maps documented PENDING and CANCELING snapshots without marking them terminal", async () => {
+    const transport = new ScriptedTransport([
+      ok({ orderId: "81", clientOrderId: "pending-1", symbol: "BTCUSDT", side: "BUY", origQty: "1", executedQty: "0", status: "PENDING" }),
+      ok({ orderId: "82", clientOrderId: "canceling-1", symbol: "BTCUSDT", side: "SELL", origQty: "1", executedQty: "0.5", status: "CANCELING" }),
+    ]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.findOrderByClientOrderId({
+      target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "pending-1",
+    })).resolves.toMatchObject({ status: "NEW", cumulativeFilledQuantity: "0" });
+    await expect(client.findOrderByClientOrderId({
+      target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "canceling-1",
+    })).resolves.toMatchObject({ status: "PARTIALLY_FILLED", cumulativeFilledQuantity: "0.5" });
   });
 
   it("does not serialize credentials", () => {

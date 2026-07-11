@@ -287,6 +287,12 @@ export class WeexPrivateClient {
   readonly #now: () => number;
   readonly #maximumGetAttempts: number;
   readonly #identities = new Map<string, ExpectedOrderIdentity>();
+  readonly #submissionClaims = new Map<string, {
+    readonly identity: ExpectedOrderIdentity;
+    promise?: Promise<SubmitOutcome>;
+    outcome?: SubmitOutcome;
+  }>();
+  #verifiedSpotLive: { readonly verifiedAt: number } | undefined;
   #verifiedFuturesLive: {
     readonly canTrade: boolean;
     readonly canWithdraw: boolean;
@@ -378,6 +384,14 @@ export class WeexPrivateClient {
         ((intent.side === "sell" && !intent.reduceOnly) || (intent.side === "buy" && intent.reduceOnly))) {
       throw validation("Unsafe spot order direction");
     }
+    if (request.target.market === "spot") {
+      const verified = this.#verifiedSpotLive;
+      const now = this.#now();
+      if (!verified || !Number.isSafeInteger(now) || now < verified.verifiedAt ||
+          now - verified.verifiedAt > MAX_RULES_AGE_MS) {
+        throw validation("Fresh verified spot trading permission is required");
+      }
+    }
     if (request.target.market === "futures" && request.target.mode === "live") {
       const verified = this.#verifiedFuturesLive;
       const now = this.#now();
@@ -406,6 +420,8 @@ export class WeexPrivateClient {
       symbol: intent.symbol,
       side: intent.side,
       quantity: intent.quantity,
+      price: intent.price,
+      reduceOnly: intent.reduceOnly,
     };
   }
 
@@ -419,8 +435,33 @@ export class WeexPrivateClient {
     this.#identities.set(key, identity);
   }
 
+  #sameIdentity(left: ExpectedOrderIdentity, right: ExpectedOrderIdentity): boolean {
+    return left.clientOrderId === right.clientOrderId && left.symbol === right.symbol &&
+      left.side === right.side && left.quantity === right.quantity && left.price === right.price &&
+      left.reduceOnly === right.reduceOnly;
+  }
+
+  #claimSubmission(key: string, identity: ExpectedOrderIdentity):
+    | { readonly existing: Promise<SubmitOutcome> | SubmitOutcome }
+    | { readonly claim: { identity: ExpectedOrderIdentity; promise?: Promise<SubmitOutcome>; outcome?: SubmitOutcome } } {
+    const existing = this.#submissionClaims.get(key);
+    if (existing) {
+      if (!this.#sameIdentity(existing.identity, identity)) throw validation("Client order id identity collision");
+      const result = existing.promise ?? existing.outcome;
+      if (result) return { existing: result };
+      throw validation("Client order id is already claimed");
+    }
+    if (this.#submissionClaims.size >= MAX_IDENTITY_CACHE) {
+      throw validation("Submission identity registry is full");
+    }
+    const claim = { identity };
+    this.#submissionClaims.set(key, claim);
+    return { claim };
+  }
+
   async verifyAccount(target: ExecutionTarget): Promise<VerifiedAccountSummary> {
     assertTarget(target);
+    if (target.market === "spot") this.#verifiedSpotLive = undefined;
     if (target.market === "futures" && target.mode === "live") {
       this.#verifiedFuturesLive = undefined;
     }
@@ -429,6 +470,9 @@ export class WeexPrivateClient {
       ? await this.#safeGet(FUTURES_ACCOUNT_CONFIG)
       : undefined;
     const summary = parseAccount(response.body, target, Math.floor(this.#now()), configResponse?.body);
+    if (target.market === "spot" && summary.canTrade === true && summary.withdrawalPermission === "absent") {
+      this.#verifiedSpotLive = { verifiedAt: summary.verifiedAt };
+    }
     if (target.market === "futures" && target.mode === "live") {
       this.#verifiedFuturesLive = {
         canTrade: summary.canTrade === true,
@@ -458,6 +502,33 @@ export class WeexPrivateClient {
         : {}),
     };
     const identityKey = `${target.market}:${target.mode}:${clientOrderId}`;
+    const claimed = this.#claimSubmission(identityKey, identity);
+    if ("existing" in claimed) return await claimed.existing;
+    const submission = this.#performSubmit(target, clientOrderId, body, identityKey, identity);
+    claimed.claim.promise = submission;
+    try {
+      const outcome = await submission;
+      claimed.claim.promise = undefined;
+      if (outcome.status === "rejected") {
+        this.#submissionClaims.delete(identityKey);
+      } else {
+        claimed.claim.outcome = outcome;
+      }
+      return outcome;
+    } catch (error) {
+      this.#submissionClaims.delete(identityKey);
+      this.#identities.delete(identityKey);
+      throw error;
+    }
+  }
+
+  async #performSubmit(
+    target: ExecutionTarget,
+    clientOrderId: string,
+    body: Readonly<Record<string, unknown>>,
+    identityKey: string,
+    identity: ExpectedOrderIdentity,
+  ): Promise<SubmitOutcome> {
     this.#rememberIdentity(identityKey, identity);
     let responseReceived = false;
     try {

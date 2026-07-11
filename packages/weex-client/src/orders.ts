@@ -95,12 +95,36 @@ function optionalDecimal(source: Record<string, unknown>, keys: readonly string[
   return undefined;
 }
 
-function normalizeStatus(value: unknown): ExchangeOrderStatus {
+function compareDecimals(left: string, right: string): number {
+  const [leftWhole, leftFraction = ""] = left.split(".");
+  const [rightWhole, rightFraction = ""] = right.split(".");
+  const width = Math.max(leftFraction.length, rightFraction.length);
+  const a = BigInt(leftWhole + leftFraction.padEnd(width, "0"));
+  const b = BigInt(rightWhole + rightFraction.padEnd(width, "0"));
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+function normalizeStatus(value: unknown, cumulative: string, quantity: string): ExchangeOrderStatus {
   if (typeof value !== "string") throw schema("Invalid order status");
   const status = value.toUpperCase();
-  if (status === "NEW") return "NEW";
-  if (status === "PARTIALLY_FILLED") return "PARTIALLY_FILLED";
-  if (status === "FILLED") return "FILLED";
+  const filledVsZero = compareDecimals(cumulative, "0");
+  const filledVsQuantity = compareDecimals(cumulative, quantity);
+  if (filledVsQuantity > 0) throw schema("Cumulative fill exceeds order quantity");
+  if (status === "NEW") {
+    if (filledVsZero !== 0) throw schema("NEW order has a non-zero cumulative fill");
+    return "NEW";
+  }
+  if (status === "PARTIALLY_FILLED") {
+    if (filledVsZero <= 0 || filledVsQuantity >= 0) throw schema("Invalid partial fill quantity");
+    return "PARTIALLY_FILLED";
+  }
+  if (status === "FILLED") {
+    if (filledVsQuantity !== 0) throw schema("FILLED order quantity mismatch");
+    return "FILLED";
+  }
+  if (status === "PENDING" || status === "CANCELING") {
+    return filledVsZero === 0 ? "NEW" : "PARTIALLY_FILLED";
+  }
   if (status === "CANCELED") return "CANCELED";
   if (status === "REJECTED") return "REJECTED";
   throw schema("Unknown order status");
@@ -111,6 +135,8 @@ export interface ExpectedOrderIdentity {
   readonly symbol: string;
   readonly side?: "buy" | "sell";
   readonly quantity?: string;
+  readonly price?: string;
+  readonly reduceOnly?: boolean;
   readonly exchangeOrderId?: string;
 }
 
@@ -134,7 +160,7 @@ export function parseOrderSnapshot(value: unknown, expected: ExpectedOrderIdenti
   const averageFillPrice = optionalDecimal(source, ["avgPrice", "averagePrice"]);
   return {
     clientOrderId, exchangeOrderId, symbol, side, quantity,
-    status: normalizeStatus(source.status), cumulativeFilledQuantity,
+    status: normalizeStatus(source.status, cumulativeFilledQuantity, quantity), cumulativeFilledQuantity,
     ...(averageFillPrice === undefined ? {} : { averageFillPrice }),
   };
 }
