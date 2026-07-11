@@ -151,7 +151,47 @@ export function createAgentHandlers(dependencies: { verify: Verifier; eventServi
 
   return {
     heartbeat: postEvent("agent.heartbeat", MAX_HEARTBEAT_BYTES),
-    events: postEvent("agent.events", MAX_EVENT_BATCH_BYTES),
+    events: async (request: Request): Promise<Response> => {
+      try {
+        if (request.method !== "POST") throw new HttpProblem(400, "invalid_request");
+        const bytes = await readRawBytes(request, MAX_EVENT_BATCH_BYTES);
+        const identity = verifiedIdentity(await dependencies.verify({ headers: request.headers, method: request.method,
+          url: request.url, body: bytes, capability: "agent.events" }));
+        const batch = plain(parseRawJson(bytes)); exact(batch, ["events"]);
+        if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > 50) {
+          throw new HttpProblem(400, "invalid_request");
+        }
+        const results: Array<{ index: number; eventId?: string; status: "accepted" | "duplicate" | "rejected" | "retryable";
+          code: "accepted" | "duplicate" | "invalid_event" | "deployment_fence" | "event_conflict" | "internal" }> = [];
+        for (const [index, event] of batch.events.entries()) {
+          let eventId: string | undefined;
+          if (event !== null && typeof event === "object" && !Array.isArray(event)) {
+            const candidate = (event as Record<string, unknown>).id;
+            if (typeof candidate === "string" && ID.test(candidate)) eventId = candidate;
+          }
+          try {
+            const candidate = plain(event);
+            if (candidate.type === "heartbeat") throw new DeviceEventError("invalid-event", "heartbeat uses its own endpoint");
+            const result = await dependencies.eventService.ingest(identity, event);
+            const duplicate = result.idempotent === true;
+            results.push({ index, ...(eventId ? { eventId } : {}), status: duplicate ? "duplicate" : "accepted",
+              code: duplicate ? "duplicate" : "accepted" });
+          } catch (error) {
+            if (error instanceof DeviceEventError) {
+              const code = error.category === "deployment-fence" ? "deployment_fence"
+                : error.category === "event-conflict" ? "event_conflict" : "invalid_event";
+              results.push({ index, ...(eventId ? { eventId } : {}), status: "rejected", code });
+            } else if (error instanceof HttpProblem) {
+              results.push({ index, ...(eventId ? { eventId } : {}), status: "rejected", code: "invalid_event" });
+            } else {
+              results.push({ index, ...(eventId ? { eventId } : {}), status: "retryable", code: "internal" });
+            }
+          }
+        }
+        const complete = results.every((result) => result.status === "accepted" || result.status === "duplicate");
+        return jsonResponse({ results }, { status: complete ? 200 : 207 });
+      } catch (error) { return failure(error); }
+    },
     commands: async (request: Request): Promise<Response> => {
       try {
         const body = requireEmptyGet(request);

@@ -4,11 +4,13 @@ import { webcrypto } from "node:crypto";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
+import { createActivityRepository, createDeploymentRepository } from "../db/repositories";
 import { createAgentHandlers } from "../lib/server/agent-routes";
 import { CommandServiceError } from "../lib/server/commands";
-import { DeviceEventError } from "../lib/server/device-events";
+import { createDeviceEventService, DeviceEventError } from "../lib/server/device-events";
 import {
-  canonicalDeviceRequest, createDeviceRequestVerifier, createDeviceSignatureHeaders, sha256Hex, type DeviceCrypto,
+  canonicalDeviceRequest, createDeviceRequestVerifier, createDeviceSignatureHeaders, DeviceAuthenticationError,
+  sha256Hex, type DeviceCrypto,
 } from "../lib/server/device-signature";
 
 class Statement implements ControlPlaneStatement {
@@ -78,12 +80,14 @@ describe("signed agent HTTP routes", () => {
       const id = (value as {id:string}).id; const idempotent = seen.has(id); seen.add(id); return { idempotent };
     });
     const handlers = createAgentHandlers(dependencies);
-    expect((await handlers.events(post("/api/agent/events", JSON.stringify({events:[event("evt_a","heartbeat")] })))).status).toBe(400);
+    const misplaced = await handlers.events(post("/api/agent/events", JSON.stringify({events:[event("evt_a","heartbeat")] })));
+    expect(misplaced.status).toBe(207);
+    expect(await misplaced.json()).toEqual({results:[{index:0,eventId:"evt_a",status:"rejected",code:"invalid_event"}]});
     const body = JSON.stringify({ events: [event("evt_a"), event("evt_b")] });
     const first = await handlers.events(post("/api/agent/events", body));
     const retry = await handlers.events(post("/api/agent/events", body));
-    expect(await first.json()).toEqual({accepted:[{id:"evt_a",status:"accepted"},{id:"evt_b",status:"accepted"}]});
-    expect(await retry.json()).toEqual({accepted:[{id:"evt_a",status:"duplicate"},{id:"evt_b",status:"duplicate"}]});
+    expect(await first.json()).toEqual({results:[{index:0,eventId:"evt_a",status:"accepted",code:"accepted"},{index:1,eventId:"evt_b",status:"accepted",code:"accepted"}]});
+    expect(await retry.json()).toEqual({results:[{index:0,eventId:"evt_a",status:"duplicate",code:"duplicate"},{index:1,eventId:"evt_b",status:"duplicate",code:"duplicate"}]});
     expect(dependencies.eventService.ingest).toHaveBeenCalledWith({deviceId:"dev_a",verified:true}, expect.anything());
     expect(JSON.stringify(await (await handlers.events(post("/api/agent/events", JSON.stringify({events:[event("evt_c")]})))).json())).not.toContain("payload");
   });
@@ -93,12 +97,71 @@ describe("signed agent HTTP routes", () => {
     dependencies.eventService.ingest.mockRejectedValue(new DeviceEventError("event-conflict", "SECRET payload conflict"));
     const handlers = createAgentHandlers(dependencies);
     const conflict = await handlers.events(post("/api/agent/events", JSON.stringify({events:[event("evt_a")]})));
-    expect(conflict.status).toBe(409); expect(await conflict.text()).not.toContain("SECRET");
+    expect(conflict.status).toBe(207); expect(await conflict.text()).not.toContain("SECRET");
     expect((await handlers.events(post("/api/agent/events", "{}"))).status).toBe(400);
     expect((await handlers.events(post("/api/agent/events", JSON.stringify({events:[],extra:true})))).status).toBe(400);
     expect((await handlers.events(new Request("https://labs.test/api/agent/events", {method:"POST",body:"{}"}))).status).toBe(415);
     expect((await handlers.events(post("/api/agent/events", "{}", {"content-length":"9999999"}))).status).toBe(413);
     expect((await handlers.events(post("/api/agent/events", "{}", {"content-length":"3"}))).status).toBe(400);
+  });
+
+  it("continues a real SQLite-backed event batch after a fenced event and makes response-loss retries actionable", async () => {
+    const database = new Database();
+    database.raw.prepare("INSERT INTO users VALUES (?,?,?,?,?)").run("usr_a","a@test","A",1,1);
+    database.raw.prepare("INSERT INTO devices VALUES (?,?,?,?,?,'active',?,NULL,NULL,?,?)")
+      .run("dev_a","usr_a","Mac","macos","{}",1,1,1);
+    database.raw.prepare("INSERT INTO strategies VALUES (?,?,?,?,?,?,?)")
+      .run("str_a","usr_a","S","spot","BTCUSDT",1,1);
+    database.raw.prepare("INSERT INTO strategy_versions VALUES (?,?,?,?,?,?,?,?,?)")
+      .run("sv_a","usr_a","str_a",1,"a".repeat(64),null,"{}",null,1);
+    database.raw.prepare("INSERT INTO deployments VALUES (?,?,?,?,?,'paper','running',1,?,?,?,NULL,NULL)")
+      .run("dep_a","usr_a","dev_a","sv_a","D","b".repeat(64),1,1);
+    const dependencies = fakeDependencies();
+    const nonces = new Set<string>();
+    dependencies.verify.mockImplementation(async (input) => {
+      const nonce = input.headers.get("x-test-nonce");
+      if (!nonce || nonces.has(nonce)) throw new DeviceAuthenticationError();
+      nonces.add(nonce);
+      return { ...identity, capability: input.capability };
+    });
+    const service = createDeviceEventService(createActivityRepository(database), { deployments: createDeploymentRepository(database), now:()=>now });
+    const handlers = createAgentHandlers({...dependencies,eventService:service});
+    const fenced={...event("evt_real_b"),expectedDeploymentVersion:2};
+    const body=JSON.stringify({events:[event("evt_real_a"),fenced,event("evt_real_c")]});
+    const first=await handlers.events(post("/api/agent/events",body,{"x-test-nonce":"nonce_batch_1"}));
+    expect(first.status).toBe(207);
+    expect(await first.json()).toEqual({results:[
+      {index:0,eventId:"evt_real_a",status:"accepted",code:"accepted"},
+      {index:1,eventId:"evt_real_b",status:"rejected",code:"deployment_fence"},
+      {index:2,eventId:"evt_real_c",status:"accepted",code:"accepted"},
+    ]});
+    expect(database.raw.prepare("SELECT count(*) AS count FROM audit_events").get()).toEqual({count:2});
+    expect((await handlers.events(post("/api/agent/events",body,{"x-test-nonce":"nonce_batch_1"}))).status).toBe(401);
+    const retry=await handlers.events(post("/api/agent/events",body,{"x-test-nonce":"nonce_batch_2"}));
+    expect(await retry.json()).toEqual({results:[
+      {index:0,eventId:"evt_real_a",status:"duplicate",code:"duplicate"},
+      {index:1,eventId:"evt_real_b",status:"rejected",code:"deployment_fence"},
+      {index:2,eventId:"evt_real_c",status:"duplicate",code:"duplicate"},
+    ]});
+  });
+
+  it("marks unknown per-event failures retryable, keeps processing, and never reflects unsafe ids or secrets", async () => {
+    const dependencies=fakeDependencies();
+    dependencies.eventService.ingest.mockImplementation(async (_identity,value)=>{
+      if((value as {id:string}).id==="evt_fail")throw new Error("SECRET database outage");return {idempotent:false};
+    });
+    const handlers=createAgentHandlers(dependencies);
+    const unsafe={...event("evt_unused"),id:"unsafe id SECRET"};
+    const response=await handlers.events(post("/api/agent/events",JSON.stringify({events:[event("evt_before"),event("evt_fail"),unsafe,event("evt_after")]})));
+    expect(response.status).toBe(207);
+    const text=await response.text();expect(text).not.toContain("SECRET");
+    expect(JSON.parse(text).results).toEqual([
+      {index:0,eventId:"evt_before",status:"accepted",code:"accepted"},
+      {index:1,eventId:"evt_fail",status:"retryable",code:"internal"},
+      {index:2,status:"accepted",code:"accepted"},
+      {index:3,eventId:"evt_after",status:"accepted",code:"accepted"},
+    ]);
+    expect(dependencies.eventService.ingest).toHaveBeenCalledTimes(4);
   });
 
   it("signs the original GET query, rejects duplicates/body headers, and exposes only command contract fields", async () => {
