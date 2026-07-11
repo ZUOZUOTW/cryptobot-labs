@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "09908043-d160-400d-91e8-77fe6e44b707",
+  "id": "8f1ec689-55d6-49d6-bd9d-951390a13c5b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_events": {
@@ -1532,6 +1532,14 @@
           ],
           "isUnique": true
         },
+        "fills_deployment_exchange_fill_uidx": {
+          "name": "fills_deployment_exchange_fill_uidx",
+          "columns": [
+            "deployment_id",
+            "exchange_fill_id"
+          ],
+          "isUnique": true
+        },
         "fills_user_filled_idx": {
           "name": "fills_user_filled_idx",
           "columns": [
@@ -1745,6 +1753,14 @@
           "columns": [
             "deployment_id",
             "client_order_id"
+          ],
+          "isUnique": true
+        },
+        "orders_deployment_exchange_order_uidx": {
+          "name": "orders_deployment_exchange_order_uidx",
+          "columns": [
+            "deployment_id",
+            "exchange_order_id"
           ],
           "isUnique": true
         },

@@ -30,4 +30,7 @@ export {
   createActivityRepository,
   type HeartbeatRecord,
   type AuditEventRecord,
+  type OrderRecord,
+  type OrderInput,
+  type FillInput,
 } from "./activity";

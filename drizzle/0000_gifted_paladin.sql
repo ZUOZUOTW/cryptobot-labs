@@ -209,6 +209,7 @@ CREATE TABLE `fills` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `fills_id_user_uidx` ON `fills` (`id`,`user_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `fills_order_exchange_fill_uidx` ON `fills` (`order_id`,`exchange_fill_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `fills_deployment_exchange_fill_uidx` ON `fills` (`deployment_id`,`exchange_fill_id`);--> statement-breakpoint
 CREATE INDEX `fills_user_filled_idx` ON `fills` (`user_id`,`filled_at`);--> statement-breakpoint
 CREATE INDEX `fills_deployment_filled_idx` ON `fills` (`deployment_id`,`filled_at`);--> statement-breakpoint
 CREATE TABLE `orders` (
@@ -238,6 +239,7 @@ CREATE TABLE `orders` (
 CREATE UNIQUE INDEX `orders_id_user_uidx` ON `orders` (`id`,`user_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `orders_id_deployment_user_uidx` ON `orders` (`id`,`deployment_id`,`user_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `orders_deployment_client_order_uidx` ON `orders` (`deployment_id`,`client_order_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `orders_deployment_exchange_order_uidx` ON `orders` (`deployment_id`,`exchange_order_id`);--> statement-breakpoint
 CREATE INDEX `orders_user_created_idx` ON `orders` (`user_id`,`created_at`);--> statement-breakpoint
 CREATE INDEX `orders_exchange_order_idx` ON `orders` (`exchange_order_id`);--> statement-breakpoint
 CREATE INDEX `orders_deployment_state_idx` ON `orders` (`deployment_id`,`state`);--> statement-breakpoint

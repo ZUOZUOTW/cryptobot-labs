@@ -343,6 +343,7 @@ export const orders = sqliteTable("orders", {
   uniqueIndex("orders_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("orders_id_deployment_user_uidx").on(table.id, table.deploymentId, table.userId),
   uniqueIndex("orders_deployment_client_order_uidx").on(table.deploymentId, table.clientOrderId),
+  uniqueIndex("orders_deployment_exchange_order_uidx").on(table.deploymentId, table.exchangeOrderId),
   index("orders_user_created_idx").on(table.userId, table.createdAt),
   index("orders_exchange_order_idx").on(table.exchangeOrderId),
   index("orders_deployment_state_idx").on(table.deploymentId, table.state),
@@ -368,6 +369,7 @@ export const fills = sqliteTable("fills", {
   }).onDelete("cascade"),
   uniqueIndex("fills_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("fills_order_exchange_fill_uidx").on(table.orderId, table.exchangeFillId),
+  uniqueIndex("fills_deployment_exchange_fill_uidx").on(table.deploymentId, table.exchangeFillId),
   index("fills_user_filled_idx").on(table.userId, table.filledAt),
   index("fills_deployment_filled_idx").on(table.deploymentId, table.filledAt),
 ]);
