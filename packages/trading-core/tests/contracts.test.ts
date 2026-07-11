@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { CandleSchema, StrategySignalSchema } from "../src/schemas";
+import {
+  CandleSchema,
+  ExecutionModeSchema,
+  MarketSchema,
+  SignalActionSchema,
+  StrategyInputSchema,
+  StrategySignalSchema,
+} from "../src/schemas";
 
 const validCandle = {
   openTime: 1,
@@ -47,5 +54,25 @@ describe("shared trading contracts", () => {
     expect(() => CandleSchema.parse({ ...validCandle, volume: "0" })).toThrow();
     expect(() => CandleSchema.parse({ ...validCandle, open: "1e3" })).toThrow();
     expect(() => StrategySignalSchema.parse({ ...validSignal, action: "wait" })).toThrow();
+  });
+
+  it("validates every contract enum and the complete strategy input directly", () => {
+    expect(MarketSchema.parse("futures")).toBe("futures");
+    expect(ExecutionModeSchema.parse("live")).toBe("live");
+    expect(SignalActionSchema.parse("close")).toBe("close");
+    expect(
+      StrategyInputSchema.parse({
+        candles: [validCandle],
+        market: "spot",
+        symbol: "BTCUSDT",
+        now: 2,
+      }),
+    ).toMatchObject({ market: "spot", symbol: "BTCUSDT" });
+    expect(() => MarketSchema.parse("options")).toThrow();
+    expect(() => ExecutionModeSchema.parse("demo")).toThrow();
+    expect(() => SignalActionSchema.parse("wait")).toThrow();
+    expect(() =>
+      StrategyInputSchema.parse({ candles: [validCandle], market: "spot", symbol: "", now: 2 }),
+    ).toThrow();
   });
 });
