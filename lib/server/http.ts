@@ -16,8 +16,21 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   payload_too_large: "The request body is too large.",
   invalid_json: "The JSON request body is invalid.",
   invalid_request: "The request is invalid.",
+  pairing_failed: "The pairing request is invalid, expired, or already used.",
+  not_found: "The requested resource was not found.",
   internal: "An internal error occurred.",
 };
+
+export function jsonResponse(value: unknown, init: { status?: number; headers?: HeadersInit } = {}): Response {
+  return new Response(JSON.stringify(value), {
+    status: init.status ?? 200,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      ...Object.fromEntries(new Headers(init.headers)),
+    },
+  });
+}
 
 export function requestId(value: string): string {
   if (typeof value !== "string" || !REQUEST_ID.test(value)) throw new HttpProblem(400, "invalid_request", "request id is invalid");
