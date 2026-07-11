@@ -9,13 +9,23 @@ import type {
   RiskRejectionReason,
 } from "./types";
 
-const UNSIGNED_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
-const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const ExactDecimal = Decimal.clone({ precision: 96 });
+const UNSIGNED_DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 const NORMALIZED_SYMBOL = /^[A-Z0-9_]{3,32}$/;
 const SYMBOL_SENTINELS = new Set(["ALL", "ANY", "UNLIMITED"]);
 
-function isPositiveDecimal(value: unknown): value is string {
-  return typeof value === "string" && UNSIGNED_DECIMAL.test(value) && new Decimal(value).gt(0);
+export function isNormalizedSymbol(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value === value.trim().toUpperCase() &&
+    NORMALIZED_SYMBOL.test(value) &&
+    !SYMBOL_SENTINELS.has(value)
+  );
+}
+
+export function isPositiveDecimalString(value: unknown): value is string {
+  return typeof value === "string" && UNSIGNED_DECIMAL.test(value) && new ExactDecimal(value).gt(0);
 }
 
 function isNonnegativeDecimal(value: unknown): value is string {
@@ -26,40 +36,40 @@ function isSignedDecimal(value: unknown): value is string {
   return typeof value === "string" && SIGNED_DECIMAL.test(value);
 }
 
-function isSafeNonnegativeInteger(value: unknown): value is number {
+export function isSafeNonnegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function isSafePositiveInteger(value: unknown): value is number {
+export function isSafePositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
 export function validateRiskPolicy(policy: unknown): RiskRejectionReason | null {
   if (typeof policy !== "object" || policy === null) return "invalid-policy-allowed-symbols";
   const candidate = policy as Record<string, unknown>;
-  const normalizedSymbols = Array.isArray(candidate.allowedSymbols)
+  if (
+    !Array.isArray(candidate.allowedSymbols) ||
+    candidate.allowedSymbols.length === 0 ||
+    candidate.allowedSymbols.length > 100
+  ) return "invalid-policy-allowed-symbols";
+  const normalizedSymbols = candidate.allowedSymbols
     ? candidate.allowedSymbols.map((symbol) =>
         typeof symbol === "string" ? symbol.trim().toUpperCase() : "",
       )
     : [];
   if (
-    !Array.isArray(candidate.allowedSymbols) ||
-    candidate.allowedSymbols.length === 0 ||
     candidate.allowedSymbols.some(
       (symbol, index) =>
-        typeof symbol !== "string" ||
-        symbol !== normalizedSymbols[index] ||
-        !NORMALIZED_SYMBOL.test(symbol) ||
-        SYMBOL_SENTINELS.has(symbol),
+        !isNormalizedSymbol(symbol) || symbol !== normalizedSymbols[index],
     ) ||
     new Set(normalizedSymbols).size !== normalizedSymbols.length
   ) return "invalid-policy-allowed-symbols";
-  if (!isPositiveDecimal(candidate.maximumOrderNotional)) return "invalid-policy-maximum-order-notional";
-  if (!isPositiveDecimal(candidate.maximumPositionNotional)) return "invalid-policy-maximum-position-notional";
-  if (!isPositiveDecimal(candidate.maximumTotalExposure)) return "invalid-policy-maximum-total-exposure";
+  if (!isPositiveDecimalString(candidate.maximumOrderNotional)) return "invalid-policy-maximum-order-notional";
+  if (!isPositiveDecimalString(candidate.maximumPositionNotional)) return "invalid-policy-maximum-position-notional";
+  if (!isPositiveDecimalString(candidate.maximumTotalExposure)) return "invalid-policy-maximum-total-exposure";
   if (!isSafePositiveInteger(candidate.maximumSimultaneousPositions)) return "invalid-policy-maximum-simultaneous-positions";
-  if (!isPositiveDecimal(candidate.maximumDailyLoss)) return "invalid-policy-maximum-daily-loss";
-  if (!isPositiveDecimal(candidate.maximumLeverage)) return "invalid-policy-maximum-leverage";
+  if (!isPositiveDecimalString(candidate.maximumDailyLoss)) return "invalid-policy-maximum-daily-loss";
+  if (!isPositiveDecimalString(candidate.maximumLeverage)) return "invalid-policy-maximum-leverage";
   if (!isNonnegativeDecimal(candidate.maximumSlippageBps)) return "invalid-policy-maximum-slippage-bps";
   if (!isSafeNonnegativeInteger(candidate.minimumSignalCooldownMs)) return "invalid-policy-minimum-signal-cooldown-ms";
   if (!isSafePositiveInteger(candidate.maximumConsecutiveFailures)) return "invalid-policy-maximum-consecutive-failures";
@@ -71,19 +81,33 @@ function reject(reason: RiskRejectionReason): RiskDecision {
   return { allowed: false, reason };
 }
 
-function validInstrument(instrument: InstrumentRules): boolean {
+export function isValidInstrumentRules(
+  instrument: unknown,
+): instrument is InstrumentRules {
   return (
     typeof instrument === "object" && instrument !== null &&
-    (instrument.market === "spot" || instrument.market === "futures") &&
-    typeof instrument.symbol === "string" && instrument.symbol.length > 0 &&
-    typeof instrument.baseAsset === "string" && instrument.baseAsset.length > 0 &&
-    typeof instrument.quoteAsset === "string" && instrument.quoteAsset.length > 0 &&
-    isPositiveDecimal(instrument.tickSize) &&
-    isPositiveDecimal(instrument.stepSize) &&
-    isPositiveDecimal(instrument.minimumQuantity) &&
-    (instrument.minimumNotional === undefined || isPositiveDecimal(instrument.minimumNotional)) &&
-    (instrument.maximumLeverage === undefined || isPositiveDecimal(instrument.maximumLeverage))
+    !Array.isArray(instrument) &&
+    (() => {
+      const candidate = instrument as InstrumentRules;
+      return (
+        (candidate.market === "spot" || candidate.market === "futures") &&
+        typeof candidate.symbol === "string" && candidate.symbol.length > 0 && candidate.symbol.length <= 64 &&
+        typeof candidate.baseAsset === "string" && candidate.baseAsset.length > 0 && candidate.baseAsset.length <= 64 &&
+        typeof candidate.quoteAsset === "string" && candidate.quoteAsset.length > 0 && candidate.quoteAsset.length <= 64 &&
+        isPositiveDecimalString(candidate.tickSize) &&
+        isPositiveDecimalString(candidate.stepSize) &&
+        isPositiveDecimalString(candidate.minimumQuantity) &&
+        (candidate.minimumNotional === undefined || isPositiveDecimalString(candidate.minimumNotional)) &&
+        (candidate.market === "futures"
+          ? isPositiveDecimalString(candidate.maximumLeverage)
+          : candidate.maximumLeverage === undefined || isPositiveDecimalString(candidate.maximumLeverage))
+      );
+    })()
   );
+}
+
+export function compareDecimalStrings(left: string, right: string): number {
+  return new ExactDecimal(left).comparedTo(new ExactDecimal(right));
 }
 
 export function evaluateOrderRisk(
@@ -109,15 +133,15 @@ export function evaluateOrderRisk(
   }
   if (intent.symbol !== context.symbol) return reject("symbol-mismatch");
   if (intent.side !== "buy" && intent.side !== "sell") return reject("invalid-side");
-  if (!validInstrument(instrument)) return reject("invalid-instrument-rules");
+  if (!isValidInstrumentRules(instrument)) return reject("invalid-instrument-rules");
   if (instrument.market !== context.market || instrument.symbol !== context.symbol) return reject("instrument-mismatch");
 
-  if (!isPositiveDecimal(intent.quantity)) return reject("invalid-quantity");
-  const quantity = new Decimal(intent.quantity);
+  if (!isPositiveDecimalString(intent.quantity)) return reject("invalid-quantity");
+  const quantity = new ExactDecimal(intent.quantity);
   if (!quantity.mod(instrument.stepSize).isZero()) return reject("quantity-step-mismatch");
 
-  if (!isPositiveDecimal(intent.price)) return reject("invalid-price");
-  const price = new Decimal(intent.price);
+  if (!isPositiveDecimalString(intent.price)) return reject("invalid-price");
+  const price = new ExactDecimal(intent.price);
   if (!price.mod(instrument.tickSize).isZero()) return reject("price-step-mismatch");
   if (quantity.lt(instrument.minimumQuantity)) return reject("below-minimum-quantity");
 
@@ -127,34 +151,86 @@ export function evaluateOrderRisk(
   }
   if (notional.gt(policy.maximumOrderNotional)) return reject("maximum-order-notional-exceeded");
 
+  if (!isNonnegativeDecimal(context.currentPositionQuantity)) {
+    return reject("invalid-current-position-quantity");
+  }
   if (!isNonnegativeDecimal(context.currentPositionNotional)) return reject("invalid-current-position-notional");
-  const projectedPositionNotional = new Decimal(context.currentPositionNotional).add(notional);
-  if (projectedPositionNotional.gt(policy.maximumPositionNotional)) return reject("maximum-position-notional-exceeded");
+  if (context.positionSide !== "flat" && context.positionSide !== "long" && context.positionSide !== "short") {
+    return reject("invalid-position-side");
+  }
+  if (typeof intent.reduceOnly !== "boolean") return reject("invalid-reduce-only");
+  const currentPositionQuantity = new ExactDecimal(context.currentPositionQuantity);
+  const currentPositionNotional = new ExactDecimal(context.currentPositionNotional);
+  if (
+    (context.positionSide === "flat" && (!currentPositionQuantity.isZero() || !currentPositionNotional.isZero())) ||
+    (context.positionSide !== "flat" && (!currentPositionQuantity.gt(0) || !currentPositionNotional.gt(0))) ||
+    (context.market === "spot" && context.positionSide === "short")
+  ) return reject("invalid-position-state");
+
+  let increasesRisk: boolean;
+  let opensNewPosition = false;
+  let projectedPositionQuantity: Decimal;
+  let projectedPositionNotional: Decimal;
+  if (context.positionSide === "flat") {
+    if (intent.reduceOnly) return reject("reduce-only-side-mismatch");
+    if (context.market === "spot" && intent.side === "sell") return reject("spot-short-not-supported");
+    increasesRisk = true;
+    opensNewPosition = true;
+    projectedPositionQuantity = quantity;
+    projectedPositionNotional = projectedPositionQuantity.mul(price);
+  } else {
+    const increasingSide = context.positionSide === "long" ? "buy" : "sell";
+    if (intent.side === increasingSide) {
+      if (intent.reduceOnly) return reject("reduce-only-side-mismatch");
+      increasesRisk = true;
+      projectedPositionQuantity = currentPositionQuantity.add(quantity);
+      projectedPositionNotional = projectedPositionQuantity.mul(price);
+    } else {
+      if (!intent.reduceOnly) return reject("opposite-side-requires-reduce-only");
+      if (quantity.gt(currentPositionQuantity)) return reject("reduce-only-exceeds-position");
+      increasesRisk = false;
+      projectedPositionQuantity = currentPositionQuantity.sub(quantity);
+      projectedPositionNotional = projectedPositionQuantity.mul(price);
+    }
+  }
+  if (increasesRisk && projectedPositionNotional.gt(policy.maximumPositionNotional)) {
+    return reject("maximum-position-notional-exceeded");
+  }
 
   if (!isNonnegativeDecimal(context.totalExposure)) return reject("invalid-total-exposure");
-  const projectedTotalExposure = new Decimal(context.totalExposure).add(notional);
-  if (projectedTotalExposure.gt(policy.maximumTotalExposure)) return reject("maximum-total-exposure-exceeded");
+  const totalExposure = new ExactDecimal(context.totalExposure);
+  if (totalExposure.lt(currentPositionNotional)) return reject("invalid-total-exposure");
+  const projectedTotalExposure = totalExposure.sub(currentPositionNotional).add(projectedPositionNotional);
+  if (increasesRisk && projectedTotalExposure.gt(policy.maximumTotalExposure)) {
+    return reject("maximum-total-exposure-exceeded");
+  }
 
   if (!isSafeNonnegativeInteger(context.openPositions)) return reject("invalid-open-positions");
-  if (typeof context.opensNewPosition !== "boolean") return reject("invalid-opens-new-position");
-  if (context.opensNewPosition && context.openPositions >= policy.maximumSimultaneousPositions) {
+  if (opensNewPosition && context.openPositions >= policy.maximumSimultaneousPositions) {
     return reject("maximum-simultaneous-positions-reached");
   }
 
   if (!isSignedDecimal(context.realizedDailyPnl)) return reject("invalid-realized-daily-pnl");
   if (!isSignedDecimal(context.unrealizedDailyPnl)) return reject("invalid-unrealized-daily-pnl");
-  const dailyPnl = new Decimal(context.realizedDailyPnl).add(context.unrealizedDailyPnl);
-  if (dailyPnl.lte(new Decimal(policy.maximumDailyLoss).neg())) return reject("maximum-daily-loss-reached");
+  const dailyPnl = new ExactDecimal(context.realizedDailyPnl).add(context.unrealizedDailyPnl);
+  if (increasesRisk && dailyPnl.lte(new ExactDecimal(policy.maximumDailyLoss).neg())) {
+    return reject("maximum-daily-loss-reached");
+  }
 
-  if (!isPositiveDecimal(context.leverage)) return reject("invalid-leverage");
-  const leverage = new Decimal(context.leverage);
-  if (leverage.gt(policy.maximumLeverage)) return reject("maximum-leverage-exceeded");
-  if (instrument.maximumLeverage !== undefined && leverage.gt(instrument.maximumLeverage)) {
+  if (!isPositiveDecimalString(context.leverage)) return reject("invalid-leverage");
+  const leverage = new ExactDecimal(context.leverage);
+  if (context.market === "spot" && !leverage.eq(1)) return reject("spot-leverage-must-be-one");
+  if (increasesRisk && leverage.gt(policy.maximumLeverage)) return reject("maximum-leverage-exceeded");
+  if (
+    increasesRisk &&
+    instrument.maximumLeverage !== undefined &&
+    leverage.gt(instrument.maximumLeverage)
+  ) {
     return reject("instrument-maximum-leverage-exceeded");
   }
 
   if (!isNonnegativeDecimal(intent.expectedSlippageBps)) return reject("invalid-expected-slippage-bps");
-  if (new Decimal(intent.expectedSlippageBps).gt(policy.maximumSlippageBps)) {
+  if (new ExactDecimal(intent.expectedSlippageBps).gt(policy.maximumSlippageBps)) {
     return reject("maximum-slippage-exceeded");
   }
 

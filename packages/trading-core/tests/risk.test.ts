@@ -48,10 +48,12 @@ describe("evaluateOrderRisk", () => {
         ...context,
         priceTimestamp: 5_000,
         currentPositionNotional: "0",
+        currentPositionQuantity: "0",
         totalExposure: "0",
+        positionSide: "flat",
       },
       { ...intent, quantity: "0.01" },
-      instrument,
+      { ...instrument, minimumNotional: "10" },
     );
 
     expect(decision).toEqual({
@@ -76,6 +78,243 @@ describe("evaluateOrderRisk", () => {
     expect(reason({ context: { consecutiveFailures: 3 } })).toBe(
       "maximum-consecutive-failures-reached",
     );
+  });
+
+  it.each([
+    ["spot", "long", "sell", "50", "0", "100"],
+    ["futures", "long", "sell", "50", "0", "100"],
+    ["futures", "short", "buy", "50", "0", "100"],
+  ] as const)(
+    "reduces and closes %s %s positions without adding exposure",
+    (market, positionSide, side, partialPosition, closedPosition, totalAfterPartial) => {
+      const marketInstrument = {
+        ...instrument,
+        market,
+        ...(market === "futures" ? { maximumLeverage: "10" } : {}),
+      };
+      const baseContext = {
+        ...context,
+        market,
+        positionSide,
+        currentPositionQuantity: "0.1",
+        currentPositionNotional: "100",
+        totalExposure: "150",
+      };
+      expect(
+        evaluateOrderRisk(
+          policy,
+          baseContext,
+          { ...intent, side, quantity: "0.05", reduceOnly: true },
+          marketInstrument,
+        ),
+      ).toMatchObject({
+        allowed: true,
+        normalized: {
+          projectedPositionNotional: partialPosition,
+          projectedTotalExposure: totalAfterPartial,
+        },
+      });
+      expect(
+        evaluateOrderRisk(
+          policy,
+          baseContext,
+          { ...intent, side, quantity: "0.1", reduceOnly: true },
+          marketInstrument,
+        ),
+      ).toMatchObject({
+        allowed: true,
+        normalized: { projectedPositionNotional: closedPosition, projectedTotalExposure: "50" },
+      });
+    },
+  );
+
+  it("infers increases, new positions, and rejects reversals or invalid reduce-only intents", () => {
+    expect(reason()).toBe("allowed");
+    expect(
+      reason({
+        context: { market: "futures", positionSide: "short", leverage: "2" },
+        intent: { side: "sell" },
+        instrument: { market: "futures", maximumLeverage: "10" },
+      }),
+    ).toBe("allowed");
+    expect(
+      reason({
+        context: { positionSide: "long" },
+        intent: { side: "sell", reduceOnly: false },
+      }),
+    ).toBe("opposite-side-requires-reduce-only");
+    expect(reason({ intent: { reduceOnly: true } })).toBe("reduce-only-side-mismatch");
+    expect(
+      reason({
+        context: { positionSide: "long", currentPositionQuantity: "0.05", currentPositionNotional: "50" },
+        intent: { side: "sell", quantity: "0.1", reduceOnly: true },
+      }),
+    ).toBe("reduce-only-exceeds-position");
+    expect(
+      reason({
+        context: { positionSide: "flat", currentPositionQuantity: "0", currentPositionNotional: "0" },
+        intent: { side: "sell", reduceOnly: false },
+      }),
+    ).toBe("spot-short-not-supported");
+  });
+
+  it("projects reductions from held quantity at lower and higher execution prices", () => {
+    const held = {
+      ...context,
+      positionSide: "long" as const,
+      currentPositionQuantity: "0.1",
+      currentPositionNotional: "100",
+      totalExposure: "150",
+    };
+    expect(
+      evaluateOrderRisk(
+        { ...policy, maximumOrderNotional: "200" },
+        held,
+        { ...intent, side: "sell", quantity: "0.05", price: "800", reduceOnly: true },
+        instrument,
+      ),
+    ).toMatchObject({
+      allowed: true,
+      normalized: { projectedPositionNotional: "40", projectedTotalExposure: "90" },
+    });
+    expect(
+      evaluateOrderRisk(
+        { ...policy, maximumOrderNotional: "200" },
+        held,
+        { ...intent, side: "sell", quantity: "0.05", price: "1200", reduceOnly: true },
+        instrument,
+      ),
+    ).toMatchObject({
+      allowed: true,
+      normalized: { projectedPositionNotional: "60", projectedTotalExposure: "110" },
+    });
+    expect(
+      evaluateOrderRisk(
+        { ...policy, maximumOrderNotional: "200" },
+        held,
+        { ...intent, side: "sell", quantity: "0.1", price: "1200", reduceOnly: true },
+        instrument,
+      ),
+    ).toMatchObject({
+      allowed: true,
+      normalized: { projectedPositionNotional: "0", projectedTotalExposure: "50" },
+    });
+    expect(
+      evaluateOrderRisk(
+        { ...policy, maximumOrderNotional: "200" },
+        held,
+        { ...intent, side: "sell", quantity: "0.101", price: "800", reduceOnly: true },
+        instrument,
+      ),
+    ).toEqual({ allowed: false, reason: "reduce-only-exceeds-position" });
+  });
+
+  it("enforces consistent position quantities and spot leverage exactly one", () => {
+    expect(reason({ context: { currentPositionQuantity: "" } })).toBe(
+      "invalid-current-position-quantity",
+    );
+    expect(
+      reason({
+        context: { positionSide: "flat", currentPositionQuantity: "0", currentPositionNotional: "1" },
+      }),
+    ).toBe("invalid-position-state");
+    expect(reason({ context: { leverage: "2" } })).toBe("spot-leverage-must-be-one");
+  });
+
+  it.each([
+    ["long", "sell", "buy"],
+    ["short", "buy", "sell"],
+  ] as const)(
+    "allows a futures %s position above a newly lowered leverage cap to reduce only",
+    (positionSide, reducingSide, increasingSide) => {
+      const leveragedContext = {
+        ...context,
+        market: "futures" as const,
+        positionSide,
+        currentPositionQuantity: "0.1",
+        currentPositionNotional: "100",
+        totalExposure: "150",
+        leverage: "10",
+      };
+      const futuresInstrument = { ...instrument, market: "futures" as const, maximumLeverage: "5" };
+
+      expect(
+        evaluateOrderRisk(
+          { ...policy, maximumLeverage: "5" },
+          leveragedContext,
+          { ...intent, side: reducingSide, quantity: "0.05", reduceOnly: true },
+          futuresInstrument,
+        ),
+      ).toMatchObject({ allowed: true });
+      expect(
+        evaluateOrderRisk(
+          { ...policy, maximumLeverage: "5" },
+          leveragedContext,
+          { ...intent, side: increasingSide, quantity: "0.05", reduceOnly: false },
+          { ...futuresInstrument, maximumLeverage: "20" },
+        ),
+      ).toEqual({ allowed: false, reason: "maximum-leverage-exceeded" });
+      expect(
+        evaluateOrderRisk(
+          { ...policy, maximumLeverage: "20" },
+          leveragedContext,
+          { ...intent, side: increasingSide, quantity: "0.05", reduceOnly: false },
+          futuresInstrument,
+        ),
+      ).toEqual({ allowed: false, reason: "instrument-maximum-leverage-exceeded" });
+    },
+  );
+
+  it("rejects oversized decimals and detects a one-wei over-cap notional without rounding down", () => {
+    const tooManyIntegers = "1".repeat(25);
+    const tooManyFractions = `1.${"1".repeat(19)}`;
+    expect(reason({ policy: { maximumOrderNotional: tooManyIntegers } })).toBe(
+      "invalid-policy-maximum-order-notional",
+    );
+    expect(reason({ intent: { quantity: tooManyFractions } })).toBe("invalid-quantity");
+    expect(reason({ instrument: { stepSize: tooManyFractions } })).toBe(
+      "invalid-instrument-rules",
+    );
+    expect(reason({ instrument: { baseAsset: "B".repeat(65) } })).toBe(
+      "invalid-instrument-rules",
+    );
+    expect(
+      reason({
+        policy: {
+          allowedSymbols: Array.from(
+            { length: 101 },
+            (_, index) => `S${String(index).padStart(2, "0")}`,
+          ),
+        },
+      }),
+    ).toBe("invalid-policy-allowed-symbols");
+
+    const cap = "10000000000000000000000";
+    expect(
+      reason({
+        policy: {
+          maximumOrderNotional: cap,
+          maximumPositionNotional: cap,
+          maximumTotalExposure: cap,
+        },
+        context: {
+          positionSide: "flat",
+          currentPositionQuantity: "0",
+          currentPositionNotional: "0",
+          totalExposure: "0",
+        },
+        intent: {
+          quantity: "10000000000000000000000.000000000000000001",
+          price: "1",
+        },
+        instrument: {
+          stepSize: "0.000000000000000001",
+          tickSize: "1",
+          minimumQuantity: "1",
+          minimumNotional: "1",
+        },
+      }),
+    ).toBe("maximum-order-notional-exceeded");
   });
 
   it.each([
@@ -122,13 +361,13 @@ describe("evaluateOrderRisk", () => {
     [{ intent: { quantity: "0.1005" } }, "quantity-step-mismatch"],
     [{ intent: { price: "1000.05" } }, "price-step-mismatch"],
     [{ intent: { quantity: "0.009" } }, "below-minimum-quantity"],
-    [{ intent: { quantity: "0.01", price: "999.9" } }, "below-minimum-notional"],
+    [{ intent: { quantity: "0.01", price: "999.9" }, instrument: { minimumNotional: "10" } }, "below-minimum-notional"],
     [{ intent: { quantity: "0.101" } }, "maximum-order-notional-exceeded"],
-    [{ context: { currentPositionNotional: "101" } }, "maximum-position-notional-exceeded"],
+    [{ context: { currentPositionQuantity: "0.101", currentPositionNotional: "101", totalExposure: "101" } }, "maximum-position-notional-exceeded"],
     [{ context: { totalExposure: "401" } }, "maximum-total-exposure-exceeded"],
-    [{ context: { openPositions: 3, opensNewPosition: true } }, "maximum-simultaneous-positions-reached"],
-    [{ context: { leverage: "5.1" } }, "maximum-leverage-exceeded"],
-    [{ policy: { maximumLeverage: "20" }, context: { leverage: "10.1" } }, "instrument-maximum-leverage-exceeded"],
+    [{ context: { openPositions: 3, positionSide: "flat", currentPositionQuantity: "0", currentPositionNotional: "0" } }, "maximum-simultaneous-positions-reached"],
+    [{ context: { market: "futures", leverage: "5.1" }, instrument: { market: "futures", maximumLeverage: "10" } }, "maximum-leverage-exceeded"],
+    [{ policy: { maximumLeverage: "20" }, context: { market: "futures", leverage: "10.1" }, instrument: { market: "futures", maximumLeverage: "10" } }, "instrument-maximum-leverage-exceeded"],
     [{ intent: { expectedSlippageBps: "50.1" } }, "maximum-slippage-exceeded"],
     [{ context: { lastSignalAt: 9_001 } }, "signal-cooldown-active"],
   ] as const)("enforces %s", (overrides, expected) => {

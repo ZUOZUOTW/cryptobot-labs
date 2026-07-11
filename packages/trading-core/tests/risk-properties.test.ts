@@ -25,8 +25,11 @@ describe("risk properties", () => {
             {
               ...riskFixtures.context,
               currentPositionNotional: "0",
+              currentPositionQuantity: "0",
               totalExposure: "0",
+              positionSide: "flat",
               leverage: String(leverage),
+              market: "futures",
             },
             {
               ...riskFixtures.intent,
@@ -41,6 +44,7 @@ describe("risk properties", () => {
               minimumQuantity: "1",
               minimumNotional: value,
               maximumLeverage: String(leverage),
+              market: "futures",
             },
           );
 
@@ -85,7 +89,13 @@ describe("risk properties", () => {
           expect(
             evaluateOrderRisk(
               { ...riskFixtures.policy, maximumSimultaneousPositions: threshold },
-              { ...riskFixtures.context, openPositions: threshold, opensNewPosition: true },
+              {
+                ...riskFixtures.context,
+                openPositions: threshold,
+                positionSide: "flat",
+                currentPositionQuantity: "0",
+                currentPositionNotional: "0",
+              },
               riskFixtures.intent,
               riskFixtures.instrument,
             ),
@@ -104,20 +114,27 @@ describe("risk properties", () => {
     );
   });
 
-  it("only accepts quantities aligned to the instrument step and within caps", () => {
+  it("approves every aligned in-range quantity and rejects every misaligned one", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 1, max: 150_000 }), (units) => {
-        const quantity = (units / 1_000_000).toFixed(6);
-        const decision = evaluateOrderRisk(
+      fc.property(fc.integer({ min: 10, max: 100 }), (units) => {
+        const aligned = (units / 1_000).toFixed(3);
+        const approved = evaluateOrderRisk(
           riskFixtures.policy,
           riskFixtures.context,
-          { ...riskFixtures.intent, quantity },
+          { ...riskFixtures.intent, quantity: aligned },
           riskFixtures.instrument,
         );
-        if (decision.allowed) {
-          expect(units % 1_000).toBe(0);
-          expect(Number(decision.normalized.notional)).toBeLessThanOrEqual(100);
-        }
+        expect(approved).toMatchObject({ allowed: true });
+
+        const misaligned = ((units * 1_000 + 1) / 1_000_000).toFixed(6);
+        expect(
+          evaluateOrderRisk(
+            riskFixtures.policy,
+            riskFixtures.context,
+            { ...riskFixtures.intent, quantity: misaligned },
+            riskFixtures.instrument,
+          ),
+        ).toEqual({ allowed: false, reason: "quantity-step-mismatch" });
       }),
     );
   });

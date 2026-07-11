@@ -22,7 +22,8 @@ export interface RiskContext {
   priceTimestamp: number;
   lastSignalAt: number | null;
   openPositions: number;
-  opensNewPosition: boolean;
+  positionSide: "flat" | "long" | "short";
+  currentPositionQuantity: string;
   currentPositionNotional: string;
   totalExposure: string;
   realizedDailyPnl: string;
@@ -37,6 +38,7 @@ export interface OrderIntent {
   quantity: string;
   price: string;
   expectedSlippageBps: string;
+  reduceOnly: boolean;
 }
 
 export type RiskRejectionReason =
@@ -71,16 +73,24 @@ export type RiskRejectionReason =
   | "below-minimum-notional"
   | "maximum-order-notional-exceeded"
   | "invalid-current-position-notional"
+  | "invalid-current-position-quantity"
+  | "invalid-position-side"
+  | "invalid-position-state"
+  | "invalid-reduce-only"
+  | "reduce-only-side-mismatch"
+  | "reduce-only-exceeds-position"
+  | "opposite-side-requires-reduce-only"
+  | "spot-short-not-supported"
   | "maximum-position-notional-exceeded"
   | "invalid-total-exposure"
   | "maximum-total-exposure-exceeded"
   | "invalid-open-positions"
-  | "invalid-opens-new-position"
   | "maximum-simultaneous-positions-reached"
   | "invalid-realized-daily-pnl"
   | "invalid-unrealized-daily-pnl"
   | "maximum-daily-loss-reached"
   | "invalid-leverage"
+  | "spot-leverage-must-be-one"
   | "maximum-leverage-exceeded"
   | "instrument-maximum-leverage-exceeded"
   | "invalid-expected-slippage-bps"
@@ -104,6 +114,11 @@ export type RiskDecision =
 
 export interface LiveUnlockInput {
   targetMarket: Market;
+  now: number;
+  selectedSymbol: string;
+  requestedLeverage: string;
+  instrumentRules: InstrumentRules;
+  instrumentVerifiedAt: number;
   credentialVerified: boolean;
   permissions: {
     read: boolean;
@@ -120,9 +135,13 @@ export interface LiveUnlockInput {
 
 export type LiveUnlockRejectionReason =
   | "invalid-input"
+  | "unexpected-input-property"
   | "invalid-target-market"
+  | "invalid-now"
   | "credential-not-verified"
   | "missing-read-permission"
+  | "invalid-permissions"
+  | "unexpected-permission-property"
   | "missing-spot-permission"
   | "missing-futures-permission"
   | "unknown-extra-scope"
@@ -140,6 +159,18 @@ export type LiveUnlockRejectionReason =
   | "missing-maximum-consecutive-failures"
   | "missing-maximum-price-age-ms"
   | "invalid-risk-policy"
+  | "invalid-selected-symbol"
+  | "selected-symbol-not-allowed"
+  | "invalid-requested-leverage"
+  | "invalid-instrument-rules"
+  | "instrument-market-mismatch"
+  | "instrument-symbol-mismatch"
+  | "invalid-instrument-verified-at"
+  | "instrument-verified-at-in-future"
+  | "stale-instrument-rules"
+  | "requested-leverage-exceeds-policy"
+  | "requested-leverage-exceeds-instrument"
+  | "spot-leverage-must-be-one"
   | "missing-bot-name"
   | "bot-name-mismatch"
   | "risk-not-accepted";

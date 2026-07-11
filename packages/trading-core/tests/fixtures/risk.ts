@@ -26,13 +26,14 @@ export const context: RiskContext = {
   priceTimestamp: 9_000,
   lastSignalAt: null,
   openPositions: 1,
-  opensNewPosition: false,
+  positionSide: "long",
+  currentPositionQuantity: "0.05",
   currentPositionNotional: "50",
   totalExposure: "100",
   realizedDailyPnl: "-10",
   unrealizedDailyPnl: "-5",
   consecutiveFailures: 0,
-  leverage: "2",
+  leverage: "1",
 };
 
 export const intent: OrderIntent = {
@@ -41,6 +42,7 @@ export const intent: OrderIntent = {
   quantity: "0.1",
   price: "1000",
   expectedSlippageBps: "25",
+  reduceOnly: false,
 };
 
 export const instrument: InstrumentRules = {
@@ -51,8 +53,6 @@ export const instrument: InstrumentRules = {
   tickSize: "0.1",
   stepSize: "0.001",
   minimumQuantity: "0.01",
-  minimumNotional: "10",
-  maximumLeverage: "10",
 };
 
 export const riskFixtures = { policy, context, intent, instrument };
