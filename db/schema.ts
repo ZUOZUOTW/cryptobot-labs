@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { foreignKey, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const timestamp = (name: string) => integer(name, { mode: "number" });
 
@@ -25,17 +25,24 @@ export const devices = sqliteTable("devices", {
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
+  uniqueIndex("devices_id_user_uidx").on(table.id, table.userId),
   index("devices_user_status_idx").on(table.userId, table.status),
   index("devices_user_last_seen_idx").on(table.userId, table.lastSeenAt),
 ]);
 
 export const deviceCredentials = sqliteTable("device_credentials", {
-  deviceId: text("device_id").primaryKey().references(() => devices.id, { onDelete: "cascade" }),
+  deviceId: text("device_id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   credentialHash: text("credential_hash").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
   revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "device_credentials_device_user_fk",
+  }).onDelete("cascade"),
   uniqueIndex("device_credentials_hash_uidx").on(table.credentialHash),
   index("device_credentials_expiry_idx").on(table.expiresAt),
 ]);
@@ -54,11 +61,17 @@ export const pairingCodes = sqliteTable("pairing_codes", {
 
 export const deviceNonces = sqliteTable("device_nonces", {
   id: text("id").primaryKey(),
-  deviceId: text("device_id").notNull().references(() => devices.id, { onDelete: "cascade" }),
+  deviceId: text("device_id").notNull(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   nonce: text("nonce").notNull(),
   timestamp: timestamp("timestamp").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "device_nonces_device_user_fk",
+  }).onDelete("cascade"),
   uniqueIndex("device_nonces_device_nonce_uidx").on(table.deviceId, table.nonce),
   index("device_nonces_expiry_idx").on(table.expiresAt),
 ]);
@@ -72,12 +85,14 @@ export const strategies = sqliteTable("strategies", {
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
+  uniqueIndex("strategies_id_user_uidx").on(table.id, table.userId),
   index("strategies_user_updated_idx").on(table.userId, table.updatedAt),
 ]);
 
 export const strategyVersions = sqliteTable("strategy_versions", {
   id: text("id").primaryKey(),
-  strategyId: text("strategy_id").notNull().references(() => strategies.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyId: text("strategy_id").notNull(),
   version: integer("version").notNull(),
   configHash: text("config_hash").notNull(),
   sourceHash: text("source_hash"),
@@ -85,6 +100,12 @@ export const strategyVersions = sqliteTable("strategy_versions", {
   sourceCode: text("source_code"),
   createdAt: timestamp("created_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.strategyId, table.userId],
+    foreignColumns: [strategies.id, strategies.userId],
+    name: "strategy_versions_strategy_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("strategy_versions_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("strategy_versions_strategy_version_uidx").on(table.strategyId, table.version),
   index("strategy_versions_config_hash_idx").on(table.configHash),
   index("strategy_versions_source_hash_idx").on(table.sourceHash),
@@ -93,7 +114,7 @@ export const strategyVersions = sqliteTable("strategy_versions", {
 export const backtestJobs = sqliteTable("backtest_jobs", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  strategyVersionId: text("strategy_version_id").notNull().references(() => strategyVersions.id),
+  strategyVersionId: text("strategy_version_id").notNull(),
   status: text("status").notNull(),
   evidenceLevel: text("evidence_level").notNull(),
   requestJson: text("request_json").notNull(),
@@ -103,6 +124,12 @@ export const backtestJobs = sqliteTable("backtest_jobs", {
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
 }, (table) => [
+  foreignKey({
+    columns: [table.strategyVersionId, table.userId],
+    foreignColumns: [strategyVersions.id, strategyVersions.userId],
+    name: "backtest_jobs_strategy_version_user_fk",
+  }),
+  uniqueIndex("backtest_jobs_id_user_uidx").on(table.id, table.userId),
   index("backtest_jobs_user_created_idx").on(table.userId, table.createdAt),
   index("backtest_jobs_user_status_idx").on(table.userId, table.status),
 ]);
@@ -110,7 +137,7 @@ export const backtestJobs = sqliteTable("backtest_jobs", {
 export const backtestDatasets = sqliteTable("backtest_datasets", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  backtestJobId: text("backtest_job_id").notNull().references(() => backtestJobs.id, { onDelete: "cascade" }),
+  backtestJobId: text("backtest_job_id").notNull(),
   market: text("market").notNull(),
   symbol: text("symbol").notNull(),
   interval: text("interval").notNull(),
@@ -124,6 +151,12 @@ export const backtestDatasets = sqliteTable("backtest_datasets", {
   checksum: text("checksum").notNull(),
   createdAt: timestamp("created_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.backtestJobId, table.userId],
+    foreignColumns: [backtestJobs.id, backtestJobs.userId],
+    name: "backtest_datasets_job_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("backtest_datasets_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("backtest_datasets_job_uidx").on(table.backtestJobId),
   index("backtest_datasets_user_created_idx").on(table.userId, table.createdAt),
   index("backtest_datasets_checksum_idx").on(table.checksum),
@@ -132,8 +165,8 @@ export const backtestDatasets = sqliteTable("backtest_datasets", {
 export const backtestResults = sqliteTable("backtest_results", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  backtestJobId: text("backtest_job_id").notNull().references(() => backtestJobs.id, { onDelete: "cascade" }),
-  datasetId: text("dataset_id").notNull().references(() => backtestDatasets.id),
+  backtestJobId: text("backtest_job_id").notNull(),
+  datasetId: text("dataset_id").notNull(),
   evidenceLevel: text("evidence_level").notNull(),
   initialCapital: text("initial_capital").notNull(),
   feeRate: text("fee_rate").notNull(),
@@ -149,6 +182,17 @@ export const backtestResults = sqliteTable("backtest_results", {
   scriptHash: text("script_hash"),
   createdAt: timestamp("created_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.backtestJobId, table.userId],
+    foreignColumns: [backtestJobs.id, backtestJobs.userId],
+    name: "backtest_results_job_user_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.datasetId, table.userId],
+    foreignColumns: [backtestDatasets.id, backtestDatasets.userId],
+    name: "backtest_results_dataset_user_fk",
+  }),
+  uniqueIndex("backtest_results_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("backtest_results_job_uidx").on(table.backtestJobId),
   index("backtest_results_user_created_idx").on(table.userId, table.createdAt),
 ]);
@@ -156,8 +200,8 @@ export const backtestResults = sqliteTable("backtest_results", {
 export const deployments = sqliteTable("deployments", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deviceId: text("device_id").notNull().references(() => devices.id),
-  strategyVersionId: text("strategy_version_id").notNull().references(() => strategyVersions.id),
+  deviceId: text("device_id").notNull(),
+  strategyVersionId: text("strategy_version_id").notNull(),
   name: text("name").notNull(),
   mode: text("mode").notNull(),
   state: text("state").notNull(),
@@ -167,6 +211,17 @@ export const deployments = sqliteTable("deployments", {
   startedAt: timestamp("started_at"),
   stoppedAt: timestamp("stopped_at"),
 }, (table) => [
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "deployments_device_user_fk",
+  }),
+  foreignKey({
+    columns: [table.strategyVersionId, table.userId],
+    foreignColumns: [strategyVersions.id, strategyVersions.userId],
+    name: "deployments_strategy_version_user_fk",
+  }),
+  uniqueIndex("deployments_id_user_uidx").on(table.id, table.userId),
   index("deployments_user_state_idx").on(table.userId, table.state),
   index("deployments_device_state_idx").on(table.deviceId, table.state),
 ]);
@@ -174,7 +229,7 @@ export const deployments = sqliteTable("deployments", {
 export const riskPolicies = sqliteTable("risk_policies", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deploymentId: text("deployment_id").notNull().references(() => deployments.id, { onDelete: "cascade" }),
+  deploymentId: text("deployment_id").notNull(),
   allowedSymbolsJson: text("allowed_symbols_json").notNull(),
   maxOrderNotional: text("max_order_notional").notNull(),
   maxPositionNotional: text("max_position_notional").notNull(),
@@ -189,6 +244,12 @@ export const riskPolicies = sqliteTable("risk_policies", {
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deploymentId, table.userId],
+    foreignColumns: [deployments.id, deployments.userId],
+    name: "risk_policies_deployment_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("risk_policies_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("risk_policies_deployment_uidx").on(table.deploymentId),
   index("risk_policies_user_idx").on(table.userId),
 ]);
@@ -196,8 +257,8 @@ export const riskPolicies = sqliteTable("risk_policies", {
 export const runHeartbeats = sqliteTable("run_heartbeats", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deploymentId: text("deployment_id").notNull().references(() => deployments.id, { onDelete: "cascade" }),
-  deviceId: text("device_id").notNull().references(() => devices.id),
+  deploymentId: text("deployment_id").notNull(),
+  deviceId: text("device_id").notNull(),
   sequence: integer("sequence").notNull(),
   mode: text("mode").notNull(),
   state: text("state").notNull(),
@@ -205,6 +266,18 @@ export const runHeartbeats = sqliteTable("run_heartbeats", {
   summaryJson: text("summary_json").notNull(),
   occurredAt: timestamp("occurred_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deploymentId, table.userId],
+    foreignColumns: [deployments.id, deployments.userId],
+    name: "run_heartbeats_deployment_user_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "run_heartbeats_device_user_fk",
+  }),
+  uniqueIndex("run_heartbeats_id_user_uidx").on(table.id, table.userId),
+  uniqueIndex("run_heartbeats_id_deployment_user_uidx").on(table.id, table.deploymentId, table.userId),
   uniqueIndex("run_heartbeats_deployment_sequence_uidx").on(table.deploymentId, table.sequence),
   index("run_heartbeats_user_occurred_idx").on(table.userId, table.occurredAt),
 ]);
@@ -212,8 +285,8 @@ export const runHeartbeats = sqliteTable("run_heartbeats", {
 export const positionSnapshots = sqliteTable("position_snapshots", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deploymentId: text("deployment_id").notNull().references(() => deployments.id, { onDelete: "cascade" }),
-  heartbeatId: text("heartbeat_id").references(() => runHeartbeats.id, { onDelete: "set null" }),
+  deploymentId: text("deployment_id").notNull(),
+  heartbeatId: text("heartbeat_id"),
   market: text("market").notNull(),
   symbol: text("symbol").notNull(),
   side: text("side").notNull(),
@@ -224,6 +297,17 @@ export const positionSnapshots = sqliteTable("position_snapshots", {
   leverage: text("leverage").notNull(),
   capturedAt: timestamp("captured_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deploymentId, table.userId],
+    foreignColumns: [deployments.id, deployments.userId],
+    name: "position_snapshots_deployment_user_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.heartbeatId, table.deploymentId, table.userId],
+    foreignColumns: [runHeartbeats.id, runHeartbeats.deploymentId, runHeartbeats.userId],
+    name: "position_snapshots_heartbeat_deployment_user_fk",
+  }),
+  uniqueIndex("position_snapshots_id_user_uidx").on(table.id, table.userId),
   index("position_snapshots_deployment_captured_idx").on(table.deploymentId, table.capturedAt),
   index("position_snapshots_user_captured_idx").on(table.userId, table.capturedAt),
 ]);
@@ -231,7 +315,7 @@ export const positionSnapshots = sqliteTable("position_snapshots", {
 export const orders = sqliteTable("orders", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deploymentId: text("deployment_id").notNull().references(() => deployments.id, { onDelete: "cascade" }),
+  deploymentId: text("deployment_id").notNull(),
   clientOrderId: text("client_order_id").notNull(),
   exchangeOrderId: text("exchange_order_id"),
   market: text("market").notNull(),
@@ -249,6 +333,13 @@ export const orders = sqliteTable("orders", {
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deploymentId, table.userId],
+    foreignColumns: [deployments.id, deployments.userId],
+    name: "orders_deployment_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("orders_id_user_uidx").on(table.id, table.userId),
+  uniqueIndex("orders_id_deployment_user_uidx").on(table.id, table.deploymentId, table.userId),
   uniqueIndex("orders_deployment_client_order_uidx").on(table.deploymentId, table.clientOrderId),
   index("orders_user_created_idx").on(table.userId, table.createdAt),
   index("orders_exchange_order_idx").on(table.exchangeOrderId),
@@ -258,8 +349,8 @@ export const orders = sqliteTable("orders", {
 export const fills = sqliteTable("fills", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deploymentId: text("deployment_id").notNull().references(() => deployments.id, { onDelete: "cascade" }),
-  orderId: text("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  deploymentId: text("deployment_id").notNull(),
+  orderId: text("order_id").notNull(),
   exchangeFillId: text("exchange_fill_id").notNull(),
   price: text("price").notNull(),
   quantity: text("quantity").notNull(),
@@ -268,6 +359,12 @@ export const fills = sqliteTable("fills", {
   realizedPnl: text("realized_pnl"),
   filledAt: timestamp("filled_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.orderId, table.deploymentId, table.userId],
+    foreignColumns: [orders.id, orders.deploymentId, orders.userId],
+    name: "fills_order_deployment_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("fills_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("fills_order_exchange_fill_uidx").on(table.orderId, table.exchangeFillId),
   index("fills_user_filled_idx").on(table.userId, table.filledAt),
   index("fills_deployment_filled_idx").on(table.deploymentId, table.filledAt),
@@ -276,39 +373,57 @@ export const fills = sqliteTable("fills", {
 export const commands = sqliteTable("commands", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deploymentId: text("deployment_id").notNull().references(() => deployments.id, { onDelete: "cascade" }),
-  deviceId: text("device_id").notNull().references(() => devices.id),
+  deploymentId: text("deployment_id").notNull(),
+  deviceId: text("device_id").notNull(),
   type: text("type").notNull(),
   payloadJson: text("payload_json").notNull(),
   status: text("status").notNull(),
   createdAt: timestamp("created_at").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.deploymentId, table.userId],
+    foreignColumns: [deployments.id, deployments.userId],
+    name: "commands_deployment_user_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "commands_device_user_fk",
+  }),
+  uniqueIndex("commands_id_user_uidx").on(table.id, table.userId),
+  uniqueIndex("commands_id_device_user_uidx").on(table.id, table.deviceId, table.userId),
   index("commands_device_status_created_idx").on(table.deviceId, table.status, table.createdAt),
   index("commands_user_created_idx").on(table.userId, table.createdAt),
 ]);
 
 export const commandAcknowledgements = sqliteTable("command_acknowledgements", {
   id: text("id").primaryKey(),
-  commandId: text("command_id").notNull().references(() => commands.id, { onDelete: "cascade" }),
+  commandId: text("command_id").notNull(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  deviceId: text("device_id").notNull().references(() => devices.id),
+  deviceId: text("device_id").notNull(),
   status: text("status").notNull(),
   payloadJson: text("payload_json").notNull(),
   acknowledgedAt: timestamp("acknowledged_at").notNull(),
 }, (table) => [
+  foreignKey({
+    columns: [table.commandId, table.deviceId, table.userId],
+    foreignColumns: [commands.id, commands.deviceId, commands.userId],
+    name: "command_acknowledgements_command_device_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("command_acknowledgements_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("command_acknowledgements_command_uidx").on(table.commandId),
   index("command_acknowledgements_user_idx").on(table.userId),
 ]);
 
 export const auditEvents = sqliteTable("audit_events", {
   id: text("id").primaryKey(),
-  userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+  userId: text("user_id"),
   actorType: text("actor_type").notNull(),
   actorId: text("actor_id").notNull(),
-  deviceId: text("device_id").references(() => devices.id, { onDelete: "set null" }),
-  deploymentId: text("deployment_id").references(() => deployments.id, { onDelete: "set null" }),
-  strategyVersionId: text("strategy_version_id").references(() => strategyVersions.id, { onDelete: "set null" }),
+  deviceId: text("device_id"),
+  deploymentId: text("deployment_id"),
+  strategyVersionId: text("strategy_version_id"),
   type: text("type").notNull(),
   correlationId: text("correlation_id").notNull(),
   payloadJson: text("payload_json").notNull(),

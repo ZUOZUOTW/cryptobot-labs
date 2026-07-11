@@ -65,76 +65,83 @@ const decimal = (value: unknown, label: string, signed = false): string => {
   return text;
 };
 
-type VisitFrame =
-  | { kind: "visit"; value: unknown; depth: number }
-  | { kind: "exit"; value: object };
-
 const jsonValue = (value: unknown, label: string, maximumBytes: number): JsonValue => {
   const active = new WeakSet<object>();
-  const stack: VisitFrame[] = [{ kind: "visit", value, depth: 0 }];
   let nodes = 0;
-
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    if (frame.kind === "exit") {
-      active.delete(frame.value);
-      continue;
-    }
-
+  const clone = (item: unknown, depth: number): JsonValue => {
     nodes += 1;
     if (nodes > MAX_JSON_NODES) throw new Error(`${label} JSON 節點不得超過 ${MAX_JSON_NODES}`);
-    if (frame.depth > MAX_JSON_DEPTH) throw new Error(`${label} JSON 深度不得超過 ${MAX_JSON_DEPTH}`);
+    if (depth > MAX_JSON_DEPTH) throw new Error(`${label} JSON 深度不得超過 ${MAX_JSON_DEPTH}`);
 
-    const item = frame.value;
-    if (item === null || typeof item === "string" || typeof item === "boolean") continue;
+    if (item === null || typeof item === "string" || typeof item === "boolean") return item;
     if (typeof item === "number") {
       if (!Number.isFinite(item)) throw new Error(`${label} JSON 數字必須是有限值`);
-      continue;
+      return item;
     }
     if (typeof item !== "object") throw new Error(`${label} 包含非 JSON 值`);
     if (active.has(item)) throw new Error(`${label} JSON 不得包含循環參照`);
     active.add(item);
-    stack.push({ kind: "exit", value: item });
-
-    if (Array.isArray(item)) {
-      if (Object.getOwnPropertySymbols(item).length > 0) throw new Error(`${label} 包含非 JSON symbol 欄位`);
-      for (const key of Object.getOwnPropertyNames(item)) {
-        if (key === "length") continue;
-        const position = Number(key);
-        if (!Number.isSafeInteger(position) || position < 0 || position >= item.length || String(position) !== key) {
-          throw new Error(`${label} JSON 陣列不得包含額外屬性`);
+    try {
+      if (Array.isArray(item)) {
+        if (Object.getPrototypeOf(item) !== Array.prototype) throw new Error(`${label} 包含非 JSON 陣列`);
+        if (Object.getOwnPropertySymbols(item).length > 0) throw new Error(`${label} 包含非 JSON symbol 欄位`);
+        for (const key of Object.getOwnPropertyNames(item)) {
+          if (key === "length") continue;
+          const position = Number(key);
+          if (!Number.isSafeInteger(position) || position < 0 || position >= item.length || String(position) !== key) {
+            throw new Error(`${label} JSON 陣列不得包含額外屬性`);
+          }
         }
+        const result: JsonValue[] = [];
+        for (let index = 0; index < item.length; index += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(item, String(index));
+          if (!descriptor) throw new Error(`${label} JSON 陣列不得為稀疏陣列`);
+          if (!("value" in descriptor) || !descriptor.enumerable) throw new Error(`${label} 包含非 JSON 屬性`);
+          result.push(clone(descriptor.value, depth + 1));
+        }
+        return result;
       }
-      for (let index = item.length - 1; index >= 0; index -= 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(item, String(index));
-        if (!descriptor) throw new Error(`${label} JSON 陣列不得為稀疏陣列`);
+
+      const prototype = Object.getPrototypeOf(item);
+      if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} 包含非 JSON 物件`);
+      if (Object.getOwnPropertySymbols(item).length > 0) throw new Error(`${label} 包含非 JSON symbol 欄位`);
+      const result = Object.create(null) as Record<string, JsonValue>;
+      const descriptors = Object.getOwnPropertyDescriptors(item);
+      for (const [key, descriptor] of Object.entries(descriptors)) {
+        if (isSensitiveName(key)) throw new Error(`偵測到敏感欄位：${key}`);
         if (!("value" in descriptor) || !descriptor.enumerable) throw new Error(`${label} 包含非 JSON 屬性`);
-        stack.push({ kind: "visit", value: descriptor.value, depth: frame.depth + 1 });
+        Object.defineProperty(result, key, {
+          configurable: true,
+          enumerable: true,
+          value: clone(descriptor.value, depth + 1),
+          writable: true,
+        });
       }
-      continue;
+      return result;
+    } finally {
+      active.delete(item);
     }
+  };
 
-    const prototype = Object.getPrototypeOf(item);
-    if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} 包含非 JSON 物件`);
-    if (Object.getOwnPropertySymbols(item).length > 0) throw new Error(`${label} 包含非 JSON symbol 欄位`);
-    const descriptors = Object.getOwnPropertyDescriptors(item);
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (isSensitiveName(key)) throw new Error(`偵測到敏感欄位：${key}`);
-      if (!("value" in descriptor) || !descriptor.enumerable) throw new Error(`${label} 包含非 JSON 屬性`);
-      stack.push({ kind: "visit", value: descriptor.value, depth: frame.depth + 1 });
+  const cloned = clone(value, 0);
+  const safeSerialize = (item: JsonValue): string => {
+    if (item === null) return "null";
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      return JSON.stringify(item);
     }
-  }
+    if (Array.isArray(item)) return `[${item.map(safeSerialize).join(",")}]`;
+    return `{${Object.keys(item).map((key) => `${JSON.stringify(key)}:${safeSerialize(item[key]!)}`).join(",")}}`;
+  };
 
-  const encoded = JSON.stringify(value);
+  const encoded = safeSerialize(cloned);
   if (new TextEncoder().encode(encoded).byteLength > maximumBytes) {
     throw new Error(`${label} JSON 大小不得超過 ${maximumBytes} bytes`);
   }
-  return value as JsonValue;
+  return cloned;
 };
 
 export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto {
-  jsonValue(value, "回測工作", 32_768);
-  const record = asRecord(value, "回測工作");
+  const record = asRecord(jsonValue(value, "回測工作", 32_768), "回測工作");
   assertExactKeys(record, [
     "strategyVersionId", "market", "symbol", "interval", "startTime", "endTime",
     "initialCapital", "feeRate", "slippageRate",
@@ -158,8 +165,7 @@ export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto 
 }
 
 export function parseCommandCreateDto(value: unknown): CommandCreateDto {
-  jsonValue(value, "控制命令", 32_768);
-  const record = asRecord(value, "控制命令");
+  const record = asRecord(jsonValue(value, "控制命令", 32_768), "控制命令");
   assertExactKeys(record, ["deploymentId", "type", "payload"]);
   if (typeof record.type !== "string" || !COMMAND_TYPES.includes(record.type as CommandType)) {
     throw new Error("type 不是支援的控制命令");
@@ -186,8 +192,7 @@ const parsePosition = (value: unknown): HeartbeatPositionDto => {
 };
 
 export function parseHeartbeatDto(value: unknown): HeartbeatDto {
-  jsonValue(value, "heartbeat", 65_536);
-  const record = asRecord(value, "heartbeat");
+  const record = asRecord(jsonValue(value, "heartbeat", 65_536), "heartbeat");
   assertExactKeys(record, ["deploymentId", "sequence", "occurredAt", "mode", "health", "positions"]);
   if (typeof record.mode !== "string" || !RUN_MODES.includes(record.mode as RunMode)) {
     throw new Error("mode 不是支援的運行模式");

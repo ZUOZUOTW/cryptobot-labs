@@ -158,6 +158,50 @@ describe("strict control-plane DTO parsers", () => {
     })).toThrow(/節點/);
   });
 
+  it("rejects arrays with custom prototypes before inherited hooks can execute", () => {
+    let hookCalls = 0;
+    const values = ["safe"];
+    Object.setPrototypeOf(values, {
+      toJSON() {
+        hookCalls += 1;
+        return { apiKey: "injected" };
+      },
+    });
+
+    expect(() => parseCommandCreateDto({
+      deploymentId: "dep_01",
+      type: "deploy",
+      payload: { values },
+    })).toThrow(/JSON/);
+    expect(hookCalls).toBe(0);
+  });
+
+  it("returns a detached safe payload clone and never invokes inherited toJSON", () => {
+    let hookCalls = 0;
+    Object.defineProperty(Object.prototype, "toJSON", {
+      configurable: true,
+      value: () => {
+        hookCalls += 1;
+        return { apiKey: "injected" };
+      },
+    });
+    const payload = {
+      nested: { value: "before" },
+    };
+
+    try {
+      const parsed = parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", payload });
+      payload.nested.value = "after";
+
+      expect(parsed.payload).toEqual({ nested: { value: "before" } });
+      expect(parsed.payload).not.toBe(payload);
+      expect(parsed.payload.nested).not.toBe(payload.nested);
+      expect(hookCalls).toBe(0);
+    } finally {
+      delete (Object.prototype as { toJSON?: () => unknown }).toJSON;
+    }
+  });
+
   it("bounds strings, arrays, JSON payloads, integer timestamps, and decimal strings", () => {
     expect(() => parseBacktestJobCreateDto({ ...backtest, symbol: "X".repeat(65) })).toThrow(/長度/);
     expect(() => parseBacktestJobCreateDto({ ...backtest, initialCapital: "1e9" })).toThrow(/十進位/);
