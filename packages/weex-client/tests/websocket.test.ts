@@ -363,8 +363,15 @@ describe("WEEX V3 private stream", () => {
     await expect(connection).rejects.toMatchObject({ category: "network" });
     expect(sockets[0].closeCalls).toEqual([[1011, "socket-error"]]);
     expect(stream.state).toBe("reconnecting");
+    const duringReconnect = stream.connect();
+    expect(stream.connect()).toBe(duringReconnect);
     scheduled.shift()?.();
     await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    sockets[1].emit("open", {});
+    acknowledge(sockets[1]);
+    await duringReconnect;
+    await stream.connect();
+    expect(sockets).toHaveLength(2);
     stream.close();
   });
 
