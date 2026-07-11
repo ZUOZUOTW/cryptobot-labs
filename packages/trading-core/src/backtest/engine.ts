@@ -50,7 +50,8 @@ function validateFunding(events: readonly FundingEvent[], market: "spot" | "futu
   return events.map((event) => {
     if (!Number.isSafeInteger(event.timestamp) || event.timestamp < 0) throw new TypeError("Invalid funding timestamp");
     numeric(event.rate, "funding rate", { signed: true });
-    if (event.markPrice !== undefined) numeric(event.markPrice, "funding mark price", { positive: true });
+    if (typeof event.markPrice !== "string") throw new TypeError("Funding mark price is required");
+    numeric(event.markPrice, "funding mark price", { positive: true });
     return { ...event };
   }).sort((left, right) => left.timestamp - right.timestamp);
 }
@@ -86,8 +87,17 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
   numeric(request.slippageRate, "slippageRate", { belowOne: true });
   const leverage = numeric(request.leverage, "leverage", { positive: true });
   if (dataset.request.market === "spot" && !leverage.eq(1)) throw new RangeError("Spot leverage must be one");
+  if (leverage.times(request.feeRate).gte(1)) {
+    throw new RangeError("Leverage and fee rate would consume all usable equity");
+  }
 
   if (dataset.candles.length < 2) throw new RangeError("Historical backtests require at least two completed candles");
+  for (const candle of dataset.candles) {
+    if (!Number.isSafeInteger(candle.openTime) || !Number.isSafeInteger(candle.closeTime) ||
+        candle.openTime < 0 || candle.closeTime <= candle.openTime) {
+      throw new TypeError("Invalid candle timestamp");
+    }
+  }
   const parsed = dataset.candles.map((candle) => CandleSchema.parse(candle));
   const incompleteCount = parsed.filter((candle) => !candle.complete).length;
   if (incompleteCount > 0) throw new TypeError("Historical backtests require complete candles");
@@ -184,7 +194,9 @@ export async function runHistoricalBacktest(
   function openPosition(side: PositionSide, referencePrice: string, timestamp: number): void {
     const orderSide = side === "long" ? "buy" : "sell";
     const entryPrice = adverseFill(referencePrice, orderSide, slippageRate);
-    const notional = balance.times(market === "futures" ? leverage : 1);
+    // Allocate all usable equity while reserving the entry fee (and futures margin).
+    const marginRate = market === "futures" ? decimal(1).div(leverage) : decimal(1);
+    const notional = balance.div(marginRate.plus(feeRate));
     const quantity = notional.div(entryPrice);
     const entryFee = notional.times(feeRate);
     balance = balance.minus(entryFee);
@@ -198,11 +210,23 @@ export async function runHistoricalBacktest(
     event.executionTime = candle.openTime;
     if (!position) {
       if (signal.action === "buy") {
-        openPosition("long", candle.open, candle.openTime);
-        event.effect = "opened";
+        if (balance.lte(0)) {
+          event.status = "rejected";
+          event.effect = "none";
+          event.reason = "nonpositive-equity";
+        } else {
+          openPosition("long", candle.open, candle.openTime);
+          event.effect = "opened";
+        }
       } else if (signal.action === "sell" && market === "futures") {
-        openPosition("short", candle.open, candle.openTime);
-        event.effect = "opened";
+        if (balance.lte(0)) {
+          event.status = "rejected";
+          event.effect = "none";
+          event.reason = "nonpositive-equity";
+        } else {
+          openPosition("short", candle.open, candle.openTime);
+          event.effect = "opened";
+        }
       } else {
         event.status = "rejected";
         event.effect = "none";
@@ -232,7 +256,7 @@ export async function runHistoricalBacktest(
       const event = validated.funding[fundingCursor]!;
       fundingCursor += 1;
       if (!position || event.timestamp < position.entryTime) continue;
-      const markPrice = decimal(event.markPrice ?? candle.close);
+      const markPrice = decimal(event.markPrice);
       const payment = position.quantity.times(markPrice).times(event.rate);
       const adjustment = position.side === "long" ? payment.negated() : payment;
       balance = balance.plus(adjustment);

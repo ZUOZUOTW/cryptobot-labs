@@ -8,7 +8,8 @@ export type TradeExitReason = "signal" | "opposite-signal" | "end-of-data";
 export interface FundingEvent {
   timestamp: number;
   rate: string;
-  markPrice?: string;
+  /** Exchange-observed mark at the funding timestamp; required to prevent lookahead. */
+  markPrice: string;
 }
 
 export interface HistoricalBacktestRequest {

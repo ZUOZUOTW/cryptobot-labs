@@ -15,11 +15,15 @@ export function calculateMetrics(
   const finalEquity = decimal(equityCurve.at(-1)?.equity ?? initialCapital);
   const totalReturn = finalEquity.div(initial).minus(1);
 
-  const periods = Math.max(1, equityCurve.length);
   const annualPeriods = decimal(String(YEAR_MS)).div(String(intervalMs));
+  const elapsedMs = equityCurve.length === 0
+    ? decimal(String(intervalMs))
+    : decimal(String(equityCurve.at(-1)!.timestamp))
+      .minus(String(equityCurve[0]!.timestamp))
+      .plus(String(intervalMs));
   const annualized = finalEquity.lte(0)
     ? decimal(-1)
-    : finalEquity.div(initial).pow(annualPeriods.div(periods)).minus(1);
+    : finalEquity.div(initial).pow(decimal(String(YEAR_MS)).div(elapsedMs)).minus(1);
 
   let peak = initial;
   let maximumDrawdown = decimal(0);
@@ -39,8 +43,10 @@ export function calculateMetrics(
     .filter((trade) => decimal(trade.realizedPnl).lt(0))
     .reduce((sum, trade) => sum.plus(decimal(trade.realizedPnl).abs()), decimal(0));
 
+  const regularSampling = equityCurve.every((point, index) =>
+    index === 0 || point.timestamp - equityCurve[index - 1]!.timestamp === intervalMs);
   let sharpe = decimal(0);
-  if (returns.length >= 2) {
+  if (regularSampling && returns.length >= 2) {
     const mean = returns.reduce((sum, value) => sum.plus(value), decimal(0)).div(returns.length);
     const variance = returns
       .reduce((sum, value) => sum.plus(value.minus(mean).pow(2)), decimal(0))

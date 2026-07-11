@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import Decimal from "decimal.js";
 
 import type { Candle, HistoricalDataset, StrategyEvaluator } from "../src";
 import { runHistoricalBacktest } from "../src/backtest/engine";
@@ -36,9 +37,12 @@ function request(data: HistoricalDataset, strategy: StrategyEvaluator, overrides
 
 describe("historical accounting", () => {
   it("charges entry and exit fees on notional", async () => {
-    const result = await runHistoricalBacktest(request(dataset(["100", "100", "110"]), evaluator(["buy", "close"]), { feeRate: "0.01" }));
-    expect(result.trades[0]).toMatchObject({ quantity: "10", entryFee: "10", exitFee: "11", fees: "21", realizedPnl: "79" });
-    expect(result.equityCurve.at(-1)?.equity).toBe("1079");
+    const result = await runHistoricalBacktest(request(dataset(["100", "100", "110"]), evaluator(["buy", "close"]), {
+      initialCapital: "1100",
+      feeRate: "0.1",
+    }));
+    expect(result.trades[0]).toMatchObject({ quantity: "10", entryFee: "100", exitFee: "110", fees: "210", realizedPnl: "-110" });
+    expect(result.equityCurve.at(-1)?.equity).toBe("990");
   });
 
   it("applies leverage to futures notional and calculates long and short PnL", async () => {
@@ -61,5 +65,48 @@ describe("historical accounting", () => {
   it("includes initial capital when calculating first-period drawdown", async () => {
     const result = await runHistoricalBacktest(request(dataset(["100", "100", "50"]), evaluator(["buy", "hold"])));
     expect(result.metrics.maxDrawdown).toBe("0.5");
+  });
+
+  it("rejects leverage and fee combinations that can consume all usable equity", async () => {
+    await expect(runHistoricalBacktest(request(
+      dataset(["100", "100"], "futures"),
+      evaluator(["buy"]),
+      { leverage: "100", feeRate: "0.01" },
+    ))).rejects.toThrow(/leverage.*fee/i);
+  });
+
+  it("does not create negative positions when a ruined account receives a re-entry signal", async () => {
+    const result = await runHistoricalBacktest(request(
+      dataset(["100", "100", "1", "1"], "futures"),
+      evaluator(["buy", "close", "buy"]),
+      { leverage: "2" },
+    ));
+
+    expect(result.trades).toHaveLength(1);
+    expect(result.equityCurve[2]!.equity).toBe("-980");
+    expect(result.signalEvents.find((event) => event.signalId === "s3")).toMatchObject({
+      status: "rejected",
+      effect: "none",
+      reason: "nonpositive-equity",
+    });
+    expect(result.trades.every((trade) => !trade.quantity.startsWith("-"))).toBe(true);
+  });
+
+  it("uses elapsed timestamps for annualization and suppresses irregular-sample Sharpe", async () => {
+    const second = { ...candles(["100"])[0]!, openTime: 3_600_000, closeTime: 7_199_999, open: "100", high: "110", low: "100", close: "110" };
+    const contiguous = { ...dataset(["100", "100"]), candles: [candles(["100"])[0]!, second] };
+    const gapRows = [candles(["100"])[0]!, { ...second, openTime: 7_200_000, closeTime: 10_799_999 }];
+    const gapped: HistoricalDataset = {
+      ...dataset(["100", "110"]),
+      candles: gapRows,
+      complete: false,
+      validation: { duplicates: [], ordered: true, gaps: [{ from: 3_600_000, to: 7_199_999 }], incompleteCount: 0 },
+    };
+    const strategy = evaluator(["buy"]);
+    const regularResult = await runHistoricalBacktest(request(contiguous, strategy));
+    const gapResult = await runHistoricalBacktest(request(gapped, strategy, { gapPolicy: "disclose" }));
+
+    expect(new Decimal(gapResult.metrics.annualizedReturn).lt(regularResult.metrics.annualizedReturn)).toBe(true);
+    expect(gapResult.metrics.sharpe).toBe("0");
   });
 });

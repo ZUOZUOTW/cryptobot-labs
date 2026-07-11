@@ -158,4 +158,30 @@ describe("historical backtest", () => {
       await expect(runHistoricalBacktest({ ...base, [field]: value })).rejects.toThrow();
     }
   });
+
+  it("rejects unsafe candle timestamps at the engine boundary", async () => {
+    const base = request();
+    const cases = [
+      { ...fixedCandles[0], openTime: -1 },
+      { ...fixedCandles[0], openTime: 0.5 },
+      { ...fixedCandles[0], closeTime: Number.MAX_SAFE_INTEGER + 1 },
+      { ...fixedCandles[0], closeTime: fixedCandles[0]!.openTime },
+    ];
+    for (const invalid of cases) {
+      await expect(runHistoricalBacktest({
+        ...base,
+        dataset: dataset([invalid, fixedCandles[1]] as Candle[]),
+      })).rejects.toThrow(/time/i);
+    }
+  });
+
+  it("requires an explicit funding mark price rather than looking ahead to a candle close", async () => {
+    const evaluate = vi.fn(request().evaluator.evaluate);
+    await expect(runHistoricalBacktest(request({
+      dataset: dataset(fixedCandles as Candle[], "futures"),
+      evaluator: { evaluate },
+      funding: [{ timestamp: 5_000_000, rate: "0.01" }],
+    }))).rejects.toThrow(/mark price/i);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
 });
