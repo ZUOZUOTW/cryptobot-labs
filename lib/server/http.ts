@@ -17,6 +17,8 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   invalid_json: "The JSON request body is invalid.",
   invalid_request: "The request is invalid.",
   pairing_failed: "The pairing request is invalid, expired, or already used.",
+  device_authentication_failed: "Device authentication failed.",
+  conflict: "The request conflicts with the current resource version or state.",
   not_found: "The requested resource was not found.",
   internal: "An internal error occurred.",
 };
