@@ -352,6 +352,33 @@ describe("WEEX V3 private stream", () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects and closes an errored socket before acknowledgement, then reconnects boundedly", async () => {
+    const scheduled: Array<() => void> = [];
+    const scheduler = vi.fn(() => new Promise<void>((resolve) => scheduled.push(resolve)));
+    const { stream, sockets } = setup(spot, { scheduler, maximumReconnectAttempts: 1 });
+    const connection = stream.connect();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].emit("open", {});
+    sockets[0].emit("error", {});
+    await expect(connection).rejects.toMatchObject({ category: "network" });
+    expect(sockets[0].closeCalls).toEqual([[1011, "socket-error"]]);
+    expect(stream.state).toBe("reconnecting");
+    scheduled.shift()?.();
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    stream.close();
+  });
+
+  it("closes an errored subscribed socket before scheduling reconnect", async () => {
+    const scheduler = vi.fn(() => new Promise<void>(() => {}));
+    const { stream, sockets } = setup(spot, { scheduler });
+    const socket = await connect(stream, sockets);
+    socket.emit("error", {});
+    expect(socket.closeCalls).toEqual([[1011, "socket-error"]]);
+    expect(stream.state).toBe("reconnecting");
+    expect(scheduler).toHaveBeenCalledWith(250);
+    stream.close();
+  });
+
   it("does not use ambient WebSocket or fetch", async () => {
     const ambientSocket = vi.fn();
     const ambientFetch = vi.fn();

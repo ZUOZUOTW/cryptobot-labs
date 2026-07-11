@@ -316,7 +316,7 @@ export class WeexPrivateStream {
     this.#connectPromise = promise;
     promise.catch(() => {
       if (this.#connectPromise === promise) this.#connectPromise = null;
-      if (!this.#explicitlyClosed) this.#state = "error";
+      if (!this.#explicitlyClosed && this.#state !== "reconnecting") this.#state = "error";
     });
     return promise;
   }
@@ -405,7 +405,10 @@ export class WeexPrivateStream {
             }));
             this.#fatal("connection-error");
           } else {
-            this.#onClose(socket, { code: 1006, reason: "socket-error", wasClean: false });
+            if (!this.#subscribed) settleReject(new WeexApiError("WEEX websocket failed before subscription", {
+              category: "network", retryable: true,
+            }));
+            this.#onClose(socket, { code: 1006, reason: "socket-error", wasClean: false }, true);
           }
         },
       };
@@ -500,9 +503,13 @@ export class WeexPrivateStream {
     }
   }
 
-  #onClose(socket: PrivateSocket, event: PrivateSocketEventMap["close"]): void {
+  #onClose(
+    socket: PrivateSocket,
+    event: PrivateSocketEventMap["close"],
+    closeUnderlying = false,
+  ): void {
     if (this.#socket !== socket) return;
-    this.#detachSocket(false);
+    this.#detachSocket(closeUnderlying, closeUnderlying ? 1011 : undefined, closeUnderlying ? "socket-error" : undefined);
     if (this.#explicitlyClosed || this.#state === "error" || this.#state === "closed") return;
     if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) {
       this.#state = "error";
