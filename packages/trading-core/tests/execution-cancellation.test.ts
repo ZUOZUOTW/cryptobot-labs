@@ -219,6 +219,51 @@ describe("ExecutionCoordinator cancellation", () => {
     }
   });
 
+  it("does not resend after bounded reassertion conflicts exhaust", async () => {
+    const repository = new MemoryOrderRepository();
+    repository.orders.set("ack", orderAt("ack", "acknowledged"));
+    let ambiguous = false;
+    let restorationConflicts = 0;
+    vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
+      const current = repository.orders.get(order.clientOrderId);
+      if (ambiguous && order.status === "cancel-pending") {
+        restorationConflicts += 1;
+        if (current === undefined) throw new Error("missing order");
+        repository.orders.set(order.clientOrderId, {
+          ...current,
+          status: "partially-filled",
+          version: current.version + 1,
+          updatedAt: current.updatedAt + 1,
+        });
+        throw new Error("optimistic conflict");
+      }
+      if ((current?.version ?? null) !== expectedVersion) throw new Error("optimistic conflict");
+      repository.orders.set(order.clientOrderId, order);
+      return order;
+    });
+    const cancel = vi.fn(async () => {
+      const pending = repository.orders.get("ack");
+      if (pending === undefined) throw new Error("missing pending order");
+      const withFill = transitionOrder(pending, {
+        type: "fill-snapshot",
+        cumulativeFilledQuantity: "1",
+        averageFillPrice: "1001",
+        fees: "0.1",
+        at: 11,
+      });
+      repository.orders.set("ack", { ...withFill, status: "partially-filled" });
+      ambiguous = true;
+      return { status: "unknown" as const, reason: "timeout" };
+    });
+    const { coordinator } = setup(repository, cancel);
+
+    expect((await coordinator.cancelOpenOrders("deployment-1", 10)).unresolved).toBe(1);
+    expect(restorationConflicts).toBe(2);
+    expect((await coordinator.cancelOpenOrders("deployment-1", 20)).skipped).toBe(1);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(repository.orders.get("ack")?.cancelAttemptedAt).toBe(10);
+  });
+
   it("maps a rejection back to the legal pre-cancel state", async () => {
     const cancel = vi.fn(async () => ({ status: "rejected" as const, reason: "already closed" }));
     const { coordinator, repository } = setup(new MemoryOrderRepository(), cancel);

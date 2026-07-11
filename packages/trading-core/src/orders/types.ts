@@ -23,6 +23,7 @@ export interface TrackedOrder {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly exchangeOrderId?: string;
+  readonly cancelAttemptedAt?: number;
   readonly cumulativeFilledQuantity: string;
   readonly averageFillPrice?: string;
   readonly fees?: string;

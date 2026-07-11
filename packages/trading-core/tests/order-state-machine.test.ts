@@ -102,6 +102,22 @@ describe("order state machine", () => {
     expect(() => transitionOrder(filled, { type: "cancel-acknowledged", at: 106 })).toThrow();
   });
 
+  it("preserves a durable cancellation claim across partial fill updates", () => {
+    const pending = transitionOrder(acknowledged(), { type: "cancel-request", at: 104 });
+    const partial = transitionOrder(pending, {
+      type: "fill-snapshot",
+      cumulativeFilledQuantity: "1",
+      averageFillPrice: "100",
+      fees: "0.1",
+      at: 105,
+    });
+    expect(partial).toMatchObject({
+      status: "cancel-pending",
+      cancelAttemptedAt: 104,
+      cumulativeFilledQuantity: "1",
+    });
+  });
+
   it("makes terminal states immutable except identical duplicate events", () => {
     const rejected = transitionOrder(
       transitionOrder(proposed(), { type: "submit-start", at: 101 }),

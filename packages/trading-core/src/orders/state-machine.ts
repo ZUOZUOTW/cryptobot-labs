@@ -134,7 +134,13 @@ export function transitionOrder(order: TrackedOrder, event: OrderEvent): Tracked
       const complete = new ExactDecimal(event.cumulativeFilledQuantity).eq(order.approvedIntent.quantity);
       const zero = new ExactDecimal(event.cumulativeFilledQuantity).eq(0);
       return update(order, event.at, {
-        status: complete ? "filled" : zero ? (order.status === "unknown" ? "unknown" : "acknowledged") : "partially-filled",
+        status: complete
+          ? "filled"
+          : order.status === "cancel-pending"
+            ? "cancel-pending"
+            : zero
+              ? (order.status === "unknown" ? "unknown" : "acknowledged")
+              : "partially-filled",
         cumulativeFilledQuantity: event.cumulativeFilledQuantity,
         averageFillPrice: event.averageFillPrice ?? order.averageFillPrice,
         fees: event.fees ?? order.fees,
@@ -143,7 +149,7 @@ export function transitionOrder(order: TrackedOrder, event: OrderEvent): Tracked
     case "cancel-request":
     case "cancel-requested":
       if (order.status !== "acknowledged" && order.status !== "partially-filled") throw new Error("illegal cancel request");
-      return update(order, event.at, { status: "cancel-pending" });
+      return update(order, event.at, { status: "cancel-pending", cancelAttemptedAt: event.at });
     case "cancel-acknowledged":
       if (order.status !== "cancel-pending") throw new Error("illegal cancel acknowledgement");
       return update(order, event.at, { status: "cancelled" });
@@ -152,6 +158,7 @@ export function transitionOrder(order: TrackedOrder, event: OrderEvent): Tracked
       if (event.reason !== undefined && !reason(event.reason)) throw new TypeError("invalid cancel rejection reason");
       return update(order, event.at, {
         status: new ExactDecimal(order.cumulativeFilledQuantity).gt(0) ? "partially-filled" : "acknowledged",
+        cancelAttemptedAt: undefined,
         ...(event.reason === undefined ? {} : { reason: event.reason }),
       });
     case "reconciliation-missing":

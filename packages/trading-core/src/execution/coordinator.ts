@@ -435,6 +435,7 @@ export class ExecutionCoordinator {
   > {
     let base = candidate;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (base.cancelAttemptedAt !== undefined) return { status: "skipped" };
       if (base.status !== "acknowledged" && base.status !== "partially-filled") {
         return { status: "skipped" };
       }
