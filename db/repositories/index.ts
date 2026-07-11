@@ -8,3 +8,10 @@ export {
   type PairingCodeRecord,
   type DeviceCredentialRecord,
 } from "./devices";
+export {
+  createBacktestRepository,
+  type BacktestJobRecord,
+  type BacktestStatus,
+  type BacktestCursor,
+  type BacktestCompletionInput,
+} from "./backtests";
