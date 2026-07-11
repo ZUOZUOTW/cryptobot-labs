@@ -60,6 +60,20 @@ CREATE TABLE `backtest_jobs` (
 CREATE UNIQUE INDEX `backtest_jobs_id_user_uidx` ON `backtest_jobs` (`id`,`user_id`);--> statement-breakpoint
 CREATE INDEX `backtest_jobs_user_created_idx` ON `backtest_jobs` (`user_id`,`created_at`);--> statement-breakpoint
 CREATE INDEX `backtest_jobs_user_status_idx` ON `backtest_jobs` (`user_id`,`status`);--> statement-breakpoint
+CREATE TABLE `backtest_request_keys` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`key` text NOT NULL,
+	`request_hash` text NOT NULL,
+	`backtest_job_id` text NOT NULL,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`backtest_job_id`,`user_id`) REFERENCES `backtest_jobs`(`id`,`user_id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `backtest_request_keys_user_key_uidx` ON `backtest_request_keys` (`user_id`,`key`);--> statement-breakpoint
+CREATE UNIQUE INDEX `backtest_request_keys_job_uidx` ON `backtest_request_keys` (`backtest_job_id`);--> statement-breakpoint
+CREATE INDEX `backtest_request_keys_user_created_idx` ON `backtest_request_keys` (`user_id`,`created_at`);--> statement-breakpoint
 CREATE TABLE `backtest_results` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,

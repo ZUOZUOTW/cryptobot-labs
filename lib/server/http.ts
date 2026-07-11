@@ -20,6 +20,17 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   device_authentication_failed: "Device authentication failed.",
   conflict: "The request conflicts with the current resource version or state.",
   not_found: "The requested resource was not found.",
+  custom_strategy_runtime_unavailable: "Custom JavaScript backtests require the unavailable QuickJS sandbox.",
+  invalid_strategy_configuration: "The selected strategy configuration is invalid.",
+  strategy_request_mismatch: "The backtest request does not match the selected strategy version.",
+  historical_funding_requires_futures: "Historical funding is available only for futures backtests.",
+  invalid_historical_range: "The requested historical range is invalid or exceeds server limits.",
+  invalid_historical_interval: "The requested historical interval is unsupported.",
+  historical_dataset_incomplete: "WEEX historical candles do not satisfy the requested coverage policy.",
+  historical_funding_incomplete: "WEEX historical funding coverage is incomplete.",
+  data_fetch_failed: "WEEX public historical data could not be collected.",
+  backtest_execution_failed: "The historical backtest could not be completed.",
+  strategy_integrity_failed: "The selected immutable strategy version failed its integrity check.",
   internal: "An internal error occurred.",
 };
 

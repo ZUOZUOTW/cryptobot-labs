@@ -11,10 +11,12 @@ export {
 export {
   createBacktestRepository,
   type BacktestJobRecord,
+  type BacktestDetailRecord,
   type BacktestStatus,
   type BacktestCursor,
   type BacktestCompletionInput,
 } from "./backtests";
+export { createStrategyVersionRepository, type OwnedStrategyVersionRecord } from "./strategies";
 export {
   createDeploymentRepository,
   createCommandRepository,

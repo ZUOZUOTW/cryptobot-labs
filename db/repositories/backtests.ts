@@ -21,6 +21,30 @@ export interface BacktestJobRecord {
 
 export interface BacktestCursor { createdAt: number; id: string }
 
+export interface BacktestDetailRecord extends BacktestJobRecord {
+  datasetId: string | null;
+  datasetMarket: "spot" | "futures" | null;
+  datasetSymbol: string | null;
+  datasetInterval: string | null;
+  datasetSource: string | null;
+  requestedStartAt: number | null;
+  requestedEndAt: number | null;
+  actualStartAt: number | null;
+  actualEndAt: number | null;
+  datasetComplete: number | null;
+  gapsJson: string | null;
+  checksum: string | null;
+  resultId: string | null;
+  fundingJson: string | null;
+  metricsJson: string | null;
+  provenanceJson: string | null;
+  equityCurveJson: string | null;
+  engineVersion: string | null;
+  configurationHash: string | null;
+  strategyHash: string | null;
+  scriptHash: string | null;
+}
+
 export interface BacktestDatasetInput {
   id: string;
   market: "spot" | "futures";
@@ -64,6 +88,10 @@ const jobColumns = `id, user_id AS userId, strategy_version_id AS strategyVersio
   status, evidence_level AS evidenceLevel, request_json AS requestJson,
   error_code AS errorCode, error_message AS errorMessage, created_at AS createdAt,
   started_at AS startedAt, completed_at AS completedAt`;
+const joinedJobColumns = `j.id, j.user_id AS userId, j.strategy_version_id AS strategyVersionId,
+  j.status, j.evidence_level AS evidenceLevel, j.request_json AS requestJson,
+  j.error_code AS errorCode, j.error_message AS errorMessage, j.created_at AS createdAt,
+  j.started_at AS startedAt, j.completed_at AS completedAt`;
 
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const STATUS_TRANSITIONS: Readonly<Partial<Record<BacktestStatus, readonly BacktestStatus[]>>> = {
@@ -157,7 +185,74 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
       return row;
     },
 
+    async createIdempotent(input: { id: string; idempotencyId: string; idempotencyKey: string; requestHash: string;
+      userId: string; request: BacktestJobCreateDto; now: number }): Promise<{ job: BacktestJobRecord; idempotent: boolean }> {
+      exactInput(input, ["id", "idempotencyId", "idempotencyKey", "requestHash", "userId", "request", "now"]);
+      const owner = id(input.userId, "userId");
+      const key = text(input.idempotencyKey, "idempotency key", 128);
+      const digest = hash(input.requestHash);
+      const existing = async (): Promise<{ job: BacktestJobRecord; idempotent: true } | null> => {
+        const row = await database.prepare(`
+          SELECT ${joinedJobColumns}, k.request_hash AS requestHash FROM backtest_request_keys k
+          JOIN backtest_jobs j ON j.id = k.backtest_job_id AND j.user_id = k.user_id
+          WHERE k.user_id = ? AND k.key = ?
+        `).bind(owner, key).first<BacktestJobRecord & { requestHash: string }>();
+        if (!row) return null;
+        if (row.requestHash !== digest) throw new Error("idempotency key request conflict");
+        const { requestHash: _requestHash, ...job } = row;
+        void _requestHash;
+        return { job, idempotent: true };
+      };
+      const replay = await existing();
+      if (replay) return replay;
+      const request = parseBacktestJobCreateDto(input.request);
+      const jobId = id(input.id, "backtestJobId");
+      const now = time(input.now, "now");
+      try {
+        const result = await database.batch([
+          database.prepare(`
+            INSERT INTO backtest_jobs
+              (id, user_id, strategy_version_id, status, evidence_level, request_json, created_at)
+            SELECT ?, user_id, id, 'queued', 'historical', ?, ? FROM strategy_versions
+            WHERE user_id = ? AND id = ?
+          `).bind(jobId, safeJsonStringify(request, "backtest request", 32_768), now, owner,
+            id(request.strategyVersionId, "strategyVersionId")),
+          database.prepare(`
+            INSERT INTO backtest_request_keys (id, user_id, key, request_hash, backtest_job_id, created_at)
+            SELECT ?, user_id, ?, ?, id, ? FROM backtest_jobs WHERE user_id = ? AND id = ?
+          `).bind(id(input.idempotencyId, "idempotencyId"), key, digest, now, owner, jobId),
+        ]);
+        if (result.some((entry) => !entry.success) || !result.every((entry) => (entry.meta.changes ?? 0) === 1)) {
+          throw new Error("atomic idempotent backtest creation failed");
+        }
+      } catch (error) {
+        const raced = await existing();
+        if (raced) return raced;
+        throw error;
+      }
+      const job = await getById(owner, jobId);
+      if (!job) throw new Error("atomic idempotent backtest creation failed");
+      return { job, idempotent: false };
+    },
+
     getById,
+
+    getDetail(userId: string, jobId: string): Promise<BacktestDetailRecord | null> {
+      return database.prepare(`
+        SELECT ${joinedJobColumns}, d.id AS datasetId, d.market AS datasetMarket, d.symbol AS datasetSymbol,
+          d.interval AS datasetInterval, d.source AS datasetSource, d.requested_start_at AS requestedStartAt,
+          d.requested_end_at AS requestedEndAt, d.actual_start_at AS actualStartAt, d.actual_end_at AS actualEndAt,
+          d.complete AS datasetComplete, d.gaps_json AS gapsJson, d.checksum,
+          r.id AS resultId, r.funding_json AS fundingJson, r.metrics_json AS metricsJson,
+          r.provenance_json AS provenanceJson, r.equity_curve_json AS equityCurveJson,
+          r.engine_version AS engineVersion, r.configuration_hash AS configurationHash,
+          r.strategy_hash AS strategyHash, r.script_hash AS scriptHash
+        FROM backtest_jobs j
+        LEFT JOIN backtest_datasets d ON d.backtest_job_id = j.id AND d.user_id = j.user_id
+        LEFT JOIN backtest_results r ON r.backtest_job_id = j.id AND r.user_id = j.user_id
+        WHERE j.user_id = ? AND j.id = ?
+      `).bind(id(userId, "userId"), id(jobId, "backtestJobId")).first<BacktestDetailRecord>();
+    },
 
     async list(userId: string, options: { limit: number; cursor?: BacktestCursor }): Promise<{ items: BacktestJobRecord[]; nextCursor: BacktestCursor | null }> {
       exactInput(options, ["limit", "cursor"]);
@@ -314,14 +409,14 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
       exactInput(input, ["code", "message", "completedAt"]);
       const code = text(input.code, "error code", 64);
       const message = text(input.message, "error message", 512);
-      if (expected !== "running") throw new Error("invalid backtest failure transition");
+      if (expected !== "fetching-data" && expected !== "running") throw new Error("invalid backtest failure transition");
       return database.prepare(`
         UPDATE backtest_jobs SET status = 'failed', error_code = ?, error_message = ?, completed_at = ?
-        WHERE user_id = ? AND id = ? AND status = 'running'
+        WHERE user_id = ? AND id = ? AND status = ?
           AND NOT EXISTS (SELECT 1 FROM backtest_results WHERE backtest_job_id = ? AND user_id = ?)
         RETURNING ${jobColumns}
       `).bind(code, message, time(input.completedAt, "completedAt"), id(userId, "userId"),
-        id(jobId, "backtestJobId"), jobId, userId).first<BacktestJobRecord>();
+        id(jobId, "backtestJobId"), expected, jobId, userId).first<BacktestJobRecord>();
     },
   };
 }

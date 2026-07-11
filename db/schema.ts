@@ -162,6 +162,26 @@ export const backtestJobs = sqliteTable("backtest_jobs", {
   index("backtest_jobs_user_status_idx").on(table.userId, table.status),
 ]);
 
+/** User-scoped POST idempotency records. The request digest prevents a key from
+ * being reused for a different immutable backtest request. */
+export const backtestRequestKeys = sqliteTable("backtest_request_keys", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  backtestJobId: text("backtest_job_id").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (table) => [
+  foreignKey({
+    columns: [table.backtestJobId, table.userId],
+    foreignColumns: [backtestJobs.id, backtestJobs.userId],
+    name: "backtest_request_keys_job_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("backtest_request_keys_user_key_uidx").on(table.userId, table.key),
+  uniqueIndex("backtest_request_keys_job_uidx").on(table.backtestJobId),
+  index("backtest_request_keys_user_created_idx").on(table.userId, table.createdAt),
+]);
+
 export const backtestDatasets = sqliteTable("backtest_datasets", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
