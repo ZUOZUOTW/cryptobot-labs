@@ -17,6 +17,7 @@ function unusedDependencies(): ExecutionCoordinatorDependencies {
     repository: {
       getByClientOrderId: async () => null,
       listActive: async () => [],
+      claim: async (order) => ({ claimed: true, order }),
       save: async (order) => order,
     },
     exchange: {
@@ -64,6 +65,7 @@ describe("ExecutionCoordinator emergency stop", () => {
       repository: {
         getByClientOrderId: vi.fn(async () => null),
         listActive: vi.fn(async () => []),
+        claim: vi.fn(async (order) => ({ claimed: true as const, order })),
         save: vi.fn(async (order) => order),
       },
       exchange,

@@ -38,9 +38,20 @@ export type RiskEvaluator = (
   instrument: InstrumentRules,
 ) => RiskDecision | Promise<RiskDecision>;
 
+export type ProposalClaim =
+  | { readonly claimed: true; readonly order: TrackedOrder }
+  | { readonly claimed: false; readonly reason: "active-order-conflict" }
+  | {
+      readonly claimed: false;
+      readonly reason: "client-order-id-exists";
+      readonly order: TrackedOrder;
+    };
+
 export interface OrderRepository {
   getByClientOrderId(clientOrderId: string): Promise<TrackedOrder | null>;
   listActive(deploymentId: string, symbol?: string): Promise<readonly TrackedOrder[]>;
+  /** Atomically persists a proposal only when its deployment and symbol have no active claim. */
+  claim(order: TrackedOrder): Promise<ProposalClaim>;
   save(order: TrackedOrder, expectedVersion: number | null): Promise<TrackedOrder>;
 }
 

@@ -32,6 +32,24 @@ class MemoryOrderRepository implements OrderRepository {
     this.orders.set(order.clientOrderId, order);
     return order;
   }
+
+  async claim(order: TrackedOrder): Promise<
+    | { readonly claimed: true; readonly order: TrackedOrder }
+    | { readonly claimed: false; readonly reason: "active-order-conflict" }
+    | { readonly claimed: false; readonly reason: "client-order-id-exists"; readonly order: TrackedOrder }
+  > {
+    const current = this.orders.get(order.clientOrderId);
+    if (current !== undefined) {
+      return { claimed: false, reason: "client-order-id-exists", order: current };
+    }
+    const conflict = [...this.orders.values()].some((candidate) =>
+      candidate.deploymentId === order.deploymentId &&
+      candidate.approvedIntent.symbol === order.approvedIntent.symbol &&
+      ["proposed", "submitting", "acknowledged", "partially-filled", "cancel-pending", "unknown"].includes(candidate.status));
+    if (conflict) return { claimed: false, reason: "active-order-conflict" };
+    this.orders.set(order.clientOrderId, order);
+    return { claimed: true, order };
+  }
 }
 
 const signal: StrategySignal = {
@@ -361,13 +379,10 @@ describe("ExecutionCoordinator", () => {
     const repository = new MemoryOrderRepository();
     const get = vi.spyOn(repository, "getByClientOrderId");
     const createSave = vi.fn();
-    vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
-      if (expectedVersion === null) {
-        createSave();
-        await gate;
-        throw new Error("create failed");
-      }
-      return order;
+    vi.spyOn(repository, "claim").mockImplementation(async () => {
+      createSave();
+      await gate;
+      throw new Error("create failed");
     });
     const { coordinator } = setup({ repository });
     const pending = coordinator.propose(signal, executionContext);
@@ -451,5 +466,83 @@ describe("ExecutionCoordinator", () => {
     if (outcome.status !== "submitted") throw new Error("unexpected outcome");
     expect(outcome.order.status).toBe("acknowledged");
     expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("acknowledged");
+  });
+
+  it("atomically prevents distinct ids from submitting the same deployment symbol", async () => {
+    const repository = new MemoryOrderRepository();
+    let lookups = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    repository.listActive = vi.fn(async () => {
+      lookups += 1;
+      if (lookups === 2) release();
+      await gate;
+      return [];
+    });
+    const exchange = {
+      submit: vi.fn(async () => ({ status: "acknowledged" as const, exchangeOrderId: "exchange-1" })),
+      cancel: vi.fn(), findByClientOrderId: vi.fn(),
+    };
+    const first = setup({ repository, exchange }).coordinator;
+    const second = setup({ repository, exchange }).coordinator;
+    const outcomes = await Promise.all([
+      first.propose(signal, executionContext),
+      second.propose({ ...signal, id: "signal-2" }, { ...executionContext, signalSequence: 2 }),
+    ]);
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["blocked", "submitted"]);
+    expect(exchange.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes a durable proposal after breaker denial", async () => {
+    const circuitBreaker = {
+      tryAcquire: vi.fn()
+        .mockReturnValueOnce({ allowed: false as const, reason: "cooldown" as const })
+        .mockReturnValue({ allowed: true as const, token: "token" }),
+      recordSuccess: vi.fn(() => true),
+      recordFailure: vi.fn(() => true),
+    };
+    const { coordinator, repository, exchange } = setup({ circuitBreaker });
+    await expect(coordinator.propose(signal, executionContext)).resolves.toEqual({
+      status: "blocked", reason: "circuit-breaker",
+    });
+    expect([...repository.orders.values()][0]?.status).toBe("proposed");
+    const retried = await coordinator.propose(signal, executionContext);
+    expect(retried.status).toBe("submitted");
+    expect(exchange.submit).toHaveBeenCalledOnce();
+  });
+
+  it("resumes a durable proposal after emergency stop and paper resume", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const riskEvaluator = vi.fn(async () => {
+      await gate;
+      return evaluateOrderRisk(policy, riskContext, {
+        symbol: "BTCUSDT", side: "buy", quantity: "0.1", price: "1000",
+        expectedSlippageBps: "25", reduceOnly: false,
+      }, instrument);
+    });
+    const { coordinator, repository, exchange } = setup({ riskEvaluator });
+    const first = coordinator.propose(signal, executionContext);
+    await vi.waitFor(() => expect(riskEvaluator).toHaveBeenCalledOnce());
+    coordinator.emergencyStop();
+    release();
+    await expect(first).resolves.toEqual({ status: "blocked", reason: "emergency-stop" });
+    expect([...repository.orders.values()][0]?.status).toBe("proposed");
+    expect(coordinator.resumePaper("paper")).toBe(true);
+    const retried = await coordinator.propose(signal, executionContext);
+    expect(retried.status).toBe("submitted");
+    expect(exchange.submit).toHaveBeenCalledOnce();
+  });
+
+  it("re-evaluates a durable proposal after a transient risk failure", async () => {
+    const riskEvaluator = vi.fn()
+      .mockRejectedValueOnce(new Error("risk unavailable"))
+      .mockImplementation(evaluateOrderRisk);
+    const { coordinator, repository, exchange } = setup({ riskEvaluator });
+    await expect(coordinator.propose(signal, executionContext)).rejects.toThrow("risk unavailable");
+    expect([...repository.orders.values()][0]?.status).toBe("proposed");
+    const retried = await coordinator.propose(signal, executionContext);
+    expect(retried.status).toBe("submitted");
+    expect(exchange.submit).toHaveBeenCalledOnce();
   });
 });

@@ -13,6 +13,7 @@ import type {
   ExecutionContext,
   ExecutionCoordinatorDependencies,
   ExecutionOutcome,
+  ProposalClaim,
 } from "./types";
 
 export const MAX_PENDING = 1_024;
@@ -142,9 +143,10 @@ export class ExecutionCoordinator {
       const existing = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       if (existing !== null) {
-        return sameIntent(existing.approvedIntent, intent)
-          ? { status: "idempotent", order: existing }
-          : { status: "blocked", reason: "client-order-id-collision" };
+        if (!sameIntent(existing.approvedIntent, intent)) {
+          return { status: "blocked", reason: "client-order-id-collision" };
+        }
+        if (existing.status !== "proposed") return { status: "idempotent", order: existing };
       }
 
       const active = this.#inFlight.get(clientOrderId);
@@ -160,7 +162,12 @@ export class ExecutionCoordinator {
           : { status: "blocked", reason: "client-order-id-collision" };
       }
 
-      const work = this.#execute(context, clientOrderId, intent);
+      const work = this.#execute(
+        context,
+        clientOrderId,
+        intent,
+        existing?.status === "proposed" ? existing : null,
+      );
       this.#inFlight.set(clientOrderId, work);
       try {
         return await work;
@@ -176,33 +183,51 @@ export class ExecutionCoordinator {
     context: ExecutionContext,
     clientOrderId: string,
     intent: ApprovedOrderIntent,
+    existingProposal: TrackedOrder | null,
   ): Promise<ExecutionOutcome> {
     const conflicts = await this.#dependencies.repository.listActive(
       context.deploymentId,
       intent.symbol,
     );
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-    if (conflicts.length > 0) return { status: "blocked", reason: "active-order-conflict" };
-    if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-
-    let order = createTrackedOrder({
-      deploymentId: context.deploymentId,
-      clientOrderId,
-      approvedIntent: intent,
-      at: context.now,
-    });
-    try {
-      order = await this.#dependencies.repository.save(order, null);
-    } catch (createFailure) {
-      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-      const raced = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
-      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-      if (raced === null) throw createFailure;
-      return sameIntent(raced.approvedIntent, intent)
-        ? { status: "idempotent", order: raced }
-        : { status: "blocked", reason: "client-order-id-collision" };
+    if (conflicts.some((order) => order.clientOrderId !== clientOrderId)) {
+      return { status: "blocked", reason: "active-order-conflict" };
     }
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+
+    let order: TrackedOrder;
+    if (existingProposal !== null) {
+      order = existingProposal;
+    } else {
+      const proposal = createTrackedOrder({
+        deploymentId: context.deploymentId,
+        clientOrderId,
+        approvedIntent: intent,
+        at: context.now,
+      });
+      let claim: ProposalClaim;
+      try {
+        claim = await this.#dependencies.repository.claim(proposal);
+      } catch (claimFailure) {
+        if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+        throw claimFailure;
+      }
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+      if (!claim.claimed) {
+        if (claim.reason === "active-order-conflict") {
+          return { status: "blocked", reason: "active-order-conflict" };
+        }
+        if (!sameIntent(claim.order.approvedIntent, intent)) {
+          return { status: "blocked", reason: "client-order-id-collision" };
+        }
+        if (claim.order.status !== "proposed") {
+          return { status: "idempotent", order: claim.order };
+        }
+        order = claim.order;
+      } else {
+        order = claim.order;
+      }
+    }
 
     const risk = await this.#dependencies.riskEvaluator(
       context.riskPolicy,
@@ -237,6 +262,19 @@ export class ExecutionCoordinator {
       order = await this.#dependencies.repository.save(order, order.version - 1);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
     } catch (failure) {
+      try {
+        const winner = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+        if (
+          winner !== null &&
+          winner.status !== "proposed" &&
+          sameIntent(winner.approvedIntent, intent)
+        ) {
+          settlement.success();
+          return { status: "idempotent", order: winner };
+        }
+      } catch {
+        // Preserve the original transition or persistence failure.
+      }
       settlement.failure("unknown");
       throw failure;
     } finally {
