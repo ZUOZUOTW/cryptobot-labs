@@ -6,7 +6,7 @@ import type {
 import { isExecutionTarget } from "@cryptobot-labs/trading-core";
 
 import { WeexApiError } from "./errors";
-import { isBoundedIdentifier, isCanonicalNonnegativeDecimal, isPrivateSymbol } from "./orders";
+import { isBoundedIdentifier, isCanonicalNonnegativeDecimal, isCanonicalPositiveDecimal, isPrivateSymbol } from "./orders";
 import { WeexCredentials } from "./private-client";
 import { signWeexRequest } from "./signing";
 
@@ -17,6 +17,9 @@ const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_ACKNOWLEDGEMENT_TIMEOUT_MS = 10_000;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_PUSH_ENTRIES = 100;
+const MAX_LISTENERS = 1024;
+const MAX_TRACKED_FILLS = 4096;
+const NON_RETRYABLE_CLOSE_CODES = new Set([1002, 1003, 1007, 1008, 4001, 4003]);
 
 export interface PrivateSocketEventMap {
   readonly open: Record<string, never>;
@@ -93,6 +96,11 @@ interface OrderPush {
   readonly hints: readonly OrderHint[];
 }
 
+interface TrackedFill {
+  readonly quantity: string;
+  readonly terminal: boolean;
+}
+
 interface SocketListeners {
   readonly open: (event: PrivateSocketEventMap["open"]) => void;
   readonly message: (event: PrivateSocketEventMap["message"]) => void;
@@ -128,6 +136,49 @@ function compareDecimals(left: string, right: string): number {
   const leftValue = BigInt(leftInteger + leftFraction.padEnd(scale, "0"));
   const rightValue = BigInt(rightInteger + rightFraction.padEnd(scale, "0"));
   return leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
+}
+
+function hasExactKeys(source: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(source).sort();
+  return keys.length === expected.length && expected.slice().sort().every((key, index) => keys[index] === key);
+}
+
+function validateSnapshot(value: unknown, hint: OrderHint): Readonly<ExchangeOrderSnapshot> {
+  const source = record(value, "authoritative REST order snapshot");
+  if (source.clientOrderId !== hint.clientOrderId || source.exchangeOrderId !== hint.exchangeOrderId ||
+      source.symbol !== hint.symbol || source.side !== hint.side ||
+      typeof source.quantity !== "string" || !isCanonicalPositiveDecimal(source.quantity) ||
+      (hint.quantity !== "0" && source.quantity !== hint.quantity) ||
+      typeof source.cumulativeFilledQuantity !== "string" ||
+      !isCanonicalNonnegativeDecimal(source.cumulativeFilledQuantity)) {
+    throw schema("REST order identity mismatch");
+  }
+  const statuses = new Set(["NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED"]);
+  if (typeof source.status !== "string" || !statuses.has(source.status)) throw schema("Invalid REST order status");
+  if (source.averageFillPrice !== undefined && !isCanonicalPositiveDecimal(source.averageFillPrice)) {
+    throw schema("Invalid REST average fill price");
+  }
+  if (source.fees !== undefined && !isCanonicalNonnegativeDecimal(source.fees)) throw schema("Invalid REST fees");
+  const fillComparison = compareDecimals(source.cumulativeFilledQuantity, source.quantity);
+  if (fillComparison > 0 ||
+      (source.status === "NEW" && source.cumulativeFilledQuantity !== "0") ||
+      (source.status === "PARTIALLY_FILLED" &&
+        (source.cumulativeFilledQuantity === "0" || fillComparison >= 0)) ||
+      (source.status === "FILLED" && fillComparison !== 0) ||
+      (source.status === "REJECTED" && source.cumulativeFilledQuantity !== "0")) {
+    throw schema("Inconsistent REST order fill state");
+  }
+  return Object.freeze({
+    clientOrderId: source.clientOrderId,
+    exchangeOrderId: source.exchangeOrderId,
+    symbol: source.symbol,
+    side: source.side,
+    quantity: source.quantity,
+    status: source.status,
+    cumulativeFilledQuantity: source.cumulativeFilledQuantity,
+    ...(source.averageFillPrice === undefined ? {} : { averageFillPrice: source.averageFillPrice }),
+    ...(source.fees === undefined ? {} : { fees: source.fees }),
+  } as ExchangeOrderSnapshot);
 }
 
 function socketUrl(target: ExecutionTarget): string {
@@ -196,7 +247,7 @@ export class WeexPrivateStream {
   readonly #acknowledgementScheduler: (delayMs: number) => Promise<void>;
   readonly #userAgent: string;
   readonly #listeners = new Set<PrivateOrderListener>();
-  readonly #lastFills = new Map<string, string>();
+  readonly #lastFills = new Map<string, TrackedFill>();
 
   #state: PrivateStreamState = "idle";
   #socket: PrivateSocket | null = null;
@@ -249,6 +300,9 @@ export class WeexPrivateStream {
 
   subscribeOrders(listener: PrivateOrderListener): () => void {
     if (typeof listener !== "function") throw validation("Invalid private order listener");
+    if (!this.#listeners.has(listener) && this.#listeners.size >= MAX_LISTENERS) {
+      throw validation("Private order listener limit exceeded");
+    }
     this.#listeners.add(listener);
     return () => { this.#listeners.delete(listener); };
   }
@@ -307,7 +361,7 @@ export class WeexPrivateStream {
         return;
       }
       if (!socket || typeof socket.addEventListener !== "function" || typeof socket.send !== "function" ||
-          typeof socket.close !== "function") {
+          typeof socket.removeEventListener !== "function" || typeof socket.close !== "function") {
         settleReject(validation("Invalid private websocket"));
         return;
       }
@@ -338,16 +392,21 @@ export class WeexPrivateStream {
           if (this.#onMessage(event.data)) settleResolve();
           else if (this.#state === "error") settleReject(schema("Invalid websocket subscription acknowledgement"));
         },
-        close: () => {
+        close: (event) => {
           if (!this.#subscribed) settleReject(new WeexApiError("WEEX websocket closed before subscription", {
             category: "network", retryable: true,
           }));
-          this.#onClose(socket);
+          this.#onClose(socket, event);
         },
         error: () => {
-          if (!opened) settleReject(new WeexApiError("WEEX websocket connection failed", {
-            category: "network", retryable: true,
-          }));
+          if (!opened) {
+            settleReject(new WeexApiError("WEEX websocket connection failed", {
+              category: "network", retryable: true,
+            }));
+            this.#fatal("connection-error");
+          } else {
+            this.#onClose(socket, { code: 1006, reason: "socket-error", wasClean: false });
+          }
         },
       };
       this.#socketListeners = listeners;
@@ -368,12 +427,14 @@ export class WeexPrivateStream {
       parsed = JSON.parse(data);
       const source = record(parsed, "private websocket message");
       if (source.type === "ping") {
-        safeTimestamp(source.time, "private ping time");
+        if (!hasExactKeys(source, ["time", "type"])) throw schema("Invalid private ping schema");
+        const pingTime = safeTimestamp(source.time, "private ping time");
+        this.#clock.assertPrivateRequestWindow(pingTime);
         this.#socket?.send('{"method":"PONG","id":1}');
         return false;
       }
       if (source.id === 1 && Object.hasOwn(source, "result")) {
-        if (this.#subscribed || source.result !== true) {
+        if (!hasExactKeys(source, ["id", "result"]) || this.#subscribed || source.result !== true) {
           this.#fatal("invalid-subscription-ack");
           return false;
         }
@@ -408,37 +469,45 @@ export class WeexPrivateStream {
   async #processPush(push: OrderPush): Promise<void> {
     if (this.#state !== "open") return;
     for (const hint of push.hints) {
-      const snapshot = await this.#lookup.findByClientOrderId({
+      const rawSnapshot = await this.#lookup.findByClientOrderId({
         target: this.#target,
         symbol: hint.symbol,
         clientOrderId: hint.clientOrderId,
         exchangeOrderId: hint.exchangeOrderId,
       });
-      if (this.#state !== "open" || snapshot === null) continue;
-      if (snapshot.clientOrderId !== hint.clientOrderId || snapshot.exchangeOrderId !== hint.exchangeOrderId ||
-          snapshot.symbol !== hint.symbol || snapshot.side !== hint.side ||
-          (hint.quantity !== "0" && snapshot.quantity !== hint.quantity) ||
-          !isCanonicalNonnegativeDecimal(snapshot.cumulativeFilledQuantity)) {
-        throw schema("REST order identity mismatch");
-      }
+      if (this.#state !== "open" || rawSnapshot === null) continue;
+      const snapshot = validateSnapshot(rawSnapshot, hint);
       const key = `${this.#target.market}:${this.#target.mode}:${snapshot.clientOrderId}`;
       const previousFill = this.#lastFills.get(key);
-      if (previousFill !== undefined && compareDecimals(snapshot.cumulativeFilledQuantity, previousFill) < 0) continue;
-      this.#lastFills.set(key, snapshot.cumulativeFilledQuantity);
+      if (previousFill !== undefined && compareDecimals(snapshot.cumulativeFilledQuantity, previousFill.quantity) < 0) continue;
+      if (previousFill === undefined && this.#lastFills.size >= MAX_TRACKED_FILLS) {
+        const terminalKey = this.#lastFills.entries().find(([, tracked]) => tracked.terminal)?.[0];
+        if (terminalKey === undefined) throw schema("Private fill tracker capacity exceeded");
+        this.#lastFills.delete(terminalKey);
+      }
+      const terminal = snapshot.status === "FILLED" || snapshot.status === "CANCELED" || snapshot.status === "REJECTED";
+      this.#lastFills.delete(key);
+      this.#lastFills.set(key, { quantity: snapshot.cumulativeFilledQuantity, terminal });
       const event: PrivateOrderEvent = Object.freeze({
         target: this.#target,
         accountVersion: push.accountVersion,
         eventTime: push.eventTime,
         snapshot,
       });
-      for (const listener of this.#listeners) listener(event);
+      for (const listener of this.#listeners) {
+        try { listener(event); } catch { /* isolate consumer failures from the trading stream */ }
+      }
     }
   }
 
-  #onClose(socket: PrivateSocket): void {
+  #onClose(socket: PrivateSocket, event: PrivateSocketEventMap["close"]): void {
     if (this.#socket !== socket) return;
     this.#detachSocket(false);
     if (this.#explicitlyClosed || this.#state === "error" || this.#state === "closed") return;
+    if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) {
+      this.#state = "error";
+      return;
+    }
     if (this.#reconnectAttempts >= this.#maximumReconnectAttempts) {
       this.#state = "error";
       return;
@@ -474,7 +543,7 @@ export class WeexPrivateStream {
     this.#subscribed = false;
     if (socket && listeners) {
       for (const type of Object.keys(listeners) as (keyof PrivateSocketEventMap)[]) {
-        socket.removeEventListener(type, listeners[type] as never);
+        try { socket.removeEventListener(type, listeners[type] as never); } catch { /* continue cleanup */ }
       }
     }
     if (socket && (close || code !== undefined)) {

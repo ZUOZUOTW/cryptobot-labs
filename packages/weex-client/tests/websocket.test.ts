@@ -196,6 +196,29 @@ describe("WEEX V3 private stream", () => {
     expect(socket.closeCalls).toHaveLength(1);
   });
 
+  it("rejects an acknowledgement carrying conflicting authentication fields", async () => {
+    const { stream, sockets } = setup();
+    const connection = stream.connect();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].emit("open", {});
+    sockets[0].emit("message", {
+      data: JSON.stringify({ id: 1, result: true, code: "AUTH_FAILED" }),
+    });
+    await expect(connection).rejects.toMatchObject({ category: "schema" });
+    expect(stream.state).toBe("error");
+  });
+
+  it("validates private ping time against the synchronized clock window", async () => {
+    const { stream, sockets, clock } = setup();
+    const socket = await connect(stream, sockets);
+    clock.assertPrivateRequestWindow.mockImplementationOnce(() => {
+      throw new Error("stale ping");
+    });
+    socket.emit("message", { data: JSON.stringify({ type: "ping", time: "1700000000000" }) });
+    expect(stream.state).toBe("error");
+    expect(socket.sent).not.toContain('{"method":"PONG","id":1}');
+  });
+
   it("rejects malformed events and REST identity mismatches without reaching listeners", async () => {
     const { stream, sockets, lookup } = setup();
     const listener = vi.fn();
@@ -206,6 +229,21 @@ describe("WEEX V3 private stream", () => {
     await vi.waitFor(() => expect(stream.state).toBe("error"));
     expect(listener).not.toHaveBeenCalled();
     expect(socket.closeCalls).toHaveLength(1);
+  });
+
+  it("never emits malformed or mutable REST snapshots", async () => {
+    const { stream, sockets, lookup } = setup();
+    const listener = vi.fn();
+    stream.subscribeOrders(listener);
+    const socket = await connect(stream, sockets);
+    lookup.findByClientOrderId.mockResolvedValueOnce({
+      ...snapshot(),
+      status: "FILLED",
+      cumulativeFilledQuantity: "1",
+    });
+    socket.emit("message", { data: push() });
+    await vi.waitFor(() => expect(stream.state).toBe("error"));
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("ignores duplicate and out-of-order account versions", async () => {
@@ -302,6 +340,16 @@ describe("WEEX V3 private stream", () => {
     stream.close();
     expect(stream.state).toBe("closed");
     expect(sockets[2].listeners.size).toBe(0);
+  });
+
+  it("never reconnects authentication or policy close codes", async () => {
+    const scheduler = vi.fn(async () => {});
+    const { stream, sockets, factory } = setup(spot, { scheduler });
+    const socket = await connect(stream, sockets);
+    socket.emit("close", { code: 1008, reason: "authentication rejected", wasClean: false });
+    expect(stream.state).toBe("error");
+    expect(scheduler).not.toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledTimes(1);
   });
 
   it("does not use ambient WebSocket or fetch", async () => {
