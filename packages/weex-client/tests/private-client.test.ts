@@ -125,7 +125,7 @@ describe("WeexPrivateClient", () => {
       target: request.target, symbol: "BTCUSDT", clientOrderId: "cbl-1",
     })).resolves.toMatchObject({ status: "PARTIALLY_FILLED", side: "buy", quantity: "0.001" });
     expect(transport.requests[1]?.url).toBe(
-      "https://api-spot.weex.com/api/v3/order?origClientOrderId=cbl-1&symbol=BTCUSDT",
+      "https://api-spot.weex.com/api/v3/order?origClientOrderId=cbl-1",
     );
   });
 
@@ -143,8 +143,117 @@ describe("WeexPrivateClient", () => {
       target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "target",
     })).resolves.toMatchObject({ exchangeOrderId: "9", status: "FILLED" });
     expect(transport.requests.map(({ url }) => url)).toEqual([
-      "https://api-contract.weex.com/capi/v3/openOrders?limit=100&symbol=BTCUSDT",
-      "https://api-contract.weex.com/capi/v3/order/history?limit=100&symbol=BTCUSDT",
+      "https://api-contract.weex.com/capi/v3/openOrders?limit=100&page=1&symbol=BTCUSDT",
+      "https://api-contract.weex.com/capi/v3/order/history?limit=100&page=1&symbol=BTCUSDT",
+    ]);
+  });
+
+  it("paginates futures searches explicitly and stops each route on a short page", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, index) => ({ clientOrderId: `other-${index}` }));
+    const transport = new ScriptedTransport([ok(fullPage), ok([]), ok([])]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.findOrderByClientOrderId({
+      target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "missing",
+    })).resolves.toBeNull();
+    expect(transport.requests.map(({ url }) => url)).toEqual([
+      "https://api-contract.weex.com/capi/v3/openOrders?limit=100&page=1&symbol=BTCUSDT",
+      "https://api-contract.weex.com/capi/v3/openOrders?limit=100&page=2&symbol=BTCUSDT",
+      "https://api-contract.weex.com/capi/v3/order/history?limit=100&page=1&symbol=BTCUSDT",
+    ]);
+  });
+
+  it("fails closed when an exact futures client id appears more than once", async () => {
+    const duplicate = { orderId: "8", clientOrderId: "duplicate", symbol: "BTCUSDT", side: "BUY", origQty: "1", status: "NEW" };
+    const transport = new ScriptedTransport([ok([duplicate]), ok([{ ...duplicate, orderId: "9" }])]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.findOrderByClientOrderId({
+      target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "duplicate",
+    })).rejects.toMatchObject({ category: "schema" });
+  });
+
+  it("accepts a risk-approved spot exit while omitting unsupported reduceOnly", async () => {
+    const transport = new ScriptedTransport([ok({ orderId: "44", clientOrderId: "spot-exit" })]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.submitOrder({
+      ...request,
+      clientOrderId: "spot-exit",
+      intent: { ...request.intent, side: "sell", reduceOnly: true },
+    })).resolves.toMatchObject({ status: "acknowledged" });
+    expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
+      newClientOrderId: "spot-exit", price: "30000.1", quantity: "0.001",
+      side: "SELL", symbol: "BTCUSDT", timeInForce: "GTC", type: "LIMIT",
+    });
+  });
+
+  it("verifies live futures balance and hedge-mode account config before submitting", async () => {
+    const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
+    const transport = new ScriptedTransport([
+      ok([{ asset: "USDT", balance: "100", availableBalance: "90", unrealizePnl: "-1" }]),
+      ok({ canTrade: true, canDeposit: true, canWithdraw: false, dualSidePosition: true, updateTime: 1_700_000_000_000 }),
+      ok({ orderId: "45", clientOrderId: "future-1" }),
+    ]);
+    const client = new WeexPrivateClient({
+      transport, credentials, clock,
+      rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
+    });
+    await expect(client.verifyAccount({ market: "futures", mode: "live" })).resolves.toMatchObject({
+      canTrade: true, withdrawalPermission: "absent", positionMode: "hedge", balanceAssetCount: 1,
+    });
+    await expect(client.submitOrder({
+      ...request, target: { market: "futures", mode: "live" }, clientOrderId: "future-1",
+    })).resolves.toMatchObject({ status: "acknowledged" });
+    expect(transport.requests.map(({ url }) => url)).toEqual([
+      "https://api-contract.weex.com/capi/v3/account/balance",
+      "https://api-contract.weex.com/capi/v3/account/accountConfig",
+      "https://api-contract.weex.com/capi/v3/order",
+    ]);
+  });
+
+  it("fails closed before live futures submit when account config is one-way", async () => {
+    const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
+    const transport = new ScriptedTransport([
+      ok([{ asset: "USDT", balance: "100", availableBalance: "90", unrealizePnl: "0" }]),
+      ok({ canTrade: true, canDeposit: true, canWithdraw: false, dualSidePosition: false, updateTime: 1_700_000_000_000 }),
+    ]);
+    const client = new WeexPrivateClient({
+      transport, credentials, clock,
+      rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
+    });
+    await expect(client.verifyAccount({ market: "futures", mode: "live" })).resolves.toMatchObject({ positionMode: "one-way" });
+    await expect(client.submitOrder({
+      ...request, target: { market: "futures", mode: "live" }, clientOrderId: "future-1",
+    })).rejects.toMatchObject({ category: "validation" });
+    expect(transport.requests).toHaveLength(2);
+  });
+
+  it("uses direct futures orderId lookup and validates the returned exchange id", async () => {
+    const transport = new ScriptedTransport([ok({
+      orderId: "91", clientOrderId: "direct-1", symbol: "BTCUSDT", side: "BUY",
+      origQty: "1", executedQty: "0", status: "NEW",
+    })]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.findOrderByClientOrderId({
+      target: { market: "futures", mode: "live" }, symbol: "BTCUSDT",
+      clientOrderId: "direct-1", exchangeOrderId: "91",
+    })).resolves.toMatchObject({ exchangeOrderId: "91" });
+    expect(transport.requests[0]?.url).toBe("https://api-contract.weex.com/capi/v3/order?orderId=91");
+  });
+
+  it("uses target-specific exact cancellation queries and requires spot CANCELED", async () => {
+    const transport = new ScriptedTransport([
+      ok({ orderId: "51", clientOrderId: "cancel-spot", symbol: "BTCUSDT", status: "CANCELED" }),
+      ok({ orderId: "52", clientOrderId: "cancel-future" }),
+    ]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.cancelOrder({
+      target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "cancel-spot",
+    })).resolves.toEqual({ status: "cancelled" });
+    await expect(client.cancelOrder({
+      target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "cancel-future", exchangeOrderId: "52",
+    })).resolves.toEqual({ status: "cancelled" });
+    expect(transport.requests.map(({ url }) => url)).toEqual([
+      "https://api-spot.weex.com/api/v3/order?origClientOrderId=cancel-spot&symbol=BTCUSDT",
+      "https://api-contract.weex.com/capi/v3/order?orderId=52",
     ]);
   });
 
@@ -189,6 +298,30 @@ describe("WeexPrivateClient", () => {
     await expect(client.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
     expect(transport.requests).toHaveLength(0);
     await expect(client.verifyAccount({ market: "spot", mode: "live" })).rejects.toMatchObject({ category: "schema" });
+  });
+
+  it("keeps demo account permissions and position mode unknown with strict signed PnL", async () => {
+    const transport = new ScriptedTransport([
+      ok([{ asset: "USDT", balance: "10", availableBalance: "9", unrealizePnl: "-0.5" }]),
+    ]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await expect(client.verifyAccount({ market: "futures", mode: "futures-demo" })).resolves.toMatchObject({
+      canTrade: "unknown", withdrawalPermission: "unknown", positionMode: "unknown",
+    });
+    expect(transport.requests[0]?.url).toBe("https://api-contract.weex.com/capi/v3/sim/balance");
+  });
+
+  it("enforces the official futures client id length before transport", async () => {
+    const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
+    const transport = new ScriptedTransport([]);
+    const client = new WeexPrivateClient({
+      transport, credentials, clock,
+      rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
+    });
+    await expect(client.submitOrder({
+      ...request, target: { market: "futures", mode: "futures-demo" }, clientOrderId: "x".repeat(37),
+    })).rejects.toMatchObject({ category: "validation" });
+    expect(transport.requests).toHaveLength(0);
   });
 
   it("does not serialize credentials", () => {

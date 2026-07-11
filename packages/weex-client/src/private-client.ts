@@ -17,6 +17,7 @@ import { WeexApiError, mapWeexError } from "./errors";
 import {
   isBoundedIdentifier,
   isCanonicalPositiveDecimal,
+  isFuturesClientOrderId,
   isPrivateSymbol,
   parseAcknowledgedOrder,
   parseCancellation,
@@ -41,6 +42,9 @@ const ORIGIN = {
 } as const;
 const MAX_RULES_AGE_MS = 5 * 60_000;
 const MAX_GET_ATTEMPTS = 3;
+const MAX_ORDER_SEARCH_PAGES = 10;
+const ORDER_SEARCH_PAGE_SIZE = 100;
+const MAX_IDENTITY_CACHE = 1_024;
 
 export interface PrivateClock {
   now(): number;
@@ -87,6 +91,7 @@ export interface VerifiedAccountSummary {
   readonly canTrade: boolean | "unknown";
   readonly readPermission: true;
   readonly withdrawalPermission: "absent" | "present" | "unknown";
+  readonly positionMode: "hedge" | "one-way" | "unknown";
   readonly balanceAssetCount: number;
 }
 
@@ -124,6 +129,11 @@ function accountRoute(target: ExecutionTarget): Route {
     path: target.mode === "live" ? "/capi/v3/account/balance" : "/capi/v3/sim/balance",
   };
 }
+
+const FUTURES_ACCOUNT_CONFIG: Route = {
+  origin: ORIGIN.futures,
+  path: "/capi/v3/account/accountConfig",
+};
 
 function orderRoute(target: ExecutionTarget): Route {
   if (target.market === "spot") return { origin: ORIGIN.spot, path: "/api/v3/order" };
@@ -170,15 +180,22 @@ function unwrapGet(body: unknown): unknown {
   return envelope.data;
 }
 
-function validateBalanceCollection(value: unknown): number {
+const UNSIGNED_AMOUNT = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const SIGNED_AMOUNT = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+
+function validateBalanceCollection(value: unknown, market: "spot" | "futures"): number {
   if (!Array.isArray(value) || value.length > 500) throw schema("Invalid account balance collection");
   for (const item of value) {
     const balance = record(item, "account balance");
     const asset = balance.asset ?? balance.coin;
-    if (typeof asset !== "string" || asset.length < 1 || asset.length > 32) throw schema("Invalid account balance asset");
-    for (const key of ["free", "locked", "balance", "availableBalance", "crossWalletBalance"] as const) {
+    if (typeof asset !== "string" || !/^[A-Z0-9]{1,16}$/.test(asset)) throw schema("Invalid account balance asset");
+    const required = market === "spot"
+      ? ["free", "locked"] as const
+      : ["balance", "availableBalance", "unrealizePnl"] as const;
+    for (const key of required) {
       const amount = balance[key];
-      if (amount !== undefined && (typeof amount !== "string" || !/^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/.test(amount))) {
+      const pattern = key === "unrealizePnl" ? SIGNED_AMOUNT : UNSIGNED_AMOUNT;
+      if (typeof amount !== "string" || !pattern.test(amount)) {
         throw schema(`Invalid account balance ${key}`);
       }
     }
@@ -186,18 +203,24 @@ function validateBalanceCollection(value: unknown): number {
   return value.length;
 }
 
-function parseAccount(body: unknown, target: ExecutionTarget, verifiedAt: number): VerifiedAccountSummary {
+function parseAccount(
+  body: unknown,
+  target: ExecutionTarget,
+  verifiedAt: number,
+  configBody?: unknown,
+): VerifiedAccountSummary {
   const data = unwrapGet(body);
   if (target.market === "spot") {
     const account = record(data, "spot account");
     if (typeof account.canTrade !== "boolean" || typeof account.canWithdraw !== "boolean") {
       throw schema("Invalid spot account permissions");
     }
-    const balanceAssetCount = validateBalanceCollection(account.balances);
+    const balanceAssetCount = validateBalanceCollection(account.balances, "spot");
     return {
       market: "spot", mode: "live", verifiedAt, canTrade: account.canTrade,
       readPermission: true,
       withdrawalPermission: account.canWithdraw ? "present" : "absent",
+      positionMode: "unknown",
       balanceAssetCount,
     };
   }
@@ -207,10 +230,28 @@ function parseAccount(body: unknown, target: ExecutionTarget, verifiedAt: number
         const source = record(data, "futures account balance response");
         return source.balances ?? source.assets ?? source.list;
       })();
+  const balanceAssetCount = validateBalanceCollection(collection, "futures");
+  if (target.mode === "futures-demo") {
+    return {
+      market: "futures", mode: target.mode, verifiedAt, canTrade: "unknown",
+      readPermission: true, withdrawalPermission: "unknown", positionMode: "unknown",
+      balanceAssetCount,
+    };
+  }
+  const config = record(unwrapGet(configBody), "futures account config");
+  for (const key of ["canTrade", "canDeposit", "canWithdraw", "dualSidePosition"] as const) {
+    if (typeof config[key] !== "boolean") throw schema(`Invalid futures account config ${key}`);
+  }
+  const updateTime = typeof config.updateTime === "string" && /^\d+$/.test(config.updateTime)
+    ? Number(config.updateTime)
+    : config.updateTime;
+  if (!Number.isSafeInteger(updateTime) || (updateTime as number) < 0) throw schema("Invalid futures account config updateTime");
   return {
-    market: "futures", mode: target.mode, verifiedAt, canTrade: "unknown",
-    readPermission: true, withdrawalPermission: "unknown",
-    balanceAssetCount: validateBalanceCollection(collection),
+    market: "futures", mode: "live", verifiedAt, canTrade: config.canTrade as boolean,
+    readPermission: true,
+    withdrawalPermission: config.canWithdraw ? "present" : "absent",
+    positionMode: config.dualSidePosition ? "hedge" : "one-way",
+    balanceAssetCount,
   };
 }
 
@@ -246,6 +287,12 @@ export class WeexPrivateClient {
   readonly #now: () => number;
   readonly #maximumGetAttempts: number;
   readonly #identities = new Map<string, ExpectedOrderIdentity>();
+  #verifiedFuturesLive: {
+    readonly canTrade: boolean;
+    readonly canWithdraw: boolean;
+    readonly dualSidePosition: boolean;
+    readonly verifiedAt: number;
+  } | undefined;
 
   constructor(options: WeexPrivateClientOptions) {
     if (!options || typeof options.transport?.send !== "function" || !(options.credentials instanceof WeexCredentials) ||
@@ -318,14 +365,27 @@ export class WeexPrivateClient {
 
   async #validateOrder(request: ExchangeSubmitRequest): Promise<ExpectedOrderIdentity> {
     assertTarget(request?.target);
-    if (!isBoundedIdentifier(request.clientOrderId)) throw validation("Invalid client order id");
+    if (!(request.target.market === "futures"
+      ? isFuturesClientOrderId(request.clientOrderId)
+      : isBoundedIdentifier(request.clientOrderId))) throw validation("Invalid client order id");
     const intent = request.intent;
     if (!intent || !isPrivateSymbol(intent.symbol) || (intent.side !== "buy" && intent.side !== "sell") ||
         !isCanonicalPositiveDecimal(intent.quantity) || !isCanonicalPositiveDecimal(intent.price) ||
         typeof intent.reduceOnly !== "boolean") {
       throw validation("Invalid approved order intent");
     }
-    if (request.target.market === "spot" && intent.reduceOnly) throw validation("Spot reduce-only is unsupported");
+    if (request.target.market === "spot" &&
+        ((intent.side === "sell" && !intent.reduceOnly) || (intent.side === "buy" && intent.reduceOnly))) {
+      throw validation("Unsafe spot order direction");
+    }
+    if (request.target.market === "futures" && request.target.mode === "live") {
+      const verified = this.#verifiedFuturesLive;
+      const now = this.#now();
+      if (!verified || !verified.canTrade || verified.canWithdraw || !verified.dualSidePosition ||
+          !Number.isSafeInteger(now) || now < verified.verifiedAt || now - verified.verifiedAt > MAX_RULES_AGE_MS) {
+        throw validation("Verified futures hedge-mode trading permission is required");
+      }
+    }
     if (!this.#rulesProvider) throw validation("Current instrument rules are required before order submission");
     {
       const snapshot = await this.#rulesProvider(request.target, intent.symbol);
@@ -349,10 +409,32 @@ export class WeexPrivateClient {
     };
   }
 
+  #rememberIdentity(key: string, identity: ExpectedOrderIdentity): void {
+    this.#identities.delete(key);
+    while (this.#identities.size >= MAX_IDENTITY_CACHE) {
+      const oldest = this.#identities.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.#identities.delete(oldest);
+    }
+    this.#identities.set(key, identity);
+  }
+
   async verifyAccount(target: ExecutionTarget): Promise<VerifiedAccountSummary> {
     assertTarget(target);
     const response = await this.#safeGet(accountRoute(target));
-    return parseAccount(response.body, target, Math.floor(this.#now()));
+    const configResponse = target.market === "futures" && target.mode === "live"
+      ? await this.#safeGet(FUTURES_ACCOUNT_CONFIG)
+      : undefined;
+    const summary = parseAccount(response.body, target, Math.floor(this.#now()), configResponse?.body);
+    if (target.market === "futures" && target.mode === "live") {
+      this.#verifiedFuturesLive = {
+        canTrade: summary.canTrade === true,
+        canWithdraw: summary.withdrawalPermission === "present",
+        dualSidePosition: summary.positionMode === "hedge",
+        verifiedAt: summary.verifiedAt,
+      };
+    }
+    return summary;
   }
 
   async submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome> {
@@ -372,15 +454,19 @@ export class WeexPrivateClient {
             : intent.side === "buy" ? "LONG" : "SHORT" }
         : {}),
     };
-    this.#identities.set(`${target.market}:${target.mode}:${clientOrderId}`, identity);
+    const identityKey = `${target.market}:${target.mode}:${clientOrderId}`;
+    this.#rememberIdentity(identityKey, identity);
     let responseReceived = false;
     try {
       const response = await this.#signedRequest("POST", orderRoute(target), [], body);
       responseReceived = true;
       const parsed = parseAcknowledgedOrder(response.body, clientOrderId);
-      return typeof parsed === "string"
-        ? { status: "acknowledged", exchangeOrderId: parsed }
-        : { status: "rejected", reason: parsed.rejected };
+      if (typeof parsed === "string") {
+        this.#rememberIdentity(identityKey, { ...identity, exchangeOrderId: parsed });
+        return { status: "acknowledged", exchangeOrderId: parsed };
+      }
+      this.#identities.delete(identityKey);
+      return { status: "rejected", reason: parsed.rejected };
     } catch (error) {
       const failure = error instanceof DispatchedRequestError ? error.failure : error;
       if (responseReceived) return { status: "unknown", reason: "ambiguous-submit-outcome" };
@@ -395,18 +481,24 @@ export class WeexPrivateClient {
 
   async findOrderByClientOrderId(query: ExchangeOrderQuery): Promise<ExchangeOrderSnapshot | null> {
     assertTarget(query?.target);
-    if (!isPrivateSymbol(query.symbol) || !isBoundedIdentifier(query.clientOrderId) ||
+    if (!isPrivateSymbol(query.symbol) || !(query.target.market === "futures"
+          ? isFuturesClientOrderId(query.clientOrderId)
+          : isBoundedIdentifier(query.clientOrderId)) ||
         (query.exchangeOrderId !== undefined && !isBoundedIdentifier(query.exchangeOrderId))) {
       throw validation("Invalid order lookup query");
     }
     const key = `${query.target.market}:${query.target.mode}:${query.clientOrderId}`;
-    const expected = this.#identities.get(key) ?? { clientOrderId: query.clientOrderId, symbol: query.symbol };
+    const cached = this.#identities.get(key);
+    const expected = {
+      ...(cached ?? { clientOrderId: query.clientOrderId, symbol: query.symbol }),
+      ...(query.exchangeOrderId === undefined ? {} : { exchangeOrderId: query.exchangeOrderId }),
+    };
     if (expected.symbol !== query.symbol) throw schema("Order lookup identity mismatch");
     if (query.target.market === "spot") {
       try {
-        const response = await this.#safeGet(orderRoute(query.target), [
-          ["symbol", query.symbol], ["origClientOrderId", query.clientOrderId],
-        ]);
+        const response = await this.#safeGet(orderRoute(query.target), [query.exchangeOrderId
+          ? ["orderId", query.exchangeOrderId]
+          : ["origClientOrderId", query.clientOrderId]]);
         const data = unwrapGet(response.body);
         return parseOrderSnapshot(data, expected);
       } catch (error) {
@@ -414,23 +506,44 @@ export class WeexPrivateClient {
         throw error;
       }
     }
-    for (const route of futuresSearchRoutes(query.target)) {
-      const response = await this.#safeGet(route, [["symbol", query.symbol], ["limit", "100"]]);
-      const orders = parseOrderCollection(response.body);
-      const matches = orders.filter((raw) => {
-        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw schema("Invalid order collection entry");
-        const source = raw as Record<string, unknown>;
-        return (source.clientOrderId ?? source.origClientOrderId) === query.clientOrderId;
-      });
-      if (matches.length > 1) throw schema("Duplicate order client id");
-      if (matches.length === 1) return parseOrderSnapshot(matches[0], expected);
+    if (query.exchangeOrderId && query.target.mode === "live") {
+      try {
+        const response = await this.#safeGet(orderRoute(query.target), [["orderId", query.exchangeOrderId]]);
+        return parseOrderSnapshot(unwrapGet(response.body), expected);
+      } catch (error) {
+        if (error instanceof WeexApiError && error.category === "not-found") return null;
+        throw error;
+      }
     }
-    return null;
+    const matches: unknown[] = [];
+    for (const route of futuresSearchRoutes(query.target)) {
+      let routeComplete = false;
+      for (let page = 1; page <= MAX_ORDER_SEARCH_PAGES; page += 1) {
+        const response = await this.#safeGet(route, [
+          ["symbol", query.symbol], ["page", String(page)], ["limit", String(ORDER_SEARCH_PAGE_SIZE)],
+        ]);
+        const orders = parseOrderCollection(response.body);
+        for (const raw of orders) {
+          if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw schema("Invalid order collection entry");
+          const source = raw as Record<string, unknown>;
+          if ((source.clientOrderId ?? source.origClientOrderId) === query.clientOrderId) matches.push(raw);
+        }
+        if (matches.length > 1) throw schema("Duplicate order client id");
+        if (orders.length < ORDER_SEARCH_PAGE_SIZE) {
+          routeComplete = true;
+          break;
+        }
+      }
+      if (!routeComplete) throw schema("Bounded order search page limit reached");
+    }
+    return matches.length === 0 ? null : parseOrderSnapshot(matches[0], expected);
   }
 
   async cancelOrder(query: ExchangeOrderQuery): Promise<CancelOutcome> {
     assertTarget(query?.target);
-    if (!isPrivateSymbol(query.symbol) || !isBoundedIdentifier(query.clientOrderId) ||
+    if (!isPrivateSymbol(query.symbol) || !(query.target.market === "futures"
+          ? isFuturesClientOrderId(query.clientOrderId)
+          : isBoundedIdentifier(query.clientOrderId)) ||
         (query.exchangeOrderId !== undefined && !isBoundedIdentifier(query.exchangeOrderId))) {
       throw validation("Invalid order cancellation query");
     }
@@ -438,16 +551,20 @@ export class WeexPrivateClient {
       return { status: "rejected", reason: "unsupported-demo-cancel" };
     }
     const key = `${query.target.market}:${query.target.mode}:${query.clientOrderId}`;
-    const expected = this.#identities.get(key) ?? { clientOrderId: query.clientOrderId, symbol: query.symbol };
+    const cached = this.#identities.get(key);
+    const expected = {
+      ...(cached ?? { clientOrderId: query.clientOrderId, symbol: query.symbol }),
+      ...(query.exchangeOrderId === undefined ? {} : { exchangeOrderId: query.exchangeOrderId }),
+    };
     if (expected.symbol !== query.symbol) throw schema("Order cancellation identity mismatch");
-    const entries: QueryEntry[] = [["symbol", query.symbol]];
+    const entries: QueryEntry[] = query.target.market === "spot" ? [["symbol", query.symbol]] : [];
     if (query.exchangeOrderId) entries.push(["orderId", query.exchangeOrderId]);
     else entries.push(["origClientOrderId", query.clientOrderId]);
     let responseReceived = false;
     try {
       const response = await this.#signedRequest("DELETE", orderRoute(query.target), entries);
       responseReceived = true;
-      const parsed = parseCancellation(response.body, expected);
+      const parsed = parseCancellation(response.body, expected, query.target.market === "spot");
       return "cancelled" in parsed
         ? { status: "cancelled" }
         : { status: "rejected", reason: parsed.rejected };

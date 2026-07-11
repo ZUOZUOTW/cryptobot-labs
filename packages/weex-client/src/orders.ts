@@ -7,6 +7,7 @@ import { WeexApiError, mapWeexError } from "./errors";
 
 const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,64}$/;
+const FUTURES_IDENTIFIER = /^[.A-Za-z0-9_:/-]{1,36}$/;
 const SYMBOL = /^[A-Z0-9_]{3,32}$/;
 const MAX_COLLECTION = 500;
 
@@ -16,6 +17,10 @@ function schema(message: string): WeexApiError {
 
 export function isBoundedIdentifier(value: unknown): value is string {
   return typeof value === "string" && IDENTIFIER.test(value);
+}
+
+export function isFuturesClientOrderId(value: unknown): value is string {
+  return typeof value === "string" && FUTURES_IDENTIFIER.test(value);
 }
 
 export function isCanonicalPositiveDecimal(value: unknown): value is string {
@@ -64,10 +69,18 @@ export function unwrapPrivateBody(body: unknown): BodyEnvelope {
   return { ok: true, data: Object.hasOwn(source, "data") ? source.data : source };
 }
 
-function requiredString(source: Record<string, unknown>, keys: readonly string[], label: string): string {
+function requiredText(source: Record<string, unknown>, keys: readonly string[], label: string): string {
   for (const key of keys) {
     const value = source[key];
     if (typeof value === "string" && value.length > 0 && value.length <= 128) return value;
+  }
+  throw schema(`Invalid ${label}`);
+}
+
+function requiredOrderId(source: Record<string, unknown>, keys: readonly string[], label: string): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && isBoundedIdentifier(value)) return value;
     if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
   }
   throw schema(`Invalid ${label}`);
@@ -85,10 +98,10 @@ function optionalDecimal(source: Record<string, unknown>, keys: readonly string[
 function normalizeStatus(value: unknown): ExchangeOrderStatus {
   if (typeof value !== "string") throw schema("Invalid order status");
   const status = value.toUpperCase();
-  if (status === "NEW" || status === "OPEN") return "NEW";
-  if (status === "PARTIALLY_FILLED" || status === "PARTIAL_FILLED") return "PARTIALLY_FILLED";
+  if (status === "NEW") return "NEW";
+  if (status === "PARTIALLY_FILLED") return "PARTIALLY_FILLED";
   if (status === "FILLED") return "FILLED";
-  if (status === "CANCELED" || status === "CANCELLED") return "CANCELED";
+  if (status === "CANCELED") return "CANCELED";
   if (status === "REJECTED") return "REJECTED";
   throw schema("Unknown order status");
 }
@@ -98,19 +111,21 @@ export interface ExpectedOrderIdentity {
   readonly symbol: string;
   readonly side?: "buy" | "sell";
   readonly quantity?: string;
+  readonly exchangeOrderId?: string;
 }
 
 export function parseOrderSnapshot(value: unknown, expected: ExpectedOrderIdentity): ExchangeOrderSnapshot {
   const source = record(value, "order snapshot");
-  const clientOrderId = requiredString(source, ["clientOrderId", "origClientOrderId"], "client order id");
-  const exchangeOrderId = requiredString(source, ["orderId"], "exchange order id");
-  const symbol = requiredString(source, ["symbol"], "order symbol").toUpperCase();
-  const rawSide = requiredString(source, ["side"], "order side").toUpperCase();
+  const clientOrderId = requiredText(source, ["clientOrderId", "origClientOrderId"], "client order id");
+  const exchangeOrderId = requiredOrderId(source, ["orderId"], "exchange order id");
+  const symbol = requiredText(source, ["symbol"], "order symbol").toUpperCase();
+  const rawSide = requiredText(source, ["side"], "order side").toUpperCase();
   if (rawSide !== "BUY" && rawSide !== "SELL") throw schema("Invalid order side");
   const side = rawSide === "BUY" ? "buy" : "sell";
-  const quantity = requiredString(source, ["origQty", "quantity", "size"], "order quantity");
+  const quantity = requiredText(source, ["origQty", "quantity", "size"], "order quantity");
   if (!isCanonicalPositiveDecimal(quantity)) throw schema("Invalid order quantity");
   if (clientOrderId !== expected.clientOrderId || symbol !== expected.symbol ||
+      (expected.exchangeOrderId !== undefined && exchangeOrderId !== expected.exchangeOrderId) ||
       (expected.side !== undefined && side !== expected.side) ||
       (expected.quantity !== undefined && quantity !== expected.quantity)) {
     throw schema("Order identity mismatch");
@@ -140,7 +155,7 @@ export function parseAcknowledgedOrder(body: unknown, expectedClientOrderId: str
   const unwrapped = unwrapPrivateBody(body);
   if (!unwrapped.ok) return { rejected: unwrapped.reason };
   const source = record(unwrapped.data, "order acknowledgement");
-  const orderId = requiredString(source, ["orderId"], "exchange order id");
+  const orderId = requiredOrderId(source, ["orderId"], "exchange order id");
   const returnedClientId = source.clientOrderId ?? source.origClientOrderId;
   if (returnedClientId !== undefined && returnedClientId !== expectedClientOrderId) {
     throw schema("Order acknowledgement identity mismatch");
@@ -148,15 +163,26 @@ export function parseAcknowledgedOrder(body: unknown, expectedClientOrderId: str
   return orderId;
 }
 
-export function parseCancellation(body: unknown, expected: ExpectedOrderIdentity): { cancelled: true } | { rejected: string } {
+export function parseCancellation(
+  body: unknown,
+  expected: ExpectedOrderIdentity,
+  requireExactCanceledStatus = false,
+): { cancelled: true } | { rejected: string } {
   const unwrapped = unwrapPrivateBody(body);
   if (!unwrapped.ok) return { rejected: unwrapped.reason };
   const source = record(unwrapped.data, "order cancellation");
   const returnedClientId = source.clientOrderId ?? source.origClientOrderId;
   const returnedSymbol = source.symbol;
+  const returnedOrderId = source.orderId === undefined
+    ? undefined
+    : requiredOrderId(source, ["orderId"], "cancelled exchange order id");
   if ((returnedClientId !== undefined && returnedClientId !== expected.clientOrderId) ||
-      (returnedSymbol !== undefined && returnedSymbol !== expected.symbol)) {
+      (returnedSymbol !== undefined && returnedSymbol !== expected.symbol) ||
+      (expected.exchangeOrderId !== undefined && returnedOrderId !== expected.exchangeOrderId)) {
     throw schema("Cancellation identity mismatch");
+  }
+  if (requireExactCanceledStatus && source.status !== "CANCELED") {
+    throw schema("Spot cancellation was not confirmed CANCELED");
   }
   if (returnedClientId === undefined && source.orderId === undefined && source.success !== true) {
     throw schema("Invalid cancellation acknowledgement");
