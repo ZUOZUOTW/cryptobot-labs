@@ -119,6 +119,7 @@ export interface LiveUnlockInput {
 }
 
 export type LiveUnlockRejectionReason =
+  | "invalid-input"
   | "invalid-target-market"
   | "credential-not-verified"
   | "missing-read-permission"

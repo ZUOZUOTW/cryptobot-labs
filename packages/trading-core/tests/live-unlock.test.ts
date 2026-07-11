@@ -16,6 +16,16 @@ const input: LiveUnlockInput = {
 };
 
 describe("evaluateLiveUnlock", () => {
+  it.each([null, undefined, 0, "invalid", {}])(
+    "returns invalid-input for malformed top-level input %s",
+    (malformed) => {
+      expect(evaluateLiveUnlock(malformed as unknown as LiveUnlockInput)).toEqual({
+        allowed: false,
+        reason: "invalid-input",
+      });
+    },
+  );
+
   it("unlocks only when every local requirement is satisfied", () => {
     expect(evaluateLiveUnlock(input)).toEqual({ allowed: true });
     expect(
@@ -85,6 +95,12 @@ describe("evaluateLiveUnlock", () => {
       evaluateLiveUnlock({
         ...input,
         policy: { ...input.policy, maximumLeverage: "unlimited" },
+      }),
+    ).toEqual({ allowed: false, reason: "invalid-risk-policy" });
+    expect(
+      evaluateLiveUnlock({
+        ...input,
+        policy: { ...input.policy, allowedSymbols: ["UNLIMITED"] },
       }),
     ).toEqual({ allowed: false, reason: "invalid-risk-policy" });
   });

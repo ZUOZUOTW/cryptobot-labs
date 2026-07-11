@@ -11,6 +11,8 @@ import type {
 
 const UNSIGNED_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const NORMALIZED_SYMBOL = /^[A-Z0-9_]{3,32}$/;
+const SYMBOL_SENTINELS = new Set(["ALL", "ANY", "UNLIMITED"]);
 
 function isPositiveDecimal(value: unknown): value is string {
   return typeof value === "string" && UNSIGNED_DECIMAL.test(value) && new Decimal(value).gt(0);
@@ -35,11 +37,22 @@ function isSafePositiveInteger(value: unknown): value is number {
 export function validateRiskPolicy(policy: unknown): RiskRejectionReason | null {
   if (typeof policy !== "object" || policy === null) return "invalid-policy-allowed-symbols";
   const candidate = policy as Record<string, unknown>;
+  const normalizedSymbols = Array.isArray(candidate.allowedSymbols)
+    ? candidate.allowedSymbols.map((symbol) =>
+        typeof symbol === "string" ? symbol.trim().toUpperCase() : "",
+      )
+    : [];
   if (
     !Array.isArray(candidate.allowedSymbols) ||
     candidate.allowedSymbols.length === 0 ||
-    candidate.allowedSymbols.some((symbol) => typeof symbol !== "string" || symbol.length === 0) ||
-    new Set(candidate.allowedSymbols).size !== candidate.allowedSymbols.length
+    candidate.allowedSymbols.some(
+      (symbol, index) =>
+        typeof symbol !== "string" ||
+        symbol !== normalizedSymbols[index] ||
+        !NORMALIZED_SYMBOL.test(symbol) ||
+        SYMBOL_SENTINELS.has(symbol),
+    ) ||
+    new Set(normalizedSymbols).size !== normalizedSymbols.length
   ) return "invalid-policy-allowed-symbols";
   if (!isPositiveDecimal(candidate.maximumOrderNotional)) return "invalid-policy-maximum-order-notional";
   if (!isPositiveDecimal(candidate.maximumPositionNotional)) return "invalid-policy-maximum-position-notional";

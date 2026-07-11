@@ -80,6 +80,13 @@ describe("evaluateOrderRisk", () => {
 
   it.each([
     [{ policy: { allowedSymbols: [] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: [" BTCUSDT"] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: ["BTCUSDT "] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: ["btcusdt"] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: ["*"] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: ["UNLIMITED"] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: ["ALL"] } }, "invalid-policy-allowed-symbols"],
+    [{ policy: { allowedSymbols: ["BTCUSDT", "BTCUSDT"] } }, "invalid-policy-allowed-symbols"],
     [{ policy: { maximumOrderNotional: "0" } }, "invalid-policy-maximum-order-notional"],
     [{ policy: { maximumPositionNotional: "Infinity" } }, "invalid-policy-maximum-position-notional"],
     [{ policy: { maximumTotalExposure: "1e3" } }, "invalid-policy-maximum-total-exposure"],
