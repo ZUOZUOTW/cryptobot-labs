@@ -40,6 +40,8 @@ export interface HistoricalDatasetProvenance {
   collectedAt: number;
   singleResponse: boolean;
   paginated: boolean;
+  truncated: boolean;
+  terminationReason?: string;
   requestedStartTime?: number;
   requestedEndTime?: number;
   returnedStartTime?: number;

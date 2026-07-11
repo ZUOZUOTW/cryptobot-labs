@@ -14,6 +14,23 @@ describe("mapWeexError", () => {
     expect(mapWeexError(status, body)).toMatchObject({ category, retryable, status });
   });
 
+  it.each([
+    [-1054, "server", true],
+    [-1043, "clock", false],
+    [-1046, "clock", false],
+    [-1045, "validation", false],
+    [-1044, "authentication", false],
+    [-1047, "authentication", false],
+    [-1051, "permission", false],
+    [-1058, "permission", false],
+    [-1115, "validation", false],
+    [-1135, "validation", false],
+    [-1140, "validation", false],
+    [-1171, "validation", false],
+  ] as const)("maps official code %s explicitly", (code, category, retryable) => {
+    expect(mapWeexError(400, { code, msg: "official" })).toMatchObject({ category, retryable });
+  });
+
   it("treats malformed beta error bodies as schema failures", () => {
     const error = mapWeexError(400, ["unexpected"]);
     expect(error).toBeInstanceOf(WeexApiError);

@@ -5,7 +5,7 @@ import { createFetchTransport } from "../src/transport";
 
 describe("createFetchTransport", () => {
   it("normalizes response headers and parses JSON", async () => {
-    const fetchImpl = vi.fn(async () =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "X-Trace-Id": "trace-1" },
@@ -25,6 +25,7 @@ describe("createFetchTransport", () => {
       body: { ok: true },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "error" });
   });
 
   it.each([
@@ -71,5 +72,16 @@ describe("createFetchTransport", () => {
     });
     await expect(malformed.send({ method: "GET", url: "https://api-spot.weex.com/x", headers: {} }))
       .rejects.toMatchObject({ category: "schema", retryable: false });
+  });
+
+  it.each([
+    [503, "upstream unavailable", "server", true],
+    [429, "", "rate-limit", true],
+  ] as const)("preserves HTTP %s semantics for non-JSON bodies", async (status, body, category, retryable) => {
+    const transport = createFetchTransport({
+      fetchImpl: vi.fn(async () => new Response(body, { status, headers: { "Content-Type": "text/plain" } })),
+    });
+    await expect(transport.send({ method: "GET", url: "https://api-spot.weex.com/x", headers: {} }))
+      .rejects.toMatchObject({ status, category, retryable });
   });
 });

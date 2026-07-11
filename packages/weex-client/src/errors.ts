@@ -42,7 +42,73 @@ function bodyMessage(body: Record<string, unknown>): string {
   return typeof candidate === "string" && candidate ? candidate : "WEEX API request failed";
 }
 
+const OFFICIAL_CODE_CATEGORIES = new Map<number, readonly [WeexApiErrorCategory, boolean]>([
+  [-1000, ["server", true]],
+  [-1003, ["rate-limit", true]],
+  [-1040, ["authentication", false]],
+  [-1041, ["authentication", false]],
+  [-1042, ["clock", false]],
+  [-1043, ["clock", false]],
+  [-1044, ["authentication", false]],
+  [-1045, ["validation", false]],
+  [-1046, ["clock", false]],
+  [-1047, ["authentication", false]],
+  [-1048, ["authentication", false]],
+  [-1049, ["authentication", false]],
+  [-1050, ["permission", false]],
+  [-1051, ["permission", false]],
+  [-1052, ["permission", false]],
+  [-1053, ["permission", false]],
+  [-1054, ["server", true]],
+  [-1055, ["permission", false]],
+  [-1056, ["permission", false]],
+  [-1057, ["permission", false]],
+  [-1058, ["permission", false]],
+  [-1115, ["validation", false]],
+  [-1116, ["validation", false]],
+  [-1117, ["validation", false]],
+  [-1121, ["validation", false]],
+  [-1128, ["validation", false]],
+  [-1135, ["validation", false]],
+  [-1140, ["validation", false]],
+  [-1141, ["validation", false]],
+  [-1142, ["validation", false]],
+  [-1150, ["validation", false]],
+  [-1160, ["validation", false]],
+  [-1170, ["validation", false]],
+  [-1171, ["validation", false]],
+  [-1180, ["validation", false]],
+  [-1190, ["permission", false]],
+  [-2007, ["not-found", false]],
+  [-2200, ["not-found", false]],
+]);
+
 export function mapWeexError(status: number, body: unknown): WeexApiError {
+  if (status === 429) {
+    return new WeexApiError("WEEX API rate limit exceeded", {
+      category: "rate-limit", retryable: true, status,
+    });
+  }
+  if (status >= 500) {
+    return new WeexApiError("WEEX server request failed", {
+      category: "server", retryable: true, status,
+    });
+  }
+  if (status === 401) {
+    return new WeexApiError("WEEX authentication failed", {
+      category: "authentication", retryable: false, status,
+    });
+  }
+  if (status === 403) {
+    return new WeexApiError("WEEX permission denied", {
+      category: "permission", retryable: false, status,
+    });
+  }
+  if (status === 404) {
+    return new WeexApiError("WEEX resource not found", {
+      category: "not-found", retryable: false, status,
+    });
+  }
   if (!isErrorBody(body)) {
     return new WeexApiError("Malformed WEEX beta API error response", {
       category: "schema", retryable: false, status,
@@ -59,25 +125,10 @@ export function mapWeexError(status: number, body: unknown): WeexApiError {
   const numericCode = Number(code);
   const message = bodyMessage(body);
 
-  let category: WeexApiErrorCategory;
-  let retryable = false;
-  if (status === 429 || code === "429" || numericCode === -1003) {
-    category = "rate-limit";
-    retryable = true;
-  } else if (Number.isInteger(numericCode) && numericCode >= -1058 && numericCode <= -1040) {
-    category = numericCode >= -1049 ? "authentication" : "permission";
-  } else if (status === 401) {
-    category = "authentication";
-  } else if (status === 403) {
-    category = "permission";
-  } else if (status === 404) {
-    category = "not-found";
-  } else if (status >= 500) {
-    category = "server";
-    retryable = true;
-  } else {
-    category = "validation";
-  }
+  const mapped = OFFICIAL_CODE_CATEGORIES.get(numericCode);
+  const [category, retryable] = code === "429"
+    ? ["rate-limit", true] as const
+    : mapped ?? ["validation", false] as const;
 
   return new WeexApiError(message, { category, retryable, status, code });
 }

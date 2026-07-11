@@ -56,6 +56,7 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
           method: request.method,
           headers: request.headers,
           body: request.body,
+          redirect: "error",
         });
       } catch (cause) {
         throw new WeexApiError("WEEX network request failed", {
@@ -67,6 +68,7 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
       try {
         body = await response.json();
       } catch (cause) {
+        if (!response.ok) throw mapWeexError(response.status, undefined);
         throw new WeexApiError("WEEX returned malformed JSON", {
           category: "schema", retryable: false, status: response.status, cause,
         });

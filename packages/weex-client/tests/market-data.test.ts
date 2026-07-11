@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { HttpRequest, HttpResponse, HttpTransport } from "../src/transport";
-import { WeexPublicClient, validateCandleDataset } from "../src/market-data";
+import { MAX_FUTURES_HISTORY_PAGES, WeexPublicClient, validateCandleDataset } from "../src/market-data";
 
 class RecordingTransport implements HttpTransport {
   readonly requests: HttpRequest[] = [];
@@ -60,6 +60,23 @@ describe("WeexPublicClient", () => {
     expect(transport.requests).toHaveLength(1);
     expect(dataset.complete).toBe(false);
     expect(dataset.provenance).toMatchObject({ singleResponse: true, paginated: false });
+  });
+
+  it("stops full futures pages at the hard cap and reports truncation", async () => {
+    const responses = Array.from({ length: MAX_FUTURES_HISTORY_PAGES }, (_, index) =>
+      ok([row(index * 60_000)]));
+    const transport = new RecordingTransport(responses);
+    const dataset = await new WeexPublicClient(transport, () => 20_000_000).collectHistoricalCandles({
+      market: "futures",
+      symbol: "BTCUSDT",
+      interval: "1m",
+      startTime: 0,
+      endTime: (MAX_FUTURES_HISTORY_PAGES + 10) * 60_000,
+      limit: 1,
+    });
+    expect(transport.requests).toHaveLength(MAX_FUTURES_HISTORY_PAGES);
+    expect(dataset.complete).toBe(false);
+    expect(dataset.provenance).toMatchObject({ truncated: true, terminationReason: "page-limit" });
   });
 
   it("gets strict spot and futures instrument rules without coercing decimals", async () => {

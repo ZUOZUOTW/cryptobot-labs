@@ -23,6 +23,10 @@ const ENDPOINTS = {
   },
 } as const;
 
+export const MAX_FUTURES_HISTORY_PAGES = 100;
+export const MAX_FUTURES_HISTORY_CANDLES = 10_000;
+export const MAX_FUTURES_HISTORY_RANGE_MS = 90 * 24 * 60 * 60 * 1_000;
+
 function validateRequest(request: HistoricalCandleRequest): void {
   if (!request.symbol || !request.interval) {
     throw new WeexApiError("Symbol and interval are required", { category: "validation", retryable: false });
@@ -39,6 +43,12 @@ function validateRequest(request: HistoricalCandleRequest): void {
   if (request.market === "futures" && request.limit !== undefined &&
       (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 100)) {
     throw new WeexApiError("Futures history limit must be between 1 and 100", { category: "validation", retryable: false });
+  }
+  if (request.market === "futures" && request.startTime !== undefined && request.endTime !== undefined &&
+      request.endTime - request.startTime > MAX_FUTURES_HISTORY_RANGE_MS) {
+    throw new WeexApiError("Futures history range exceeds the safe collection limit", {
+      category: "validation", retryable: false,
+    });
   }
 }
 
@@ -109,14 +119,26 @@ export class WeexPublicClient {
     const intervalMs = parseIntervalMs(request.interval);
     const collected: Candle[] = [];
     let paginated = false;
+    let terminationReason: "page-limit" | "candle-limit" | undefined;
 
     if (request.market === "spot") {
       collected.push(...await this.fetchCandles(request));
     } else {
       let cursor = request.startTime;
+      let pageCount = 0;
       do {
+        if (pageCount >= MAX_FUTURES_HISTORY_PAGES) {
+          terminationReason = "page-limit";
+          break;
+        }
         const page = await this.fetchCandles({ ...request, startTime: cursor });
-        collected.push(...page);
+        pageCount += 1;
+        const remainingCapacity = MAX_FUTURES_HISTORY_CANDLES - collected.length;
+        collected.push(...page.slice(0, remainingCapacity));
+        if (page.length > remainingCapacity || collected.length >= MAX_FUTURES_HISTORY_CANDLES) {
+          terminationReason = "candle-limit";
+          break;
+        }
         if (page.length === 0 || request.endTime === undefined) break;
         const maximumOpenTime = Math.max(...page.map((candle) => candle.openTime));
         const nextCursor = maximumOpenTime + intervalMs;
@@ -134,7 +156,7 @@ export class WeexPublicClient {
     const last = candles.at(-1)?.openTime;
     const boundariesCovered = request.startTime !== undefined && request.endTime !== undefined &&
       first !== undefined && last !== undefined && first <= request.startTime && last + intervalMs >= request.endTime;
-    const complete = request.market === "futures" && boundariesCovered && validation.gaps.length === 0 &&
+    const complete = request.market === "futures" && terminationReason === undefined && boundariesCovered && validation.gaps.length === 0 &&
       validation.incompleteCount === 0;
     const endpoint = ENDPOINTS[request.market].path;
     return {
@@ -150,6 +172,8 @@ export class WeexPublicClient {
         collectedAt: this.now(),
         singleResponse: request.market === "spot" || !paginated,
         paginated,
+        truncated: terminationReason !== undefined,
+        ...(terminationReason === undefined ? {} : { terminationReason }),
         ...(request.startTime === undefined ? {} : { requestedStartTime: request.startTime }),
         ...(request.endTime === undefined ? {} : { requestedEndTime: request.endTime }),
         ...(first === undefined ? {} : { returnedStartTime: first }),
