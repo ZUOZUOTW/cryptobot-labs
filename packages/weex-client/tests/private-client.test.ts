@@ -468,10 +468,69 @@ describe("WeexPrivateClient", () => {
     expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
   });
 
+  it("retains body-level and HTTP rejected claims after dispatch", async () => {
+    for (const rejectedResponse of [
+      ok({ success: false, message: "rejected by exchange" }),
+      { status: 400, headers: {}, body: { code: -1045, message: "invalid order" } } satisfies HttpResponse,
+    ]) {
+      const transport = new ScriptedTransport([verifiedSpotAccount, rejectedResponse]);
+      const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+      await client.verifyAccount({ market: "spot", mode: "live" });
+      const first = await client.submitOrder(request);
+      expect(first).toMatchObject({ status: "rejected" });
+      await expect(client.submitOrder(request)).resolves.toEqual(first);
+      await expect(client.submitOrder({ ...request, intent: { ...request.intent, quantity: "0.002" } }))
+        .rejects.toMatchObject({ category: "validation" });
+      expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
+    }
+  });
+
+  it("releases bounded claims only after authoritative terminal lookup", async () => {
+    const steps: Array<HttpResponse | Error | (() => Promise<HttpResponse>)> = [verifiedSpotAccount];
+    for (let index = 0; index < 1_025; index += 1) {
+      const clientOrderId = `cycle-${index}`;
+      steps.push(
+        ok({ orderId: String(index + 1), clientOrderId }),
+        ok({
+          orderId: String(index + 1), clientOrderId, symbol: "BTCUSDT", side: "BUY",
+          origQty: "0.001", executedQty: "0.001", status: "FILLED",
+        }),
+      );
+    }
+    const transport = new ScriptedTransport(steps);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
+    for (let index = 0; index < 1_025; index += 1) {
+      const clientOrderId = `cycle-${index}`;
+      await expect(client.submitOrder({ ...request, clientOrderId })).resolves.toMatchObject({ status: "acknowledged" });
+      await expect(client.findOrderByClientOrderId({
+        target: request.target, symbol: "BTCUSDT", clientOrderId,
+      })).resolves.toMatchObject({ status: "FILLED" });
+    }
+    expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1_025);
+  });
+
+  it("keeps 1024 unresolved claims bounded and fails closed before a 1025th POST", async () => {
+    const steps: Array<HttpResponse | Error> = [verifiedSpotAccount];
+    for (let index = 0; index < 1_024; index += 1) {
+      steps.push(ok({ orderId: String(index + 1), clientOrderId: `open-${index}` }));
+    }
+    const transport = new ScriptedTransport(steps);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    await client.verifyAccount({ market: "spot", mode: "live" });
+    for (let index = 0; index < 1_024; index += 1) {
+      await client.submitOrder({ ...request, clientOrderId: `open-${index}` });
+    }
+    await expect(client.submitOrder({ ...request, clientOrderId: "open-overflow" }))
+      .rejects.toMatchObject({ category: "validation" });
+    expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1_024);
+  });
+
   it("maps documented PENDING and CANCELING snapshots without marking them terminal", async () => {
     const transport = new ScriptedTransport([
       ok({ orderId: "81", clientOrderId: "pending-1", symbol: "BTCUSDT", side: "BUY", origQty: "1", executedQty: "0", status: "PENDING" }),
       ok({ orderId: "82", clientOrderId: "canceling-1", symbol: "BTCUSDT", side: "SELL", origQty: "1", executedQty: "0.5", status: "CANCELING" }),
+      ok({ orderId: "83", clientOrderId: "pending-full", symbol: "BTCUSDT", side: "BUY", origQty: "1", executedQty: "1", status: "PENDING" }),
     ]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
@@ -480,6 +539,9 @@ describe("WeexPrivateClient", () => {
     await expect(client.findOrderByClientOrderId({
       target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "canceling-1",
     })).resolves.toMatchObject({ status: "PARTIALLY_FILLED", cumulativeFilledQuantity: "0.5" });
+    await expect(client.findOrderByClientOrderId({
+      target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "pending-full",
+    })).resolves.toMatchObject({ status: "FILLED", cumulativeFilledQuantity: "1" });
   });
 
   it("does not serialize credentials", () => {

@@ -509,11 +509,7 @@ export class WeexPrivateClient {
     try {
       const outcome = await submission;
       claimed.claim.promise = undefined;
-      if (outcome.status === "rejected") {
-        this.#submissionClaims.delete(identityKey);
-      } else {
-        claimed.claim.outcome = outcome;
-      }
+      claimed.claim.outcome = outcome;
       return outcome;
     } catch (error) {
       this.#submissionClaims.delete(identityKey);
@@ -539,7 +535,6 @@ export class WeexPrivateClient {
         this.#rememberIdentity(identityKey, { ...identity, exchangeOrderId: parsed });
         return { status: "acknowledged", exchangeOrderId: parsed };
       }
-      this.#identities.delete(identityKey);
       return { status: "rejected", reason: parsed.rejected };
     } catch (error) {
       const failure = error instanceof DispatchedRequestError ? error.failure : error;
@@ -551,6 +546,17 @@ export class WeexPrivateClient {
       if (!(error instanceof DispatchedRequestError)) throw failure;
       return { status: "unknown", reason: "ambiguous-submit-outcome" };
     }
+  }
+
+  #acceptAuthoritativeSnapshot(
+    key: string,
+    snapshot: ExchangeOrderSnapshot,
+  ): ExchangeOrderSnapshot {
+    if (snapshot.status === "FILLED" || snapshot.status === "CANCELED" || snapshot.status === "REJECTED") {
+      this.#submissionClaims.delete(key);
+      this.#identities.delete(key);
+    }
+    return snapshot;
   }
 
   async findOrderByClientOrderId(query: ExchangeOrderQuery): Promise<ExchangeOrderSnapshot | null> {
@@ -574,7 +580,7 @@ export class WeexPrivateClient {
           ? ["orderId", query.exchangeOrderId]
           : ["origClientOrderId", query.clientOrderId]]);
         const data = unwrapGet(response.body);
-        return parseOrderSnapshot(data, expected);
+        return this.#acceptAuthoritativeSnapshot(key, parseOrderSnapshot(data, expected));
       } catch (error) {
         if (error instanceof WeexApiError && error.category === "not-found") return null;
         throw error;
@@ -583,7 +589,7 @@ export class WeexPrivateClient {
     if (query.exchangeOrderId && query.target.mode === "live") {
       try {
         const response = await this.#safeGet(orderRoute(query.target), [["orderId", query.exchangeOrderId]]);
-        return parseOrderSnapshot(unwrapGet(response.body), expected);
+        return this.#acceptAuthoritativeSnapshot(key, parseOrderSnapshot(unwrapGet(response.body), expected));
       } catch (error) {
         if (error instanceof WeexApiError && error.category === "not-found") return null;
         throw error;
@@ -610,7 +616,9 @@ export class WeexPrivateClient {
       }
       if (!routeComplete) throw schema("Bounded order search page limit reached");
     }
-    return matches.length === 0 ? null : parseOrderSnapshot(matches[0], expected);
+    return matches.length === 0
+      ? null
+      : this.#acceptAuthoritativeSnapshot(key, parseOrderSnapshot(matches[0], expected));
   }
 
   async cancelOrder(query: ExchangeOrderQuery): Promise<CancelOutcome> {
@@ -646,9 +654,12 @@ export class WeexPrivateClient {
           ? { kind: "orderId", value: query.exchangeOrderId }
           : { kind: "origClientOrderId", value: query.clientOrderId },
       );
-      return "cancelled" in parsed
-        ? { status: "cancelled" }
-        : { status: "rejected", reason: parsed.rejected };
+      if ("cancelled" in parsed) {
+        this.#submissionClaims.delete(key);
+        this.#identities.delete(key);
+        return { status: "cancelled" };
+      }
+      return { status: "rejected", reason: parsed.rejected };
     } catch (error) {
       const failure = error instanceof DispatchedRequestError ? error.failure : error;
       if (responseReceived) return { status: "unknown", reason: "ambiguous-cancel-outcome" };

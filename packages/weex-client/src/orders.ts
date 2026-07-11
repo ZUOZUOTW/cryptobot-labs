@@ -123,7 +123,8 @@ function normalizeStatus(value: unknown, cumulative: string, quantity: string): 
     return "FILLED";
   }
   if (status === "PENDING" || status === "CANCELING") {
-    return filledVsZero === 0 ? "NEW" : "PARTIALLY_FILLED";
+    if (filledVsZero === 0) return "NEW";
+    return filledVsQuantity === 0 ? "FILLED" : "PARTIALLY_FILLED";
   }
   if (status === "CANCELED") return "CANCELED";
   if (status === "REJECTED") return "REJECTED";
