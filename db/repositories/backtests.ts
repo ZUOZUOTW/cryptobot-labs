@@ -1,6 +1,6 @@
-import { parseBacktestJobCreateDto, safeJsonStringify } from "../../lib/control-plane/schemas";
+import { parseBacktestJobCreateDto, safeCanonicalJsonStringify, safeJsonStringify } from "../../lib/control-plane/schemas";
 import type { BacktestJobCreateDto } from "../../lib/control-plane/types";
-import type { ControlPlaneDatabase } from "../index";
+import type { ControlPlaneDatabase, ControlPlaneRunResult } from "../index";
 import { exactInput, hash, id, limit, time } from "./shared";
 
 export type BacktestStatus = "queued" | "fetching-data" | "running" | "succeeded" | "failed";
@@ -66,12 +66,9 @@ const jobColumns = `id, user_id AS userId, strategy_version_id AS strategyVersio
   started_at AS startedAt, completed_at AS completedAt`;
 
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
-const STATUS_TRANSITIONS: Readonly<Record<BacktestStatus, readonly BacktestStatus[]>> = {
+const STATUS_TRANSITIONS: Readonly<Partial<Record<BacktestStatus, readonly BacktestStatus[]>>> = {
   queued: ["fetching-data"],
   "fetching-data": ["running"],
-  running: ["succeeded", "failed"],
-  succeeded: [],
-  failed: [],
 };
 
 const text = (value: string, label: string, maximum: number): string => {
@@ -203,13 +200,13 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
       if (dataset.market !== "spot" && dataset.market !== "futures") throw new Error("dataset market is invalid");
       if (typeof dataset.complete !== "boolean") throw new Error("dataset complete must be boolean");
       const datasetId = id(dataset.id, "datasetId");
-      const gapsJson = safeJsonStringify(dataset.gaps, "dataset gaps", 65_536);
+      const gapsJson = safeCanonicalJsonStringify(dataset.gaps, "dataset gaps", 65_536);
       const result = input.result;
       const resultId = id(result.id, "resultId");
-      const fundingJson = safeJsonStringify(result.funding, "funding", 65_536);
-      const metricsJson = safeJsonStringify(result.metrics, "metrics", 65_536);
-      const provenanceJson = safeJsonStringify(result.provenance, "provenance", 65_536);
-      const equityCurveJson = safeJsonStringify(result.equityCurve, "equity curve", 1_048_576);
+      const fundingJson = safeCanonicalJsonStringify(result.funding, "funding", 65_536);
+      const metricsJson = safeCanonicalJsonStringify(result.metrics, "metrics", 65_536);
+      const provenanceJson = safeCanonicalJsonStringify(result.provenance, "provenance", 65_536);
+      const equityCurveJson = safeCanonicalJsonStringify(result.equityCurve, "equity curve", 1_048_576);
       const normalized = {
         market: dataset.market,
         symbol: text(dataset.symbol, "dataset symbol", 64),
@@ -233,9 +230,8 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
         resultCreatedAt: time(result.createdAt, "result.createdAt"),
       };
 
-      const existing = await storedCompletion(owner, target);
-      if (!existing) throw new Error("owned backtest job not found");
-      if (existing.status === "succeeded") {
+      const classifyStoredCompletion = async (existing: StoredCompletion): Promise<{ job: BacktestJobRecord; idempotent: true } | null> => {
+        if (existing.status !== "succeeded") return null;
         const identical = existing.completedAt === completedAt
           && existing.datasetId === datasetId && existing.market === normalized.market
           && existing.symbol === normalized.symbol && existing.interval === normalized.interval
@@ -252,41 +248,61 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
           && existing.strategyHash === normalized.strategyHash && existing.scriptHash === normalized.scriptHash
           && existing.resultCreatedAt === normalized.resultCreatedAt;
         if (!identical) throw new Error("backtest completion conflict");
-        return { job: (await getById(owner, target))!, idempotent: true };
-      }
+        const job = await getById(owner, target);
+        if (!job) throw new Error("owned backtest job not found");
+        return { job, idempotent: true };
+      };
+
+      const existing = await storedCompletion(owner, target);
+      if (!existing) throw new Error("owned backtest job not found");
+      const alreadyCompleted = await classifyStoredCompletion(existing);
+      if (alreadyCompleted) return alreadyCompleted;
       if (existing.status !== "running" || existing.datasetId !== null || existing.resultId !== null) {
         throw new Error("backtest job is not running or already has immutable output");
       }
 
-      const batch = await database.batch([
-        database.prepare(`
-          INSERT INTO backtest_datasets
-            (id, user_id, backtest_job_id, market, symbol, interval, source, requested_start_at,
-             requested_end_at, actual_start_at, actual_end_at, complete, gaps_json, checksum, created_at)
-          SELECT ?, user_id, id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM backtest_jobs
-          WHERE user_id = ? AND id = ? AND status = 'running'
-        `).bind(datasetId, normalized.market, normalized.symbol, normalized.interval, normalized.source,
-          normalized.requestedStartAt, normalized.requestedEndAt, normalized.actualStartAt, normalized.actualEndAt,
-          normalized.complete, gapsJson, normalized.checksum, normalized.datasetCreatedAt, owner, target),
-        database.prepare(`
-          INSERT INTO backtest_results
-            (id, user_id, backtest_job_id, dataset_id, evidence_level, initial_capital, fee_rate,
-             slippage_rate, leverage, funding_json, metrics_json, provenance_json, equity_curve_json,
-             engine_version, configuration_hash, strategy_hash, script_hash, created_at)
-          SELECT ?, j.user_id, j.id, d.id, 'historical', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-          FROM backtest_jobs j JOIN backtest_datasets d ON d.backtest_job_id = j.id AND d.user_id = j.user_id
-          WHERE j.user_id = ? AND j.id = ? AND j.status = 'running'
-        `).bind(resultId, normalized.initialCapital, normalized.feeRate, normalized.slippageRate,
-          normalized.leverage, fundingJson, metricsJson, provenanceJson, equityCurveJson, normalized.engineVersion,
-          normalized.configurationHash, normalized.strategyHash, normalized.scriptHash, normalized.resultCreatedAt, owner, target),
-        database.prepare(`
-          UPDATE backtest_jobs SET status = 'succeeded', completed_at = ?, error_code = NULL, error_message = NULL
-          WHERE user_id = ? AND id = ? AND status = 'running'
-            AND EXISTS (SELECT 1 FROM backtest_datasets WHERE backtest_job_id = ? AND user_id = ?)
-            AND EXISTS (SELECT 1 FROM backtest_results WHERE backtest_job_id = ? AND user_id = ?)
-        `).bind(completedAt, owner, target, target, owner, target, owner),
-      ]);
+      let batch: ControlPlaneRunResult[];
+      try {
+        batch = await database.batch([
+          database.prepare(`
+            INSERT INTO backtest_datasets
+              (id, user_id, backtest_job_id, market, symbol, interval, source, requested_start_at,
+               requested_end_at, actual_start_at, actual_end_at, complete, gaps_json, checksum, created_at)
+            SELECT ?, user_id, id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM backtest_jobs
+            WHERE user_id = ? AND id = ? AND status = 'running'
+          `).bind(datasetId, normalized.market, normalized.symbol, normalized.interval, normalized.source,
+            normalized.requestedStartAt, normalized.requestedEndAt, normalized.actualStartAt, normalized.actualEndAt,
+            normalized.complete, gapsJson, normalized.checksum, normalized.datasetCreatedAt, owner, target),
+          database.prepare(`
+            INSERT INTO backtest_results
+              (id, user_id, backtest_job_id, dataset_id, evidence_level, initial_capital, fee_rate,
+               slippage_rate, leverage, funding_json, metrics_json, provenance_json, equity_curve_json,
+               engine_version, configuration_hash, strategy_hash, script_hash, created_at)
+            SELECT ?, j.user_id, j.id, d.id, 'historical', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            FROM backtest_jobs j JOIN backtest_datasets d ON d.backtest_job_id = j.id AND d.user_id = j.user_id
+            WHERE j.user_id = ? AND j.id = ? AND j.status = 'running'
+          `).bind(resultId, normalized.initialCapital, normalized.feeRate, normalized.slippageRate,
+            normalized.leverage, fundingJson, metricsJson, provenanceJson, equityCurveJson, normalized.engineVersion,
+            normalized.configurationHash, normalized.strategyHash, normalized.scriptHash, normalized.resultCreatedAt, owner, target),
+          database.prepare(`
+            UPDATE backtest_jobs SET status = 'succeeded', completed_at = ?, error_code = NULL, error_message = NULL
+            WHERE user_id = ? AND id = ? AND status = 'running'
+              AND EXISTS (SELECT 1 FROM backtest_datasets WHERE backtest_job_id = ? AND user_id = ?)
+              AND EXISTS (SELECT 1 FROM backtest_results WHERE backtest_job_id = ? AND user_id = ?)
+          `).bind(completedAt, owner, target, target, owner, target, owner),
+        ]);
+      } catch (error) {
+        const authoritative = await storedCompletion(owner, target);
+        if (!authoritative) throw new Error("owned backtest job not found");
+        const racedCompletion = await classifyStoredCompletion(authoritative);
+        if (racedCompletion) return racedCompletion;
+        throw error;
+      }
       if (batch.some((entry) => !entry.success) || !batch.every((entry) => (entry.meta.changes ?? 0) === 1)) {
+        const authoritative = await storedCompletion(owner, target);
+        if (!authoritative) throw new Error("owned backtest job not found");
+        const racedCompletion = await classifyStoredCompletion(authoritative);
+        if (racedCompletion) return racedCompletion;
         throw new Error("atomic backtest completion failed");
       }
       const job = await getById(owner, target);

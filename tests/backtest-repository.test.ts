@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
 import { createBacktestRepository } from "../db/repositories";
+import type { BacktestCompletionInput } from "../db/repositories";
 
 class SqliteStatement implements ControlPlaneStatement {
   constructor(private readonly statement: StatementSync, private readonly values: unknown[] = []) {}
@@ -59,7 +60,7 @@ const request = (strategyVersionId: string) => ({
   gapPolicy: "fail" as const,
 });
 
-const completion = (suffix = "a") => ({
+const completion = (suffix = "a"): BacktestCompletionInput => ({
   completedAt: 500,
   dataset: {
     id: `dataset_${suffix}`,
@@ -148,6 +149,9 @@ describe("backtest repository", () => {
     expect(await repository.advanceStatus("usr_a", "job_a", "queued", "fetching-data", 200)).toMatchObject({ status: "fetching-data" });
     expect(await repository.advanceStatus("usr_a", "job_a", "queued", "fetching-data", 201)).toBeNull();
     expect(await repository.advanceStatus("usr_a", "job_a", "fetching-data", "running", 202)).toMatchObject({ status: "running" });
+    await expect(repository.advanceStatus("usr_a", "job_a", "running", "succeeded", 203)).rejects.toThrow(/transition/i);
+    await expect(repository.advanceStatus("usr_a", "job_a", "running", "failed", 203)).rejects.toThrow(/transition/i);
+    expect(await repository.getById("usr_a", "job_a")).toMatchObject({ status: "running", completedAt: null });
   });
 
   it("atomically persists dataset, result, and succeeded state and retries identical content idempotently", async () => {
@@ -161,6 +165,38 @@ describe("backtest repository", () => {
     expect(database.raw.prepare("SELECT count(*) AS count FROM backtest_datasets WHERE backtest_job_id = 'job_a'").get()).toEqual({ count: 1 });
     expect(database.raw.prepare("SELECT count(*) AS count FROM backtest_results WHERE backtest_job_id = 'job_a'").get()).toEqual({ count: 1 });
     await expect(repository.completeSuccess("usr_a", "job_a", completion("different"))).rejects.toThrow(/conflict/i);
+  });
+
+  it("treats bounded JSON with different object key order as the same completion", async () => {
+    await create("job_a");
+    await start("job_a");
+    const first = completion("a");
+    first.result.metrics = { alpha: { first: 1, second: 2 }, beta: true };
+    await repository.completeSuccess("usr_a", "job_a", first);
+    const reordered = completion("a");
+    reordered.result.metrics = { beta: true, alpha: { second: 2, first: 1 } };
+    await expect(repository.completeSuccess("usr_a", "job_a", reordered)).resolves.toMatchObject({ idempotent: true });
+  });
+
+  it("authoritatively re-reads an identical completion won by an interleaved writer", async () => {
+    await create("job_a");
+    await start("job_a");
+    const winner = createBacktestRepository(database);
+    let interleaved = false;
+    const racingDatabase: ControlPlaneDatabase = {
+      prepare: (sql) => database.prepare(sql),
+      batch: async (statements) => {
+        if (!interleaved) {
+          interleaved = true;
+          await winner.completeSuccess("usr_a", "job_a", completion("a"));
+        }
+        return database.batch(statements);
+      },
+    };
+    const loser = createBacktestRepository(racingDatabase);
+    await expect(loser.completeSuccess("usr_a", "job_a", completion("a"))).resolves.toMatchObject({ idempotent: true });
+    expect(database.raw.prepare("SELECT count(*) AS count FROM backtest_results WHERE backtest_job_id = 'job_a'").get())
+      .toEqual({ count: 1 });
   });
 
   it("rolls the entire completion back when any result insert fails", async () => {

@@ -141,17 +141,24 @@ const jsonValue = (value: unknown, label: string, maximumBytes: number): JsonVal
 };
 
 /** Serializes only the same detached, bounded, credential-safe JSON accepted by control-plane DTOs. */
+const serializeJson = (item: JsonValue, canonical: boolean): string => {
+  if (item === null) return "null";
+  if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+    return JSON.stringify(item);
+  }
+  if (Array.isArray(item)) return `[${item.map((value) => serializeJson(value, canonical)).join(",")}]`;
+  const keys = Object.keys(item);
+  if (canonical) keys.sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${serializeJson(item[key]!, canonical)}`).join(",")}}`;
+};
+
 export function safeJsonStringify(value: unknown, label = "JSON", maximumBytes = 65_536): string {
-  const safe = jsonValue(value, label, maximumBytes);
-  const serialize = (item: JsonValue): string => {
-    if (item === null) return "null";
-    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
-      return JSON.stringify(item);
-    }
-    if (Array.isArray(item)) return `[${item.map(serialize).join(",")}]`;
-    return `{${Object.keys(item).map((key) => `${JSON.stringify(key)}:${serialize(item[key]!)}`).join(",")}}`;
-  };
-  return serialize(safe);
+  return serializeJson(jsonValue(value, label, maximumBytes), false);
+}
+
+/** Bounded, credential-safe JSON with recursively sorted object keys for content identity checks. */
+export function safeCanonicalJsonStringify(value: unknown, label = "JSON", maximumBytes = 65_536): string {
+  return serializeJson(jsonValue(value, label, maximumBytes), true);
 }
 
 export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto {
