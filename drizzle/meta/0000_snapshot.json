@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "de8657ae-bff0-4243-b271-1e5dd2e6f515",
+  "id": "2bbf3f88-892b-4957-ab3a-9b7d7263365c",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_events": {
@@ -866,6 +866,14 @@
             "id",
             "device_id",
             "user_id"
+          ],
+          "isUnique": true
+        },
+        "commands_user_correlation_uidx": {
+          "name": "commands_user_correlation_uidx",
+          "columns": [
+            "user_id",
+            "correlation_id"
           ],
           "isUnique": true
         },

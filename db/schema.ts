@@ -397,6 +397,7 @@ export const commands = sqliteTable("commands", {
   }),
   uniqueIndex("commands_id_user_uidx").on(table.id, table.userId),
   uniqueIndex("commands_id_device_user_uidx").on(table.id, table.deviceId, table.userId),
+  uniqueIndex("commands_user_correlation_uidx").on(table.userId, table.correlationId),
   index("commands_device_status_created_idx").on(table.deviceId, table.status, table.createdAt),
   index("commands_user_created_idx").on(table.userId, table.createdAt),
 ]);

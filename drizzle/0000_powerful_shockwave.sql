@@ -122,6 +122,7 @@ CREATE TABLE `commands` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `commands_id_user_uidx` ON `commands` (`id`,`user_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `commands_id_device_user_uidx` ON `commands` (`id`,`device_id`,`user_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `commands_user_correlation_uidx` ON `commands` (`user_id`,`correlation_id`);--> statement-breakpoint
 CREATE INDEX `commands_device_status_created_idx` ON `commands` (`device_id`,`status`,`created_at`);--> statement-breakpoint
 CREATE INDEX `commands_user_created_idx` ON `commands` (`user_id`,`created_at`);--> statement-breakpoint
 CREATE TABLE `deployments` (
@@ -357,14 +358,12 @@ CREATE TABLE `users` (
 	`updated_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `users_normalized_email_uidx` ON `users` (`normalized_email`);
---> statement-breakpoint
+CREATE UNIQUE INDEX `users_normalized_email_uidx` ON `users` (`normalized_email`);--> statement-breakpoint
 CREATE TRIGGER audit_events_prevent_update
 BEFORE UPDATE ON audit_events
 BEGIN
   SELECT RAISE(ABORT, 'audit_events are append-only');
-END;
---> statement-breakpoint
+END;--> statement-breakpoint
 CREATE TRIGGER audit_events_prevent_delete
 BEFORE DELETE ON audit_events
 BEGIN
