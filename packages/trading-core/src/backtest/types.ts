@@ -3,7 +3,7 @@ import type { Market, SignalAction, StrategyEvaluator } from "../contracts";
 
 export type GapPolicy = "fail" | "disclose";
 export type PositionSide = "long" | "short";
-export type TradeExitReason = "signal" | "opposite-signal" | "partial-reduction" | "end-of-data";
+export type TradeExitReason = "signal" | "opposite-signal" | "partial-reduction" | "liquidation" | "end-of-data";
 
 export interface FundingEvent {
   timestamp: number;
@@ -19,6 +19,7 @@ export interface HistoricalBacktestRequest {
   feeRate: string;
   slippageRate: string;
   leverage: string;
+  maintenanceMarginRate?: string;
   funding: readonly FundingEvent[];
   gapPolicy: GapPolicy;
   engineVersion: string;
@@ -97,6 +98,12 @@ export interface HistoricalBacktestProvenance {
     signalEvaluation: "completed-candle-close";
     signalExecution: "next-candle-open";
     riskTrigger: "close-only-not-intrabar";
+  };
+  liquidationModel: {
+    maintenanceMarginRate: string;
+    maximumSupportedLeverage: "10";
+    check: "intrabar-low-for-long-high-for-short-and-after-funding";
+    model: "fixed-conservative-not-weex-tier-exact";
   };
 }
 

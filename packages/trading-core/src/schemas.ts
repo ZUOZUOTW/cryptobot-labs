@@ -110,6 +110,7 @@ export const StrategyInputSchema = z.strictObject({
       troughPrice: PositiveDecimalStringSchema,
       quantity: PositiveDecimalStringSchema,
       usedMargin: PositiveDecimalStringSchema,
+      layerCount: z.number().int().positive(),
     }).optional(),
   }).optional(),
 });

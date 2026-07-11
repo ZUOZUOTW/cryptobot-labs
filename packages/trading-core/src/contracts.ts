@@ -33,6 +33,7 @@ export interface StrategyPositionSnapshot {
   troughPrice: string;
   quantity: string;
   usedMargin: string;
+  layerCount: number;
 }
 
 export interface StrategyPortfolioSnapshot {

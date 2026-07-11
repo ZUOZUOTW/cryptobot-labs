@@ -181,9 +181,7 @@ const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle
     }
     case "dca": {
       const interval = parameter(block, "intervalDays") * 86_400_000;
-      const elapsed = candles.at(-1)!.closeTime - candles[0]!.closeTime;
-      const priorElapsed = candles.at(-2)!.closeTime - candles[0]!.closeTime;
-      return candles.length === 2 || Math.floor(elapsed / interval) > Math.floor(priorElapsed / interval) ? 1 : 0;
+      return Math.floor(candles.at(-1)!.closeTime / interval) > Math.floor(candles.at(-2)!.closeTime / interval) ? 1 : 0;
     }
     default:
       return 0;
@@ -333,6 +331,9 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
       const sameDirection = position && ((position.side === "long" && action === "buy") || (position.side === "short" && action === "sell"));
       const reducing = position && !sameDirection;
       const grid = config.blocks.find((block) => block.id === "grid");
+      if (sameDirection && grid && position.layerCount >= parameter(grid, "gridCount")) {
+        return { id: `visual-${input.now}-hold`, action: "hold", reason: "grid:maximum-layers-reached", createdAt: input.now };
+      }
       return {
         id: `visual-${input.now}-${action}`,
         action,
@@ -342,7 +343,7 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
         ...(sameDirection ? { positionEffect: "add" as const } : {}),
         ...(reducing ? {
           positionEffect: "reduce" as const,
-          reductionRate: grid ? 1 / parameter(grid, "gridCount") : allocation,
+          reductionRate: grid ? 1 / position.layerCount : allocation,
         } : {}),
       };
     },

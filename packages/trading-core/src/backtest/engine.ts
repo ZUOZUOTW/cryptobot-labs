@@ -26,6 +26,7 @@ interface Position {
   peakPrice: Decimal;
   troughPrice: Decimal;
   usedMargin: Decimal;
+  layerCount: number;
 }
 
 interface PendingSignal {
@@ -38,10 +39,16 @@ const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const MAX_ECMASCRIPT_TIMESTAMP = 8_640_000_000_000_000;
 export const MAX_HISTORICAL_CANDLES = 10_000;
 export const MAX_DECIMAL_STRING_LENGTH = 128;
+export const MAX_HISTORICAL_FUNDING_EVENTS = MAX_HISTORICAL_CANDLES * 4;
+export const MAX_VALIDATION_ENTRIES = MAX_HISTORICAL_CANDLES;
+export const MAX_HISTORICAL_LEVERAGE = 10;
+const DEFAULT_MAINTENANCE_MARGIN_RATE = "0.02";
 
 function numeric(value: string, label: string, options: { positive?: boolean; belowOne?: boolean; signed?: boolean } = {}): Decimal {
   const pattern = options.signed ? SIGNED_DECIMAL : UNSIGNED_DECIMAL;
-  if (!pattern.test(value)) throw new TypeError(`${label} must be a plain decimal string`);
+  if (typeof value !== "string" || value.length > MAX_DECIMAL_STRING_LENGTH || !pattern.test(value)) {
+    throw new TypeError(`${label} must be a bounded plain decimal string`);
+  }
   const parsed = decimal(value);
   if (options.positive ? parsed.lte(0) : !options.signed && parsed.lt(0)) {
     throw new RangeError(`${label} is outside its allowed range`);
@@ -52,6 +59,7 @@ function numeric(value: string, label: string, options: { positive?: boolean; be
 
 function validateFunding(events: readonly FundingEvent[], market: "spot" | "futures"): FundingEvent[] {
   if (!Array.isArray(events)) throw new TypeError("funding must be an array");
+  if (events.length > MAX_HISTORICAL_FUNDING_EVENTS) throw new RangeError("Too many funding events");
   if (market === "spot" && events.length > 0) throw new TypeError("funding is only valid for futures");
   return events.map((event) => {
     if (!Number.isSafeInteger(event.timestamp) || event.timestamp < 0) throw new TypeError("Invalid funding timestamp");
@@ -93,12 +101,27 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
   numeric(request.slippageRate, "slippageRate", { belowOne: true });
   const leverage = numeric(request.leverage, "leverage", { positive: true });
   if (dataset.request.market === "spot" && !leverage.eq(1)) throw new RangeError("Spot leverage must be one");
+  if (dataset.request.market === "spot") {
+    if (request.maintenanceMarginRate !== undefined && !numeric(request.maintenanceMarginRate, "maintenanceMarginRate").eq(0)) {
+      throw new RangeError("Spot maintenanceMarginRate must be zero or omitted");
+    }
+  } else {
+    numeric(request.maintenanceMarginRate ?? DEFAULT_MAINTENANCE_MARGIN_RATE, "maintenanceMarginRate", { positive: true, belowOne: true });
+  }
   if (leverage.times(request.feeRate).gte(1)) {
     throw new RangeError("Leverage and fee rate would consume all usable equity");
   }
+  if (leverage.gt(MAX_HISTORICAL_LEVERAGE)) throw new RangeError(`Historical leverage must not exceed ${MAX_HISTORICAL_LEVERAGE}`);
 
   if (dataset.candles.length < 2) throw new RangeError("Historical backtests require at least two completed candles");
   if (dataset.candles.length > MAX_HISTORICAL_CANDLES) throw new RangeError(`Historical backtests support at most ${MAX_HISTORICAL_CANDLES} candles`);
+  if (Array.isArray(request.funding) && request.funding.length > dataset.candles.length * 4) {
+    throw new RangeError("Funding events are oversized for the candle dataset");
+  }
+  if (dataset.validation.duplicates.length > MAX_VALIDATION_ENTRIES || dataset.validation.gaps.length > MAX_VALIDATION_ENTRIES ||
+      dataset.validation.duplicates.length > dataset.candles.length || dataset.validation.gaps.length > dataset.candles.length) {
+    throw new RangeError("Historical validation metadata is oversized");
+  }
   for (const candle of dataset.candles) {
     if (!Number.isSafeInteger(candle.openTime) || !Number.isSafeInteger(candle.closeTime) ||
         candle.openTime < 0 || candle.closeTime <= candle.openTime || candle.closeTime > MAX_ECMASCRIPT_TIMESTAMP) {
@@ -169,6 +192,9 @@ export async function runHistoricalBacktest(
   const feeRate = decimal(request.feeRate);
   const slippageRate = decimal(request.slippageRate);
   const leverage = decimal(request.leverage);
+  const maintenanceMarginRate = market === "futures"
+    ? decimal(request.maintenanceMarginRate ?? DEFAULT_MAINTENANCE_MARGIN_RATE)
+    : decimal(0);
   const initialCapital = decimal(request.initialCapital);
   let balance = initialCapital;
   let position: Position | undefined;
@@ -215,11 +241,23 @@ export async function runHistoricalBacktest(
       position.entryFee = position.entryFee.minus(entryFee);
       position.funding = position.funding.minus(funding);
       position.usedMargin = position.usedMargin.times(decimal(1).minus(rate));
+      position.layerCount = Math.max(1, position.layerCount - 1);
     }
   }
 
   function closePosition(referencePrice: string, timestamp: number, reason: TradeExitReason): void {
     reducePosition(referencePrice, timestamp, reason, 1);
+  }
+
+  function liquidateIfRequired(markPrice: string, timestamp: number): boolean {
+    if (market !== "futures" || !position) return false;
+    const mark = decimal(markPrice);
+    const marginBalance = balance.plus(unrealizedPnl(position.side, position.entryPrice, mark, position.quantity));
+    const maintenance = position.quantity.times(mark).times(maintenanceMarginRate);
+    if (marginBalance.gt(maintenance)) return false;
+    closePosition(markPrice, timestamp, "liquidation");
+    balance = Decimal.max(0, balance);
+    return true;
   }
 
   function addPosition(side: PositionSide, referencePrice: string, timestamp: number, allocationRate = 1): boolean {
@@ -229,8 +267,10 @@ export async function runHistoricalBacktest(
     const accountEquity = position
       ? balance.plus(unrealizedPnl(position.side, position.entryPrice, referencePrice, position.quantity))
       : balance;
-    const available = Decimal.max(0, accountEquity.minus(position?.usedMargin ?? 0));
-    const notional = available.times(allocationRate).div(marginRate.plus(feeRate));
+    const accountBase = market === "spot" ? balance : accountEquity;
+    const available = Decimal.max(0, accountBase.minus(position?.usedMargin ?? 0));
+    const trancheBudget = Decimal.min(available, Decimal.max(0, accountBase).times(allocationRate));
+    const notional = trancheBudget.div(marginRate.plus(feeRate));
     if (notional.lte(0)) return false;
     const quantity = notional.div(entryPrice);
     const entryFee = notional.times(feeRate);
@@ -239,7 +279,7 @@ export async function runHistoricalBacktest(
     if (!position) {
       position = {
         side, entryTime: timestamp, entryPrice, quantity, entryFee, funding: decimal(0),
-        peakPrice: entryPrice, troughPrice: entryPrice, usedMargin,
+        peakPrice: entryPrice, troughPrice: entryPrice, usedMargin, layerCount: 1,
       };
     } else {
       const priorQuantity = position.quantity;
@@ -250,6 +290,7 @@ export async function runHistoricalBacktest(
       position.usedMargin = position.usedMargin.plus(usedMargin);
       position.peakPrice = Decimal.max(position.peakPrice, entryPrice);
       position.troughPrice = Decimal.min(position.troughPrice, entryPrice);
+      position.layerCount += 1;
     }
     return true;
   }
@@ -294,7 +335,14 @@ export async function runHistoricalBacktest(
       (position.side === "short" && signal.action === "buy");
     const sameDirection = (position.side === "long" && signal.action === "buy") ||
       (position.side === "short" && signal.action === "sell");
-    if (sameDirection && signal.positionEffect === "add") {
+    const incoherent = (sameDirection && signal.positionEffect === "reduce") ||
+      (opposite && signal.positionEffect === "add") ||
+      (signal.positionEffect !== undefined && !sameDirection && !opposite);
+    if (incoherent) {
+      event.status = "rejected";
+      event.effect = "none";
+      event.reason = "incoherent-position-effect";
+    } else if (sameDirection && signal.positionEffect === "add") {
       event.effect = addPosition(position.side, candle.open, candle.openTime, signal.allocationRate) ? "added" : "none";
       if (event.effect === "none") {
         event.status = "rejected";
@@ -342,6 +390,10 @@ export async function runHistoricalBacktest(
       position.troughPrice = Decimal.min(position.troughPrice, candle.low);
     }
 
+    if (position) {
+      liquidateIfRequired(position.side === "long" ? candle.low : candle.high, candle.closeTime);
+    }
+
     let periodFunding = decimal(0);
     while (fundingCursor < validated.funding.length && validated.funding[fundingCursor]!.timestamp <= candle.closeTime) {
       const event = validated.funding[fundingCursor]!;
@@ -355,6 +407,10 @@ export async function runHistoricalBacktest(
       periodFunding = periodFunding.plus(adjustment);
       netFunding = netFunding.plus(adjustment);
       appliedFundingEvents += 1;
+    }
+
+    if (position) {
+      liquidateIfRequired(position.side === "long" ? candle.low : candle.high, candle.closeTime);
     }
 
     const equity = position
@@ -385,7 +441,10 @@ export async function runHistoricalBacktest(
           dayStartEquity: decimalString(dayStartEquity),
           utcDay,
           dailyLossBreached,
-          availableEquity: decimalString(Decimal.max(0, equity.minus(position?.usedMargin ?? 0))),
+          availableEquity: decimalString(Decimal.max(
+            0,
+            (market === "spot" ? balance : equity).minus(position?.usedMargin ?? 0),
+          )),
           ...(position ? {
             position: Object.freeze({
               side: position.side,
@@ -394,6 +453,7 @@ export async function runHistoricalBacktest(
               troughPrice: decimalString(position.troughPrice),
               quantity: decimalString(position.quantity),
               usedMargin: decimalString(position.usedMargin),
+              layerCount: position.layerCount,
             }),
           } : {}),
         }),
@@ -485,6 +545,12 @@ export async function runHistoricalBacktest(
         signalEvaluation: "completed-candle-close",
         signalExecution: "next-candle-open",
         riskTrigger: "close-only-not-intrabar",
+      },
+      liquidationModel: {
+        maintenanceMarginRate: decimalString(maintenanceMarginRate),
+        maximumSupportedLeverage: "10",
+        check: "intrabar-low-for-long-high-for-short-and-after-funding",
+        model: "fixed-conservative-not-weex-tier-exact",
       },
     },
   };

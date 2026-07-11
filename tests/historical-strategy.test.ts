@@ -122,6 +122,19 @@ describe("visual historical strategy evaluator", () => {
     expect(boostedSignal.allocationRate).toBeGreaterThan(dailySignal.allocationRate!);
   });
 
+  it("keeps DCA on absolute UTC buckets with a bounded 1024-candle window", async () => {
+    const hour = 3_600_000;
+    const day = 86_400_000;
+    const currentClose = 100 * day + 30 * 60_000;
+    const items: Candle[] = Array.from({ length: 1024 }, (_, index) => {
+      const closeTime = currentClose - (1023 - index) * hour;
+      return { openTime: closeTime - hour + 1, closeTime, open: "100", high: "101", low: "99", close: "100", volume: "100", complete: true };
+    });
+    let candidate = withBlocks(["dca", "fixed-position"]);
+    candidate = setParameter(candidate, "dca", "intervalDays", 1);
+    expect((await createVisualHistoricalEvaluator(candidate).evaluate(input(items))).action).toBe("buy");
+  });
+
   it("applies volume confirmation and distinct all/any entry composition", async () => {
     const values = [10, 10, 10, 10, 10, 10, 10, 10, 10, 1, 20];
     const lowVolume = candles(values, values.map(() => 100));
@@ -210,7 +223,7 @@ describe("visual historical strategy evaluator", () => {
       equity: "1000",
       dayStartEquity: "1000",
       utcDay: "1970-01-01",
-      position: { side: "long", entryPrice: "100", peakPrice: peak, troughPrice: trough, quantity: "1", usedMargin: "100" },
+      position: { side: "long", entryPrice: "100", peakPrice: peak, troughPrice: trough, quantity: "1", usedMargin: "100", layerCount: 1 },
     }));
     expect(result).toMatchObject({ action: "close", reason: id });
   });
@@ -223,14 +236,14 @@ describe("visual historical strategy evaluator", () => {
     expect(await evaluator.evaluate(input(candles([100, 100]), "spot", portfolio))).toMatchObject({ action: "hold", reason: /suppress/ });
     expect(await evaluator.evaluate(input(candles([100, 100]), "spot", {
       ...portfolio,
-      position: { side: "long", entryPrice: "100", peakPrice: "100", troughPrice: "100", quantity: "1", usedMargin: "100" },
+      position: { side: "long", entryPrice: "100", peakPrice: "100", troughPrice: "100", quantity: "1", usedMargin: "100", layerCount: 1 },
     }))).toMatchObject({ action: "close", reason: /maximum-daily-loss/ });
   });
 
   it("uses linear short returns at the exact take-profit and stop-loss boundaries", async () => {
     const snapshot = (close: number) => input(candles([100, close]), "futures", {
       equity: "1000", dayStartEquity: "1000", utcDay: "1970-01-01",
-      position: { side: "short", entryPrice: "100", peakPrice: "105", troughPrice: "95", quantity: "1", usedMargin: "50" },
+      position: { side: "short", entryPrice: "100", peakPrice: "105", troughPrice: "95", quantity: "1", usedMargin: "50", layerCount: 1 },
     });
     let takeProfit = withBlocks(["dca", "take-profit"], "futures");
     takeProfit = setParameter(takeProfit, "take-profit", "takeProfit", 5);
@@ -264,11 +277,13 @@ describe("visual historical strategy evaluator", () => {
     expect(dcaResult.signalEvents.map((event) => event.effect)).toContain("added");
 
     let grid = withBlocks(["grid", "fixed-position"]);
-    grid = setParameter(setParameter(setParameter(setParameter(grid, "grid", "gridCount", 2), "grid", "range", 2), "fixed-position", "positionSize", 50), "stop-loss", "stopLoss", 20);
-    const gridResult = await run(grid, candles([100, 98, 96, 98, 100, 100]), 3_600_000);
-    expect(gridResult.signalEvents.map((event) => event.effect)).toContain("added");
-    expect(gridResult.signalEvents.map((event) => event.effect)).toContain("reduced");
-    expect(gridResult.trades.some((trade) => trade.exitReason === "partial-reduction")).toBe(true);
+    grid = setParameter(setParameter(setParameter(setParameter(grid, "grid", "gridCount", 3), "grid", "range", 6), "fixed-position", "positionSize", 100), "stop-loss", "stopLoss", 20);
+    const gridResult = await run(grid, candles([100, 97, 94, 91, 88, 91, 94, 97, 100, 100]), 3_600_000);
+    expect(gridResult.signalEvents.filter((event) => event.effect === "added")).toHaveLength(2);
+    expect(gridResult.signalEvents.filter((event) => event.effect === "reduced")).toHaveLength(2);
+    expect(gridResult.signalEvents.filter((event) => event.effect === "closed")).toHaveLength(1);
+    expect(gridResult.signalEvents.some((event) => event.reason === "grid:maximum-layers-reached")).toBe(true);
+    expect(gridResult.trades).toHaveLength(3);
   });
 
   it("permits bearish futures entries but never emits a spot short", async () => {

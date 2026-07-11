@@ -201,6 +201,73 @@ describe("historical backtest", () => {
     expect(result.trades[0]!.quantity).toBe("10");
   });
 
+  it("uses realized cash for spot tranches and equity for futures tranches", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 200, close: 200 }]);
+    const layered = { async evaluate({ candles }: { candles: readonly Candle[] }) {
+      return {
+        id: `cash-${candles.length}`, action: "buy" as const, reason: "cash", createdAt: candles.at(-1)!.closeTime,
+        allocationRate: 0.5, ...(candles.length > 1 ? { positionEffect: "add" as const } : {}),
+      };
+    } };
+    const spot = await runHistoricalBacktest(request({ dataset: dataset(items), feeRate: "0", slippageRate: "0", evaluator: layered }));
+    expect(spot.trades[0]!.quantity).toBe("7.5");
+
+    const futures = await runHistoricalBacktest(request({
+      dataset: dataset(items, "futures"), feeRate: "0", slippageRate: "0", leverage: "2", evaluator: layered,
+    }));
+    expect(Number(futures.trades[0]!.quantity)).toBeGreaterThan(Number(spot.trades[0]!.quantity));
+    expect(futures.trades[0]!.quantity).toBe("20");
+  });
+
+  it("rejects incoherent add/reduce effects without changing the position", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    const signals = [
+      { action: "buy" as const, allocationRate: 0.25 },
+      { action: "sell" as const, positionEffect: "add" as const, allocationRate: 0.25 },
+      { action: "buy" as const, positionEffect: "reduce" as const, reductionRate: 0.5 },
+      { action: "hold" as const },
+    ];
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items), feeRate: "0", slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: `coherent-${candles.length}`, reason: "coherent", createdAt: candles.at(-1)!.closeTime, ...signals[candles.length - 1]! };
+      } },
+    }));
+    expect(result.signalEvents.filter((event) => event.reason === "incoherent-position-effect")).toHaveLength(2);
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.quantity).toBe("2.5");
+  });
+
+  it.each([
+    ["long", "buy", { open: 100, close: 100, high: "101", low: "80" }],
+    ["short", "sell", { open: 100, close: 100, high: "120", low: "99" }],
+  ] as const)("liquidates a %s at the conservative intrabar mark", async (_side, action, adverse) => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    items[1] = { ...items[1]!, high: adverse.high, low: adverse.low };
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items, "futures"), leverage: "10", maintenanceMarginRate: "0.02", feeRate: "0", slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: "liq", action: candles.length === 1 ? action : "hold", reason: "liq", createdAt: candles.at(-1)!.closeTime };
+      } },
+    }));
+    expect(result.trades[0]!.exitReason).toBe("liquidation");
+    expect(Number(result.equityCurve.at(-1)!.equity)).toBeGreaterThanOrEqual(0);
+    expect(result.provenance.liquidationModel).toMatchObject({ maintenanceMarginRate: "0.02", model: "fixed-conservative-not-weex-tier-exact" });
+  });
+
+  it("rechecks liquidation after funding is debited", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items, "futures"), leverage: "10", maintenanceMarginRate: "0.02", feeRate: "0", slippageRate: "0",
+      funding: [{ timestamp: 4_000_000, rate: "0.09", markPrice: "100" }],
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: "funding-liq", action: candles.length === 1 ? "buy" : "hold", reason: "funding-liq", createdAt: candles.at(-1)!.closeTime };
+      } },
+    }));
+    expect(result.trades[0]!.exitReason).toBe("liquidation");
+    expect(result.provenance.fundingTreatment.appliedEvents).toBe(1);
+  });
+
   it("latches daily loss until the next UTC day even after equity recovers", async () => {
     const intervalMs = 6 * 3_600_000;
     const items = generatedCandles([
@@ -325,6 +392,22 @@ describe("historical backtest", () => {
       dataset: dataset([{ ...fixedCandles[0], open: oversized }, fixedCandles[1]] as Candle[]), evaluator,
     }))).rejects.toThrow(/decimal string limit/i);
     expect(evaluator.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("bounds every numeric and metadata collection at the engine boundary", async () => {
+    const huge = "1".repeat(MAX_DECIMAL_STRING_LENGTH + 1);
+    await expect(runHistoricalBacktest(request({ initialCapital: huge }))).rejects.toThrow(/bounded/i);
+    await expect(runHistoricalBacktest(request({
+      dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "2", funding: [{ timestamp: 1, rate: huge, markPrice: "100" }],
+    }))).rejects.toThrow(/bounded/i);
+    await expect(runHistoricalBacktest(request({
+      dataset: { ...dataset(fixedCandles as Candle[]), validation: { duplicates: Array(4).fill(1), ordered: true, gaps: [], incompleteCount: 0 } },
+    }))).rejects.toThrow(/oversized/i);
+    await expect(runHistoricalBacktest(request({ dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "11" }))).rejects.toThrow(/10/);
+    await expect(runHistoricalBacktest(request({ maintenanceMarginRate: "0.02" }))).rejects.toThrow(/spot/i);
+    await expect(runHistoricalBacktest(request({
+      dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "2", maintenanceMarginRate: "1",
+    }))).rejects.toThrow(/less than one/i);
   });
 
   it("rejects unsafe candle timestamps at the engine boundary", async () => {
