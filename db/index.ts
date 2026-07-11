@@ -2,6 +2,39 @@ import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
+export interface ControlPlaneRunResult {
+  success: boolean;
+  meta: { changes?: number };
+}
+
+export interface ControlPlaneStatement {
+  bind(...values: unknown[]): ControlPlaneStatement;
+  first<T>(): Promise<T | null>;
+  all<T>(): Promise<{ results: T[]; success: boolean }>;
+  run(): Promise<ControlPlaneRunResult>;
+}
+
+export interface ControlPlaneDatabase {
+  prepare(sql: string): ControlPlaneStatement;
+  batch<T extends readonly ControlPlaneStatement[]>(statements: T): Promise<ControlPlaneRunResult[]>;
+}
+
+type D1Binding = Parameters<typeof drizzle>[0];
+
+export function createDb(binding: D1Binding) {
+  return drizzle(binding, { schema });
+}
+
+/** Narrows a real D1 binding to the intentionally small repository surface. */
+export function createControlPlaneDatabase(binding: unknown): ControlPlaneDatabase {
+  if (binding === null || typeof binding !== "object"
+    || typeof (binding as { prepare?: unknown }).prepare !== "function"
+    || typeof (binding as { batch?: unknown }).batch !== "function") {
+    throw new Error("A D1-compatible control-plane binding is required");
+  }
+  return binding as ControlPlaneDatabase;
+}
+
 export function getDb() {
   if (!env.DB) {
     throw new Error(
@@ -9,5 +42,5 @@ export function getDb() {
     );
   }
 
-  return drizzle(env.DB, { schema });
+  return createDb(env.DB);
 }

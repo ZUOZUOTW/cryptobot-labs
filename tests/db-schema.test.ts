@@ -20,6 +20,10 @@ describe("D1 control-plane schema", () => {
     expect(columns(schema.users)).toEqual(expect.arrayContaining(["id", "normalized_email", "created_at", "updated_at"]));
     expect(columns(schema.pairingCodes)).toEqual(expect.arrayContaining(["id", "user_id", "code_hash", "expires_at", "consumed_at"]));
     expect(columns(schema.backtestResults)).toEqual(expect.arrayContaining(["provenance_json", "metrics_json", "initial_capital", "engine_version"]));
+    expect(columns(schema.deployments)).toContain("version");
+    expect(columns(schema.commands)).toEqual(expect.arrayContaining([
+      "version", "correlation_id", "expected_deployment_version",
+    ]));
     expect(columns(schema.riskPolicies)).toEqual(expect.arrayContaining([
       "allowed_symbols_json", "max_order_notional", "max_position_notional", "max_total_exposure",
       "max_daily_loss", "max_leverage", "max_slippage_bps", "min_signal_cooldown_ms",

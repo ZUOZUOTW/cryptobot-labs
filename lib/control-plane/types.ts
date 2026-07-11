@@ -35,18 +35,28 @@ export interface BacktestJobCreateDto {
   initialCapital: string;
   feeRate: string;
   slippageRate: string;
+  leverage: string;
+  fundingMode: "none" | "historical";
+  gapPolicy: "fail" | "disclose";
 }
 
 export interface CommandCreateDto {
   deploymentId: string;
   type: CommandType;
+  version: number;
+  correlationId: string;
+  expectedDeploymentVersion: number;
   payload: JsonObject;
 }
 
 export interface HeartbeatPositionDto {
   symbol: string;
+  side: "long" | "short";
   quantity: string;
+  entryPrice: string;
   markPrice: string;
+  unrealizedPnl: string;
+  leverage: string;
 }
 
 export interface HeartbeatDto {
@@ -54,6 +64,7 @@ export interface HeartbeatDto {
   sequence: number;
   occurredAt: number;
   mode: RunMode;
+  state: "running" | "paused" | "stopped" | "error";
   health: "healthy" | "degraded" | "paused";
   positions: HeartbeatPositionDto[];
 }

@@ -53,6 +53,9 @@ describe("strict control-plane DTO parsers", () => {
     initialCapital: "10000.00",
     feeRate: "0.001",
     slippageRate: "0.0005",
+    leverage: "1",
+    fundingMode: "none",
+    gapPolicy: "fail",
   } as const;
 
   it("accepts bounded backtest, command, and heartbeat DTOs", () => {
@@ -60,15 +63,21 @@ describe("strict control-plane DTO parsers", () => {
     expect(parseCommandCreateDto({
       deploymentId: "dep_01",
       type: "stop-new-orders",
+      version: 1,
+      correlationId: "corr_01",
+      expectedDeploymentVersion: 1,
       payload: { reason: "user" },
-    })).toEqual({ deploymentId: "dep_01", type: "stop-new-orders", payload: { reason: "user" } });
+    })).toEqual({ deploymentId: "dep_01", type: "stop-new-orders", version: 1,
+      correlationId: "corr_01", expectedDeploymentVersion: 1, payload: { reason: "user" } });
     expect(parseHeartbeatDto({
       deploymentId: "dep_01",
       sequence: 7,
       occurredAt: 1_700_000_000_000,
       mode: "paper",
+      state: "running",
       health: "healthy",
-      positions: [{ symbol: "BTCUSDT", quantity: "0.01", markPrice: "65000" }],
+      positions: [{ symbol: "BTCUSDT", side: "long", quantity: "0.01", entryPrice: "64000",
+        markPrice: "65000", unrealizedPnl: "10", leverage: "1" }],
     })).toMatchObject({ sequence: 7, health: "healthy" });
   });
 
@@ -118,6 +127,9 @@ describe("strict control-plane DTO parsers", () => {
     expect(parseCommandCreateDto({
       deploymentId: "dep_01",
       type: "revalidate-connection",
+      version: 1,
+      correlationId: "corr_01",
+      expectedDeploymentVersion: 1,
       payload: { apiKeySuffix: "AB12", masked_api_key_suffix: "AB12" },
     }).payload).toEqual({ apiKeySuffix: "AB12", masked_api_key_suffix: "AB12" });
   });
@@ -190,7 +202,8 @@ describe("strict control-plane DTO parsers", () => {
     };
 
     try {
-      const parsed = parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", payload });
+      const parsed = parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", version: 1,
+        correlationId: "corr_01", expectedDeploymentVersion: 1, payload });
       payload.nested.value = "after";
 
       expect(parsed.payload).toEqual({ nested: { value: "before" } });
@@ -216,8 +229,10 @@ describe("strict control-plane DTO parsers", () => {
       sequence: 1,
       occurredAt: 1_700_000_000_000,
       mode: "paper",
+      state: "running",
       health: "healthy",
-      positions: Array.from({ length: 101 }, () => ({ symbol: "BTCUSDT", quantity: "1", markPrice: "1" })),
+      positions: Array.from({ length: 101 }, () => ({ symbol: "BTCUSDT", side: "long", quantity: "1",
+        entryPrice: "1", markPrice: "1", unrealizedPnl: "0", leverage: "1" })),
     })).toThrow(/陣列/);
   });
 });

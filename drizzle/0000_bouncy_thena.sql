@@ -108,6 +108,9 @@ CREATE TABLE `commands` (
 	`deployment_id` text NOT NULL,
 	`device_id` text NOT NULL,
 	`type` text NOT NULL,
+	`version` integer NOT NULL,
+	`correlation_id` text NOT NULL,
+	`expected_deployment_version` integer NOT NULL,
 	`payload_json` text NOT NULL,
 	`status` text NOT NULL,
 	`created_at` integer NOT NULL,
@@ -129,6 +132,7 @@ CREATE TABLE `deployments` (
 	`name` text NOT NULL,
 	`mode` text NOT NULL,
 	`state` text NOT NULL,
+	`version` integer DEFAULT 1 NOT NULL,
 	`configuration_hash` text NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
@@ -353,14 +357,16 @@ CREATE TABLE `users` (
 	`updated_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `users_normalized_email_uidx` ON `users` (`normalized_email`);--> statement-breakpoint
+CREATE UNIQUE INDEX `users_normalized_email_uidx` ON `users` (`normalized_email`);
+--> statement-breakpoint
 CREATE TRIGGER audit_events_prevent_update
 BEFORE UPDATE ON audit_events
 BEGIN
-	SELECT RAISE(ABORT, 'audit_events are append-only');
-END;--> statement-breakpoint
+  SELECT RAISE(ABORT, 'audit_events are append-only');
+END;
+--> statement-breakpoint
 CREATE TRIGGER audit_events_prevent_delete
 BEFORE DELETE ON audit_events
 BEGIN
-	SELECT RAISE(ABORT, 'audit_events are append-only');
+  SELECT RAISE(ABORT, 'audit_events are append-only');
 END;

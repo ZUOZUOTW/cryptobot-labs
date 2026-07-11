@@ -22,7 +22,7 @@ const addVersion = (database: DatabaseSync, id: string, userId: string, strategy
     .run(id, userId, strategyId);
 };
 const addDeployment = (database: DatabaseSync, id: string, userId: string, deviceId: string, versionId: string): void => {
-  database.prepare("INSERT INTO deployments VALUES (?, ?, ?, ?, ?, 'paper', 'stopped', 'config', 1, 1, NULL, NULL)")
+  database.prepare("INSERT INTO deployments VALUES (?, ?, ?, ?, ?, 'paper', 'stopped', 1, 'config', 1, 1, NULL, NULL)")
     .run(id, userId, deviceId, versionId, id);
 };
 
@@ -75,8 +75,8 @@ describe("D1 tenant integrity migrations", () => {
     rejectsForeignKey(database, "INSERT INTO device_credentials VALUES ('device_b', 'user_a', 'bad', 100, NULL, 1)");
     rejectsForeignKey(database, "INSERT INTO device_nonces VALUES ('bad_nonce', 'device_b', 'user_a', 'bad', 1, 100)");
 
-    rejectsForeignKey(database, "INSERT INTO deployments VALUES ('bad_dep_device', 'user_a', 'device_b', 'version_a2', 'bad', 'paper', 'stopped', 'x', 1, 1, NULL, NULL)");
-    rejectsForeignKey(database, "INSERT INTO deployments VALUES ('bad_dep_strategy', 'user_a', 'device_a', 'version_b', 'bad', 'paper', 'stopped', 'x', 1, 1, NULL, NULL)");
+    rejectsForeignKey(database, "INSERT INTO deployments VALUES ('bad_dep_device', 'user_a', 'device_b', 'version_a2', 'bad', 'paper', 'stopped', 1, 'x', 1, 1, NULL, NULL)");
+    rejectsForeignKey(database, "INSERT INTO deployments VALUES ('bad_dep_strategy', 'user_a', 'device_a', 'version_b', 'bad', 'paper', 'stopped', 1, 'x', 1, 1, NULL, NULL)");
     addDeployment(database, "dep_a", "user_a", "device_a", "version_a2");
     addDeployment(database, "dep_b", "user_b", "device_b", "version_b");
 
@@ -99,9 +99,9 @@ describe("D1 tenant integrity migrations", () => {
     database.exec("INSERT INTO orders VALUES ('order_b', 'user_b', 'dep_b', 'client-b', NULL, 'spot', 'BTCUSDT', 'buy', 'net', 'market', 'filled', NULL, '1', '1', '1', '1', 'b', 1, 1)");
     rejectsForeignKey(database, "INSERT INTO fills VALUES ('bad_fill', 'user_a', 'dep_a', 'order_b', 'fill', '1', '1', '0', 'USDT', NULL, 1)");
 
-    rejectsForeignKey(database, "INSERT INTO commands VALUES ('bad_command', 'user_a', 'dep_a', 'device_b', 'pause', '{}', 'pending', 1, 2)");
-    database.exec("INSERT INTO commands VALUES ('command_a', 'user_a', 'dep_a', 'device_a', 'pause', '{}', 'pending', 1, 2)");
-    database.exec("INSERT INTO commands VALUES ('command_b', 'user_b', 'dep_b', 'device_b', 'pause', '{}', 'pending', 1, 2)");
+    rejectsForeignKey(database, "INSERT INTO commands VALUES ('bad_command', 'user_a', 'dep_a', 'device_b', 'pause', 1, 'corr-bad', 1, '{}', 'pending', 1, 2)");
+    database.exec("INSERT INTO commands VALUES ('command_a', 'user_a', 'dep_a', 'device_a', 'pause', 1, 'corr-a', 1, '{}', 'pending', 1, 2)");
+    database.exec("INSERT INTO commands VALUES ('command_b', 'user_b', 'dep_b', 'device_b', 'pause', 1, 'corr-b', 1, '{}', 'pending', 1, 2)");
     rejectsForeignKey(database, "INSERT INTO command_acknowledgements VALUES ('bad_ack', 'command_b', 'user_a', 'device_a', 'ok', '{}', 1)");
   });
 });

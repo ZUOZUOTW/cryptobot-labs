@@ -140,17 +140,37 @@ const jsonValue = (value: unknown, label: string, maximumBytes: number): JsonVal
   return cloned;
 };
 
+/** Serializes only the same detached, bounded, credential-safe JSON accepted by control-plane DTOs. */
+export function safeJsonStringify(value: unknown, label = "JSON", maximumBytes = 65_536): string {
+  const safe = jsonValue(value, label, maximumBytes);
+  const serialize = (item: JsonValue): string => {
+    if (item === null) return "null";
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      return JSON.stringify(item);
+    }
+    if (Array.isArray(item)) return `[${item.map(serialize).join(",")}]`;
+    return `{${Object.keys(item).map((key) => `${JSON.stringify(key)}:${serialize(item[key]!)}`).join(",")}}`;
+  };
+  return serialize(safe);
+}
+
 export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto {
   const record = asRecord(jsonValue(value, "回測工作", 32_768), "回測工作");
   assertExactKeys(record, [
     "strategyVersionId", "market", "symbol", "interval", "startTime", "endTime",
-    "initialCapital", "feeRate", "slippageRate",
+    "initialCapital", "feeRate", "slippageRate", "leverage", "fundingMode", "gapPolicy",
   ]);
   const market = record.market;
   if (market !== "spot" && market !== "futures") throw new Error("market 必須是 spot 或 futures");
   const startTime = integer(record.startTime, "startTime");
   const endTime = integer(record.endTime, "endTime");
   if (endTime <= startTime) throw new Error("endTime 必須晚於 startTime");
+  if (record.fundingMode !== "none" && record.fundingMode !== "historical") {
+    throw new Error("fundingMode 必須是 none 或 historical");
+  }
+  if (record.gapPolicy !== "fail" && record.gapPolicy !== "disclose") {
+    throw new Error("gapPolicy 必須是 fail 或 disclose");
+  }
   return {
     strategyVersionId: boundedString(record.strategyVersionId, "strategyVersionId", 128),
     market,
@@ -161,12 +181,15 @@ export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto 
     initialCapital: decimal(record.initialCapital, "initialCapital"),
     feeRate: decimal(record.feeRate, "feeRate"),
     slippageRate: decimal(record.slippageRate, "slippageRate"),
+    leverage: decimal(record.leverage, "leverage"),
+    fundingMode: record.fundingMode,
+    gapPolicy: record.gapPolicy,
   };
 }
 
 export function parseCommandCreateDto(value: unknown): CommandCreateDto {
   const record = asRecord(jsonValue(value, "控制命令", 32_768), "控制命令");
-  assertExactKeys(record, ["deploymentId", "type", "payload"]);
+  assertExactKeys(record, ["deploymentId", "type", "version", "correlationId", "expectedDeploymentVersion", "payload"]);
   if (typeof record.type !== "string" || !COMMAND_TYPES.includes(record.type as CommandType)) {
     throw new Error("type 不是支援的控制命令");
   }
@@ -177,28 +200,39 @@ export function parseCommandCreateDto(value: unknown): CommandCreateDto {
   return {
     deploymentId: boundedString(record.deploymentId, "deploymentId", 128),
     type: record.type as CommandType,
+    version: integer(record.version, "version", 1),
+    correlationId: boundedString(record.correlationId, "correlationId", 128),
+    expectedDeploymentVersion: integer(record.expectedDeploymentVersion, "expectedDeploymentVersion", 1),
     payload: payload as JsonObject,
   };
 }
 
 const parsePosition = (value: unknown): HeartbeatPositionDto => {
   const record = asRecord(value, "position");
-  assertExactKeys(record, ["symbol", "quantity", "markPrice"]);
+  assertExactKeys(record, ["symbol", "side", "quantity", "entryPrice", "markPrice", "unrealizedPnl", "leverage"]);
+  if (record.side !== "long" && record.side !== "short") throw new Error("side 必須是 long 或 short");
   return {
     symbol: boundedString(record.symbol, "symbol", 64),
+    side: record.side,
     quantity: decimal(record.quantity, "quantity", true),
+    entryPrice: decimal(record.entryPrice, "entryPrice"),
     markPrice: decimal(record.markPrice, "markPrice"),
+    unrealizedPnl: decimal(record.unrealizedPnl, "unrealizedPnl", true),
+    leverage: decimal(record.leverage, "leverage"),
   };
 };
 
 export function parseHeartbeatDto(value: unknown): HeartbeatDto {
   const record = asRecord(jsonValue(value, "heartbeat", 65_536), "heartbeat");
-  assertExactKeys(record, ["deploymentId", "sequence", "occurredAt", "mode", "health", "positions"]);
+  assertExactKeys(record, ["deploymentId", "sequence", "occurredAt", "mode", "state", "health", "positions"]);
   if (typeof record.mode !== "string" || !RUN_MODES.includes(record.mode as RunMode)) {
     throw new Error("mode 不是支援的運行模式");
   }
   if (record.health !== "healthy" && record.health !== "degraded" && record.health !== "paused") {
     throw new Error("health 不是支援的健康狀態");
+  }
+  if (record.state !== "running" && record.state !== "paused" && record.state !== "stopped" && record.state !== "error") {
+    throw new Error("state 不是支援的運行狀態");
   }
   if (!Array.isArray(record.positions)) throw new Error("positions 必須是陣列");
   if (record.positions.length > 100) throw new Error("positions 陣列不得超過 100 筆");
@@ -207,6 +241,7 @@ export function parseHeartbeatDto(value: unknown): HeartbeatDto {
     sequence: integer(record.sequence, "sequence"),
     occurredAt: integer(record.occurredAt, "occurredAt"),
     mode: record.mode as RunMode,
+    state: record.state,
     health: record.health,
     positions: record.positions.map(parsePosition),
   };
