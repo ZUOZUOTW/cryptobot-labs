@@ -97,6 +97,9 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
         candle.openTime < 0 || candle.closeTime <= candle.openTime) {
       throw new TypeError("Invalid candle timestamp");
     }
+    if (candle.closeTime - candle.openTime !== dataset.intervalMs - 1) {
+      throw new TypeError("Candle duration must exactly match intervalMs");
+    }
   }
   const parsed = dataset.candles.map((candle) => CandleSchema.parse(candle));
   const incompleteCount = parsed.filter((candle) => !candle.complete).length;
@@ -123,9 +126,9 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
     seen.add(candle.openTime);
     if (index > 0) {
       const previous = parsed[index - 1]!;
-      if (candle.openTime <= previous.openTime) {
-        if (candle.openTime < previous.openTime) throw new TypeError("Candles must be strictly ordered");
-      } else if (candle.openTime > previous.openTime + dataset.intervalMs) {
+      if (candle.openTime <= previous.openTime) throw new TypeError("Candles must be strictly ordered");
+      if (previous.closeTime >= candle.openTime) throw new TypeError("Candles must not overlap");
+      if (candle.openTime > previous.openTime + dataset.intervalMs) {
         computedGaps.push({ from: previous.openTime + dataset.intervalMs, to: candle.openTime - 1 });
       }
     }

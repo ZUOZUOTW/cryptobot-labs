@@ -184,4 +184,22 @@ describe("historical backtest", () => {
     }))).rejects.toThrow(/mark price/i);
     expect(evaluate).not.toHaveBeenCalled();
   });
+
+  it("rejects overlapping candles and interval-duration mismatches before evaluation", async () => {
+    const evaluate = vi.fn(request().evaluator.evaluate);
+    const overlapping = [
+      fixedCandles[0],
+      { ...fixedCandles[1], openTime: 3_000_000, closeTime: 6_599_999 },
+    ] as Candle[];
+    const wrongDuration = [
+      fixedCandles[0],
+      { ...fixedCandles[1], closeTime: 7_100_000 },
+    ] as Candle[];
+
+    await expect(runHistoricalBacktest(request({ dataset: dataset(overlapping), evaluator: { evaluate } })))
+      .rejects.toThrow(/overlap/i);
+    await expect(runHistoricalBacktest(request({ dataset: dataset(wrongDuration), evaluator: { evaluate } })))
+      .rejects.toThrow(/duration/i);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
 });
