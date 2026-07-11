@@ -309,6 +309,7 @@ export const positionSnapshots = sqliteTable("position_snapshots", {
     name: "position_snapshots_heartbeat_deployment_user_fk",
   }),
   uniqueIndex("position_snapshots_id_user_uidx").on(table.id, table.userId),
+  uniqueIndex("position_snapshots_deployment_symbol_side_uidx").on(table.deploymentId, table.symbol, table.side),
   index("position_snapshots_deployment_captured_idx").on(table.deploymentId, table.capturedAt),
   index("position_snapshots_user_captured_idx").on(table.userId, table.capturedAt),
 ]);

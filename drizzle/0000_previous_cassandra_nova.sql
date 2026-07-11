@@ -273,6 +273,7 @@ CREATE TABLE `position_snapshots` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `position_snapshots_id_user_uidx` ON `position_snapshots` (`id`,`user_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `position_snapshots_deployment_symbol_side_uidx` ON `position_snapshots` (`deployment_id`,`symbol`,`side`);--> statement-breakpoint
 CREATE INDEX `position_snapshots_deployment_captured_idx` ON `position_snapshots` (`deployment_id`,`captured_at`);--> statement-breakpoint
 CREATE INDEX `position_snapshots_user_captured_idx` ON `position_snapshots` (`user_id`,`captured_at`);--> statement-breakpoint
 CREATE TABLE `risk_policies` (

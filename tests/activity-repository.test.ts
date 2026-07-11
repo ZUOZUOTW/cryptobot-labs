@@ -12,6 +12,13 @@ class SqliteStatement implements ControlPlaneStatement {
   async all<T>(): Promise<{ results: T[]; success: boolean }> { return { results: this.statement.all(...this.values as Parameters<StatementSync["all"]>) as T[], success: true }; }
   async run(): Promise<ControlPlaneRunResult> { const result = this.statement.run(...this.values as Parameters<StatementSync["run"]>); return { success: true, meta: { changes: Number(result.changes) } }; }
 }
+class BeforeFirstStatement implements ControlPlaneStatement {
+  constructor(private readonly inner: ControlPlaneStatement, private readonly before: () => Promise<void>) {}
+  bind(...values: unknown[]): ControlPlaneStatement { return new BeforeFirstStatement(this.inner.bind(...values), this.before); }
+  async first<T>(): Promise<T | null> { await this.before(); return this.inner.first<T>(); }
+  all<T>(): Promise<{ results: T[]; success: boolean }> { return this.inner.all<T>(); }
+  run(): Promise<ControlPlaneRunResult> { return this.inner.run(); }
+}
 class SqliteDatabase implements ControlPlaneDatabase {
   readonly raw = new DatabaseSync(":memory:");
   constructor() { this.raw.exec("PRAGMA foreign_keys=ON"); const file = readdirSync(resolve("drizzle")).find((name) => name.endsWith(".sql"))!;
@@ -79,6 +86,32 @@ describe("activity repository", () => {
     expect(database.raw.prepare("SELECT count(*) AS count FROM run_heartbeats WHERE id='hb_b'").get()).toEqual({ count: 0 });
   });
 
+  it("rejects sequence rollback, duplicate positions, version races, and old heartbeat ID reuse without changing current positions", async () => {
+    await activity.ingestHeartbeat({ id: "hb_10", deviceId: "dev_a", expectedDeploymentVersion: 2,
+      positionIds: ["pos_10"], heartbeat: heartbeat(10) });
+    await expect(activity.ingestHeartbeat({ id: "hb_9", deviceId: "dev_a", expectedDeploymentVersion: 2,
+      positionIds: ["pos_9"], heartbeat: heartbeat(9) })).rejects.toThrow(/sequence/i);
+    const duplicated = [heartbeat(1).positions[0]!, { ...heartbeat(1).positions[0]!, quantity: "2" }];
+    await expect(activity.ingestHeartbeat({ id: "hb_dup", deviceId: "dev_a", expectedDeploymentVersion: 2,
+      positionIds: ["pos_dup_a", "pos_dup_b"], heartbeat: heartbeat(11, duplicated) })).rejects.toThrow(/duplicate/i);
+    await expect(activity.ingestHeartbeat({ id: "hb_10", deviceId: "dev_a", expectedDeploymentVersion: 2,
+      positionIds: ["pos_attack"], heartbeat: heartbeat(11) })).rejects.toThrow();
+    expect(database.raw.prepare("SELECT id FROM position_snapshots WHERE deployment_id='dep_a'").all()).toEqual([{ id: "pos_10" }]);
+
+    let raced = false;
+    const racingDatabase: ControlPlaneDatabase = {
+      prepare: (sql) => database.prepare(sql),
+      batch: async (statements) => {
+        if (!raced) { raced = true; database.raw.exec("UPDATE deployments SET version=3 WHERE id='dep_a'"); }
+        return database.batch(statements);
+      },
+    };
+    const racingActivity = createActivityRepository(racingDatabase);
+    await expect(racingActivity.ingestHeartbeat({ id: "hb_race", deviceId: "dev_a", expectedDeploymentVersion: 2,
+      positionIds: ["pos_race"], heartbeat: heartbeat(11) })).rejects.toThrow(/constraint|guard/i);
+    expect(database.raw.prepare("SELECT id FROM position_snapshots WHERE deployment_id='dep_a'").all()).toEqual([{ id: "pos_10" }]);
+  });
+
   it("appends scoped user/device audit and lists stable cursor ties without cross-tenant leaks", async () => {
     const base = { type: "run.started", correlationId: "corr_a", payload: { reason: "user" }, occurredAt: 500, now: 501 };
     await activity.appendUserAudit({ id: "audit_a", userId: "usr_a", deploymentId: "dep_a", deviceId: "dev_a", strategyVersionId: "version_a", ...base });
@@ -100,5 +133,42 @@ describe("activity repository", () => {
       payload: {}, occurredAt: 500, now: 501 });
     expect(() => database.raw.exec("UPDATE audit_events SET type='tampered' WHERE id='audit_a'")).toThrow(/append-only/i);
     expect(() => database.raw.exec("DELETE FROM audit_events WHERE id='audit_a'")).toThrow(/append-only/i);
+  });
+
+  it("makes user and device audit retries semantic and tenant scoped", async () => {
+    const user = { id: "audit_user", userId: "usr_a", deploymentId: "dep_a", type: "run.started",
+      correlationId: "corr_user", payload: { reason: "user" }, occurredAt: 500, now: 501 };
+    expect((await activity.appendUserAudit(user)).idempotent).toBe(false);
+    expect(await activity.appendUserAudit({ ...user, now: 999 }))
+      .toMatchObject({ idempotent: true, event: { id: "audit_user", createdAt: 501 } });
+    await expect(activity.appendUserAudit({ ...user, now: 999, payload: { reason: "other" } })).rejects.toThrow(/conflict/i);
+    await expect(activity.appendUserAudit({ ...user, userId: "usr_b", now: 999 })).rejects.toThrow(/conflict/i);
+
+    const device = { id: "audit_device", deviceId: "dev_a", deploymentId: "dep_a", type: "heartbeat.accepted",
+      correlationId: "corr_device", payload: { sequence: 1 }, occurredAt: 600, now: 601 };
+    expect((await activity.appendDeviceAudit(device)).idempotent).toBe(false);
+    expect(await activity.appendDeviceAudit({ ...device, now: 777 }))
+      .toMatchObject({ idempotent: true, event: { id: "audit_device", createdAt: 601 } });
+  });
+
+  it("authoritatively re-reads an audit winner after an interleaved insert constraint", async () => {
+    const input = { id: "audit_race", userId: "usr_a", deploymentId: "dep_a", type: "run.started",
+      correlationId: "corr_race", payload: { reason: "user" }, occurredAt: 700, now: 701 };
+    const winner = createActivityRepository(database);
+    let interleaved = false;
+    const racingDatabase: ControlPlaneDatabase = {
+      prepare: (sql) => {
+        const statement = database.prepare(sql);
+        if (!sql.includes("INSERT INTO audit_events")) return statement;
+        return new BeforeFirstStatement(statement, async () => {
+          if (!interleaved) { interleaved = true; await winner.appendUserAudit(input); }
+        });
+      },
+      batch: (statements) => database.batch(statements),
+    };
+    const loser = createActivityRepository(racingDatabase);
+    await expect(loser.appendUserAudit({ ...input, now: 999 })).resolves.toMatchObject({
+      idempotent: true, event: { id: "audit_race", createdAt: 701 },
+    });
   });
 });

@@ -51,6 +51,12 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
   const getAuditForUser = (userId: string, auditId: string): Promise<AuditEventRecord | null> => database.prepare(`
     SELECT ${auditColumns} FROM audit_events WHERE user_id=? AND id=?
   `).bind(id(userId, "userId"), id(auditId, "auditEventId")).first<AuditEventRecord>();
+  const getAuditForActor = (auditId: string, actorType: "user" | "device", actorId: string): Promise<AuditEventRecord | null> => database.prepare(`
+    SELECT ${auditColumns} FROM audit_events WHERE id=? AND actor_type=? AND actor_id=?
+  `).bind(auditId, actorType, actorId).first<AuditEventRecord>();
+  const auditIdExists = (auditId: string): Promise<{ id: string } | null> => database.prepare(`
+    SELECT id FROM audit_events WHERE id=?
+  `).bind(auditId).first<{ id: string }>();
 
   const normalizeAudit = (input: AuditInput) => ({
     eventId: id(input.id, "auditEventId"),
@@ -92,6 +98,11 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
         if (!same) throw new Error("heartbeat sequence conflict");
         return { heartbeat: existing, idempotent: true };
       }
+      const latest = await database.prepare(`SELECT MAX(sequence) AS sequence FROM run_heartbeats
+        WHERE deployment_id=? AND device_id=?`).bind(deploymentId, deviceId).first<{ sequence: number | null }>();
+      if (latest?.sequence !== null && latest?.sequence !== undefined && latest.sequence >= heartbeat.sequence) {
+        throw new Error("heartbeat sequence must increase monotonically");
+      }
       const normalizedPositions = heartbeat.positions.map((position: HeartbeatPositionDto) => ({
         symbol: (() => {
           const symbol = boundedText(position.symbol, "position symbol", 64);
@@ -105,25 +116,51 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
         unrealizedPnl: position.unrealizedPnl,
         leverage: positiveDecimal(position.leverage, "position leverage"),
       }));
+      const positionKeys = normalizedPositions.map((position) => `${position.symbol}\u0000${position.side}`);
+      if (new Set(positionKeys).size !== positionKeys.length) throw new Error("duplicate position symbol and side");
       const statements = [
         database.prepare(`INSERT INTO run_heartbeats
           (id,user_id,deployment_id,device_id,sequence,mode,state,health,summary_json,occurred_at)
           SELECT ?,d.user_id,d.id,d.device_id,?,?,?,?,?,? FROM deployments d
           JOIN devices v ON v.id=d.device_id AND v.user_id=d.user_id
-          WHERE d.id=? AND d.device_id=? AND d.version=? AND d.mode=? AND d.state=? AND v.status='active'`)
+          WHERE d.id=? AND d.device_id=? AND d.version=? AND d.mode=? AND d.state=? AND v.status='active'
+            AND NOT EXISTS (SELECT 1 FROM run_heartbeats previous
+              WHERE previous.deployment_id=d.id AND previous.device_id=d.device_id AND previous.sequence>=?)`)
           .bind(heartbeatId, heartbeat.sequence, heartbeat.mode, heartbeat.state, heartbeat.health, telemetryJson,
-            heartbeat.occurredAt, deploymentId, deviceId, expectedVersion, heartbeat.mode, heartbeat.state),
+            heartbeat.occurredAt, deploymentId, deviceId, expectedVersion, heartbeat.mode, heartbeat.state, heartbeat.sequence),
         database.prepare(`DELETE FROM position_snapshots WHERE deployment_id=?
-          AND EXISTS (SELECT 1 FROM run_heartbeats WHERE id=? AND device_id=?)`).bind(deploymentId, heartbeatId, deviceId),
+          AND EXISTS (SELECT 1 FROM run_heartbeats h JOIN deployments d ON d.id=h.deployment_id AND d.user_id=h.user_id
+            JOIN devices v ON v.id=d.device_id AND v.user_id=d.user_id
+            WHERE h.id=? AND h.device_id=? AND h.deployment_id=? AND h.sequence=?
+              AND d.version=? AND d.mode=? AND d.state=? AND v.status='active')`)
+          .bind(deploymentId, heartbeatId, deviceId, deploymentId, heartbeat.sequence,
+            expectedVersion, heartbeat.mode, heartbeat.state),
         ...normalizedPositions.map((position, index) => database.prepare(`INSERT INTO position_snapshots
           (id,user_id,deployment_id,heartbeat_id,market,symbol,side,quantity,entry_price,mark_price,unrealized_pnl,leverage,captured_at)
           SELECT ?,h.user_id,h.deployment_id,h.id,s.market,?,?,?,?,?,?,?,? FROM run_heartbeats h
           JOIN deployments d ON d.id=h.deployment_id AND d.user_id=h.user_id
           JOIN strategy_versions sv ON sv.id=d.strategy_version_id AND sv.user_id=d.user_id
           JOIN strategies s ON s.id=sv.strategy_id AND s.user_id=sv.user_id
-          WHERE h.id=? AND h.device_id=?`)
+          WHERE h.id=? AND h.device_id=? AND h.deployment_id=? AND h.sequence=?
+            AND d.version=? AND d.mode=? AND d.state=?`)
           .bind(positionIds[index], position.symbol, position.side, position.quantity, position.entryPrice,
-            position.markPrice, position.unrealizedPnl, position.leverage, heartbeat.occurredAt, heartbeatId, deviceId)),
+            position.markPrice, position.unrealizedPnl, position.leverage, heartbeat.occurredAt, heartbeatId, deviceId,
+            deploymentId, heartbeat.sequence, expectedVersion, heartbeat.mode, heartbeat.state)),
+        database.prepare(`INSERT INTO run_heartbeats
+          (id,user_id,deployment_id,device_id,sequence,mode,state,health,summary_json,occurred_at)
+          SELECT ?,NULL,?,?,?,?,?,?,?,? WHERE NOT EXISTS (
+            SELECT 1 FROM run_heartbeats h
+            JOIN deployments d ON d.id=h.deployment_id AND d.user_id=h.user_id
+            JOIN devices v ON v.id=d.device_id AND v.user_id=d.user_id
+            WHERE h.id=? AND h.device_id=? AND h.deployment_id=? AND h.sequence=?
+              AND h.mode=? AND h.state=? AND h.health=? AND h.summary_json=? AND h.occurred_at=?
+              AND d.version=? AND d.mode=? AND d.state=? AND v.status='active'
+              AND (SELECT COUNT(*) FROM position_snapshots p
+                WHERE p.heartbeat_id=h.id AND p.deployment_id=h.deployment_id)=?
+          )`).bind(heartbeatId, deploymentId, deviceId, heartbeat.sequence, heartbeat.mode, heartbeat.state,
+            heartbeat.health, telemetryJson, heartbeat.occurredAt, heartbeatId, deviceId, deploymentId,
+            heartbeat.sequence, heartbeat.mode, heartbeat.state, heartbeat.health, telemetryJson, heartbeat.occurredAt,
+            expectedVersion, heartbeat.mode, heartbeat.state, normalizedPositions.length),
       ];
       try {
         const results = await database.batch(statements);
@@ -143,12 +180,24 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       return { heartbeat: stored, idempotent: false };
     },
 
-    async appendUserAudit(input: AuditInput & { userId: string; deviceId?: string }): Promise<AuditEventRecord> {
+    async appendUserAudit(input: AuditInput & { userId: string; deviceId?: string }): Promise<{ event: AuditEventRecord; idempotent: boolean }> {
       exactInput(input, ["id", "userId", "deviceId", "deploymentId", "strategyVersionId", "type", "correlationId", "payload", "occurredAt", "now"]);
       const owner = id(input.userId, "userId");
       const deviceId = input.deviceId === undefined ? null : id(input.deviceId, "deviceId");
       const value = normalizeAudit(input);
-      const row = await database.prepare(`INSERT INTO audit_events
+      const same = (row: AuditEventRecord) => row.userId === owner && row.actorType === "user" && row.actorId === owner
+        && row.deviceId === deviceId && row.deploymentId === value.deploymentId
+        && row.strategyVersionId === value.strategyVersionId && row.type === value.type
+        && row.correlationId === value.correlationId && row.payloadJson === value.payloadJson
+        && row.occurredAt === value.occurredAt;
+      const existing = await getAuditForActor(value.eventId, "user", owner);
+      if (existing) {
+        if (!same(existing)) throw new Error("audit event conflict");
+        return { event: existing, idempotent: true };
+      }
+      let row: AuditEventRecord | null;
+      try {
+        row = await database.prepare(`INSERT INTO audit_events
         (id,user_id,actor_type,actor_id,device_id,deployment_id,strategy_version_id,type,correlation_id,payload_json,occurred_at,created_at)
         SELECT ?,u.id,'user',u.id,?,?,?,?,?,?,?,? FROM users u WHERE u.id=?
           AND (? IS NULL OR EXISTS (SELECT 1 FROM devices WHERE id=? AND user_id=u.id))
@@ -162,15 +211,36 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
           value.deploymentId, value.deploymentId, value.strategyVersionId, value.strategyVersionId,
           value.deploymentId, deviceId, value.deploymentId, deviceId,
           value.deploymentId, value.strategyVersionId, value.deploymentId, value.strategyVersionId).first<AuditEventRecord>();
-      if (!row) throw new Error("owned audit actor or target not found");
-      return row;
+      } catch (error) {
+        const winner = await getAuditForActor(value.eventId, "user", owner);
+        if (winner && same(winner)) return { event: winner, idempotent: true };
+        if (winner || await auditIdExists(value.eventId)) throw new Error("audit event conflict");
+        throw error;
+      }
+      if (!row) {
+        if (await auditIdExists(value.eventId)) throw new Error("audit event conflict");
+        throw new Error("owned audit actor or target not found");
+      }
+      return { event: row, idempotent: false };
     },
 
-    async appendDeviceAudit(input: AuditInput & { deviceId: string }): Promise<AuditEventRecord> {
+    async appendDeviceAudit(input: AuditInput & { deviceId: string }): Promise<{ event: AuditEventRecord; idempotent: boolean }> {
       exactInput(input, ["id", "deviceId", "deploymentId", "strategyVersionId", "type", "correlationId", "payload", "occurredAt", "now"]);
       const deviceId = id(input.deviceId, "deviceId");
       const value = normalizeAudit(input);
-      const row = await database.prepare(`INSERT INTO audit_events
+      const same = (row: AuditEventRecord) => row.actorType === "device" && row.actorId === deviceId
+        && row.deviceId === deviceId && row.deploymentId === value.deploymentId
+        && row.strategyVersionId === value.strategyVersionId && row.type === value.type
+        && row.correlationId === value.correlationId && row.payloadJson === value.payloadJson
+        && row.occurredAt === value.occurredAt;
+      const existing = await getAuditForActor(value.eventId, "device", deviceId);
+      if (existing) {
+        if (!same(existing)) throw new Error("audit event conflict");
+        return { event: existing, idempotent: true };
+      }
+      let row: AuditEventRecord | null;
+      try {
+        row = await database.prepare(`INSERT INTO audit_events
         (id,user_id,actor_type,actor_id,device_id,deployment_id,strategy_version_id,type,correlation_id,payload_json,occurred_at,created_at)
         SELECT ?,v.user_id,'device',v.id,v.id,?,?,?,?,?,?,? FROM devices v WHERE v.id=? AND v.status='active'
           AND (? IS NULL OR EXISTS (SELECT 1 FROM deployments WHERE id=? AND user_id=v.user_id AND device_id=v.id))
@@ -182,8 +252,17 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
           value.payloadJson, value.occurredAt, value.createdAt, deviceId, value.deploymentId, value.deploymentId,
           value.strategyVersionId, value.strategyVersionId, value.deploymentId, value.strategyVersionId,
           value.deploymentId, value.strategyVersionId).first<AuditEventRecord>();
-      if (!row) throw new Error("owned assigned device audit actor or target not found");
-      return row;
+      } catch (error) {
+        const winner = await getAuditForActor(value.eventId, "device", deviceId);
+        if (winner && same(winner)) return { event: winner, idempotent: true };
+        if (winner || await auditIdExists(value.eventId)) throw new Error("audit event conflict");
+        throw error;
+      }
+      if (!row) {
+        if (await auditIdExists(value.eventId)) throw new Error("audit event conflict");
+        throw new Error("owned assigned device audit actor or target not found");
+      }
+      return { event: row, idempotent: false };
     },
 
     getAuditForUser,

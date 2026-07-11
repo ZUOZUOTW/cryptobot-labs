@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "2bbf3f88-892b-4957-ab3a-9b7d7263365c",
+  "id": "09908043-d160-400d-91e8-77fe6e44b707",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_events": {
@@ -1989,6 +1989,15 @@
           "columns": [
             "id",
             "user_id"
+          ],
+          "isUnique": true
+        },
+        "position_snapshots_deployment_symbol_side_uidx": {
+          "name": "position_snapshots_deployment_symbol_side_uidx",
+          "columns": [
+            "deployment_id",
+            "symbol",
+            "side"
           ],
           "isUnique": true
         },

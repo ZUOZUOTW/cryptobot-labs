@@ -36,6 +36,7 @@ describe("D1 control-plane schema", () => {
     expect(indexes(schema.deviceNonces)).toContain("device_nonces_device_nonce_uidx");
     expect(indexes(schema.orders)).toContain("orders_deployment_client_order_uidx");
     expect(indexes(schema.commands)).toContain("commands_user_correlation_uidx");
+    expect(indexes(schema.positionSnapshots)).toContain("position_snapshots_deployment_symbol_side_uidx");
     expect(indexes(schema.auditEvents)).toEqual(expect.arrayContaining([
       "audit_events_user_occurred_idx",
       "audit_events_deployment_occurred_idx",
