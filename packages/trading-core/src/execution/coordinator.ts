@@ -4,6 +4,8 @@ import {
   deriveClientOrderId,
   transitionOrder,
   type ApprovedOrderIntent,
+  type CancelOutcome,
+  type OrderQuery,
   type SubmitOutcome,
   type TrackedOrder,
 } from "../orders";
@@ -13,6 +15,7 @@ import type {
   ExecutionContext,
   ExecutionCoordinatorDependencies,
   ExecutionOutcome,
+  CancelOpenOrdersResult,
   ProposalClaim,
 } from "./types";
 
@@ -37,6 +40,21 @@ function isSubmitOutcome(value: unknown): value is SubmitOutcome {
     (outcome.reason === undefined || typeof outcome.reason === "string");
 }
 
+function isCancelOutcome(value: unknown): value is CancelOutcome {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const outcome = value as Record<string, unknown>;
+  const keys = Object.keys(outcome);
+  if (outcome.status === "cancelled") return keys.length === 1;
+  if (outcome.status === "rejected") {
+    return keys.length === 2 &&
+      typeof outcome.reason === "string" && outcome.reason.trim().length > 0 &&
+      outcome.reason.length <= 256;
+  }
+  if (outcome.status !== "unknown") return false;
+  return (keys.length === 1 || keys.length === 2) &&
+    (outcome.reason === undefined || typeof outcome.reason === "string");
+}
+
 function sameIntent(left: ApprovedOrderIntent, right: ApprovedOrderIntent): boolean {
   return left.symbol === right.symbol &&
     left.side === right.side &&
@@ -44,6 +62,13 @@ function sameIntent(left: ApprovedOrderIntent, right: ApprovedOrderIntent): bool
     left.price === right.price &&
     left.expectedSlippageBps === right.expectedSlippageBps &&
     left.reduceOnly === right.reduceOnly;
+}
+
+function sameTrackedOrder(left: TrackedOrder, right: TrackedOrder): boolean {
+  return left.deploymentId === right.deploymentId &&
+    left.clientOrderId === right.clientOrderId &&
+    left.exchangeOrderId === right.exchangeOrderId &&
+    sameIntent(left.approvedIntent, right.approvedIntent);
 }
 
 class BreakerSettlement {
@@ -117,6 +142,72 @@ export class ExecutionCoordinator {
     if (mode !== "paper") return false;
     this.#stopped = false;
     return true;
+  }
+
+  async cancelOpenOrders(
+    deploymentId: string,
+    now: number,
+  ): Promise<CancelOpenOrdersResult> {
+    if (typeof deploymentId !== "string" || deploymentId.length === 0) {
+      throw new TypeError("invalid deployment id");
+    }
+    if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid timestamp");
+
+    const result = { cancelled: 0, rejected: 0, unresolved: 0, skipped: 0 };
+    const orders = await this.#dependencies.repository.listActive(deploymentId);
+    for (const candidate of orders) {
+      if (candidate.deploymentId !== deploymentId) {
+        result.skipped += 1;
+        continue;
+      }
+      const claim = await this.#claimCancellation(candidate, now);
+      if (claim.status === "skipped") {
+        result.skipped += 1;
+        continue;
+      }
+      if (claim.status === "unresolved") {
+        result.unresolved += 1;
+        continue;
+      }
+
+      const pending = claim.order;
+      const query: OrderQuery = {
+        symbol: pending.approvedIntent.symbol,
+        clientOrderId: pending.clientOrderId,
+        ...(pending.exchangeOrderId === undefined
+          ? {}
+          : { exchangeOrderId: pending.exchangeOrderId }),
+      };
+      let outcome: CancelOutcome;
+      try {
+        const candidateOutcome = await this.#dependencies.exchange.cancel(query);
+        if (!isCancelOutcome(candidateOutcome)) {
+          result.unresolved += 1;
+          continue;
+        }
+        outcome = candidateOutcome;
+      } catch {
+        // The request may have reached the exchange. Keep cancel-pending and never retry.
+        result.unresolved += 1;
+        continue;
+      }
+
+      if (outcome.status === "unknown") {
+        result.unresolved += 1;
+        continue;
+      }
+      const persisted = await this.#persistCancelResult(pending, outcome, now);
+      if (persisted === null) {
+        result.unresolved += 1;
+      } else if (outcome.status === "cancelled" && persisted.status === "cancelled") {
+        result.cancelled += 1;
+      } else if (outcome.status === "rejected") {
+        result.rejected += 1;
+      } else {
+        result.skipped += 1;
+      }
+    }
+    return Object.freeze(result);
   }
 
   async propose(
@@ -329,6 +420,101 @@ export class ExecutionCoordinator {
     } catch {
       return "unknown";
     }
+  }
+
+  async #claimCancellation(
+    candidate: TrackedOrder,
+    at: number,
+  ): Promise<
+    | { readonly status: "claimed"; readonly order: TrackedOrder }
+    | { readonly status: "skipped" }
+    | { readonly status: "unresolved" }
+  > {
+    let base = candidate;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (base.status !== "acknowledged" && base.status !== "partially-filled") {
+        return { status: "skipped" };
+      }
+      const pending = transitionOrder(base, {
+        type: "cancel-request",
+        at: Math.max(at, base.updatedAt),
+      });
+      try {
+        const saved = await this.#dependencies.repository.save(pending, base.version);
+        return { status: "claimed", order: saved };
+      } catch {
+        try {
+          const winner = await this.#dependencies.repository.getByClientOrderId(
+            base.clientOrderId,
+          );
+          if (winner === null || !sameTrackedOrder(winner, base)) {
+            return { status: "unresolved" };
+          }
+          if (winner.version === base.version) {
+            if (attempt === 1) return { status: "unresolved" };
+          } else if (
+            winner.status !== "acknowledged" &&
+            winner.status !== "partially-filled"
+          ) {
+            return { status: "skipped" };
+          }
+          base = winner;
+        } catch {
+          return { status: "unresolved" };
+        }
+      }
+    }
+    return { status: "unresolved" };
+  }
+
+  async #persistCancelResult(
+    pending: TrackedOrder,
+    outcome: Exclude<CancelOutcome, { readonly status: "unknown" }>,
+    at: number,
+  ): Promise<TrackedOrder | null> {
+    let base = pending;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (outcome.status === "cancelled" && base.status === "cancelled") return base;
+      if (outcome.status === "rejected" &&
+          (base.status === "acknowledged" || base.status === "partially-filled")) {
+        return base;
+      }
+      if (
+        base.status !== "cancel-pending" &&
+        !(outcome.status === "cancelled" &&
+          (base.status === "acknowledged" || base.status === "partially-filled"))
+      ) return base;
+      const cancelPending = base.status === "cancel-pending"
+        ? base
+        : transitionOrder(base, {
+            type: "cancel-request",
+            at: Math.max(at, base.updatedAt),
+          });
+      const next = outcome.status === "cancelled"
+        ? transitionOrder(cancelPending, {
+            type: "cancel-acknowledged",
+            at: Math.max(at, cancelPending.updatedAt),
+          })
+        : transitionOrder(cancelPending, {
+            type: "cancel-rejected",
+            reason: outcome.reason,
+            at: Math.max(at, cancelPending.updatedAt),
+          });
+      try {
+        return await this.#dependencies.repository.save(next, base.version);
+      } catch {
+        try {
+          const winner = await this.#dependencies.repository.getByClientOrderId(
+            base.clientOrderId,
+          );
+          if (winner === null || !sameTrackedOrder(winner, base)) return null;
+          base = winner;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
   }
 
   #persistenceFailed(): ExecutionOutcome {

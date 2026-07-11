@@ -74,6 +74,13 @@ export interface ExecutionCoordinatorDependencies {
   readonly failureClassifier: (failure: unknown) => CircuitBreakerFailureCategory;
 }
 
+export interface CancelOpenOrdersResult {
+  readonly cancelled: number;
+  readonly rejected: number;
+  readonly unresolved: number;
+  readonly skipped: number;
+}
+
 export type ExecutionOutcome =
   | { readonly status: "submitted"; readonly order: TrackedOrder }
   | { readonly status: "idempotent"; readonly order: TrackedOrder }
