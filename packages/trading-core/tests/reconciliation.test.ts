@@ -71,4 +71,90 @@ describe("order reconciliation", () => {
     }), { type: "submit-start", at: 11 });
     expect(nextReconciliationAction(local)).toBe("none");
   });
+
+  it.each([
+    ["NEW", "0", undefined],
+    ["PARTIALLY_FILLED", "1", "101"],
+    ["FILLED", "2", "101"],
+    ["CANCELED", "1", "101"],
+    ["REJECTED", "0", undefined],
+  ] as const)("makes repeated identical %s snapshots idempotent across timestamps", (status, cumulative, average) => {
+    const snapshot = {
+      clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+      side: "buy" as const, quantity: "2", status,
+      cumulativeFilledQuantity: cumulative,
+      ...(average === undefined ? {} : { averageFillPrice: average, fees: "0.1" }),
+    };
+    const first = reconcileOrder({ local: unknown(), snapshot, at: 14 }).state;
+    const second = reconcileOrder({ local: first, snapshot, at: 99 }).state;
+    expect(second).toBe(first);
+    expect(second.version).toBe(first.version);
+    expect(second.updatedAt).toBe(first.updatedAt);
+  });
+
+  it("rejects terminal rewrites", () => {
+    const filledSnapshot = {
+      clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+      side: "buy" as const, quantity: "2", status: "FILLED" as const,
+      cumulativeFilledQuantity: "2", averageFillPrice: "101",
+    };
+    const filled = reconcileOrder({ local: unknown(), snapshot: filledSnapshot, at: 14 }).state;
+    expect(() => reconcileOrder({
+      local: filled,
+      snapshot: { ...filledSnapshot, status: "CANCELED", cumulativeFilledQuantity: "1" },
+      at: 15,
+    })).toThrow(/terminal|stale/i);
+  });
+
+  it.each(["NEW", "REJECTED"] as const)("rejects stale zero fills for %s after a partial fill", (status) => {
+    const partial = reconcileOrder({
+      local: unknown(),
+      snapshot: {
+        clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+        side: "buy", quantity: "2", status: "PARTIALLY_FILLED",
+        cumulativeFilledQuantity: "1", averageFillPrice: "101",
+      }, at: 14,
+    }).state;
+    expect(() => reconcileOrder({
+      local: partial,
+      snapshot: {
+        clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+        side: "buy", quantity: "2", status, cumulativeFilledQuantity: "0",
+      }, at: 15,
+    })).toThrow(/stale/i);
+  });
+
+  it("treats a newly discovered exchange order id as one material transition", () => {
+    const local = transitionOrder(
+      transitionOrder(createTrackedOrder({
+        deploymentId: "deployment", clientOrderId: "client-1", approvedIntent, at: 10,
+      }), { type: "submit-start", at: 11 }),
+      { type: "submit-timeout", at: 12 },
+    );
+    const snapshot = {
+      clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+      side: "buy" as const, quantity: "2", status: "NEW" as const,
+      cumulativeFilledQuantity: "0",
+    };
+    const next = reconcileOrder({ local, snapshot, at: 20 }).state;
+    expect(next.exchangeOrderId).toBe("exchange-1");
+    expect(next.version).toBe(local.version + 1);
+    expect(next.updatedAt).toBe(20);
+    expect(reconcileOrder({ local: next, snapshot, at: 21 }).state).toBe(next);
+  });
+
+  it.each([
+    { cumulativeFilledQuantity: "1e2" },
+    { cumulativeFilledQuantity: "0", averageFillPrice: "NaN" },
+    { cumulativeFilledQuantity: "0", fees: "-1" },
+  ])("validates every supplied decimal even for a cancelled snapshot %#", (decimalOverrides) => {
+    expect(() => reconcileOrder({
+      local: unknown(),
+      snapshot: {
+        clientOrderId: "client-1", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+        side: "buy", quantity: "2", status: "CANCELED",
+        ...decimalOverrides,
+      }, at: 14,
+    })).toThrow(/fill|price|fees|decimal/i);
+  });
 });

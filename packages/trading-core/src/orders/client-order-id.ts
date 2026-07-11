@@ -7,9 +7,9 @@ export interface ClientOrderIdInput {
   readonly sequence: number;
 }
 
-function canonicalPart(value: string): string {
-  if (value.length === 0 || value.length > MAX_COMPONENT_LENGTH) {
-    throw new TypeError("client order id inputs must be nonempty and at most 256 characters");
+function canonicalPart(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_COMPONENT_LENGTH) {
+    throw new TypeError("client order id inputs must be nonempty strings of at most 256 characters");
   }
   const bytes = new TextEncoder().encode(value);
   return `${bytes.byteLength}:${value}`;

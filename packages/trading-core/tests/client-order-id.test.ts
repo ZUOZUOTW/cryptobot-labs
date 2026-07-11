@@ -45,4 +45,11 @@ describe("deriveClientOrderId", () => {
   ])("rejects malformed input %#", async (candidate) => {
     await expect(deriveClientOrderId(candidate)).rejects.toThrow();
   });
+
+  it.each([42, {}, null])("rejects non-string canonical inputs %#", async (value) => {
+    await expect(deriveClientOrderId({
+      ...input,
+      deploymentId: value as string,
+    })).rejects.toThrow(/string|input/i);
+  });
 });

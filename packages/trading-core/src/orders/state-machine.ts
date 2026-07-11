@@ -63,7 +63,6 @@ function update(order: TrackedOrder, at: number, values: Partial<TrackedOrder>):
 }
 
 function identicalTerminalDuplicate(order: TrackedOrder, event: OrderEvent): boolean {
-  if (event.at !== order.updatedAt) return false;
   if (order.status === "risk-rejected" && event.type === "risk-rejected") return event.reason === order.reason;
   if (order.status === "rejected" && event.type === "submit-rejected") return event.reason === order.reason;
   if (order.status === "cancelled" && event.type === "cancel-acknowledged") return true;

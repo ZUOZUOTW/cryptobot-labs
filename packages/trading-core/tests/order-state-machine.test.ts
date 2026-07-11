@@ -110,6 +110,13 @@ describe("order state machine", () => {
     const duplicate = { type: "submit-rejected", reason: "no", at: 102 } as const;
     expect(transitionOrder(rejected, duplicate)).toBe(rejected);
     expect(() => transitionOrder(rejected, { ...duplicate, reason: "different", at: 103 })).toThrow();
+
+    const filled = transitionOrder(acknowledged(), {
+      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", at: 103,
+    });
+    expect(transitionOrder(filled, {
+      type: "fill-snapshot", cumulativeFilledQuantity: "2", averageFillPrice: "100", at: 999,
+    })).toBe(filled);
   });
 
   it("rejects illegal transitions, backward timestamps and invalid decimals", () => {
