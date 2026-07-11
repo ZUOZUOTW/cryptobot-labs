@@ -167,6 +167,7 @@ export function parseCancellation(
   body: unknown,
   expected: ExpectedOrderIdentity,
   requireExactCanceledStatus = false,
+  requiredIdentifier?: Readonly<{ kind: "orderId" | "origClientOrderId"; value: string }>,
 ): { cancelled: true } | { rejected: string } {
   const unwrapped = unwrapPrivateBody(body);
   if (!unwrapped.ok) return { rejected: unwrapped.reason };
@@ -181,10 +182,16 @@ export function parseCancellation(
       (expected.exchangeOrderId !== undefined && returnedOrderId !== expected.exchangeOrderId)) {
     throw schema("Cancellation identity mismatch");
   }
+  if (requiredIdentifier?.kind === "orderId" && returnedOrderId !== requiredIdentifier.value) {
+    throw schema("Cancellation did not echo the requested orderId");
+  }
+  if (requiredIdentifier?.kind === "origClientOrderId" && source.origClientOrderId !== requiredIdentifier.value) {
+    throw schema("Cancellation did not echo the requested origClientOrderId");
+  }
   if (requireExactCanceledStatus && source.status !== "CANCELED") {
     throw schema("Spot cancellation was not confirmed CANCELED");
   }
-  if (returnedClientId === undefined && source.orderId === undefined && source.success !== true) {
+  if (returnedClientId === undefined && source.orderId === undefined) {
     throw schema("Invalid cancellation acknowledgement");
   }
   return { cancelled: true };

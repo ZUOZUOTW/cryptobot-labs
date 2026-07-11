@@ -191,7 +191,7 @@ function validateBalanceCollection(value: unknown, market: "spot" | "futures"): 
     if (typeof asset !== "string" || !/^[A-Z0-9]{1,16}$/.test(asset)) throw schema("Invalid account balance asset");
     const required = market === "spot"
       ? ["free", "locked"] as const
-      : ["balance", "availableBalance", "unrealizePnl"] as const;
+      : ["balance", "availableBalance", "frozen", "unrealizePnl"] as const;
     for (const key of required) {
       const amount = balance[key];
       const pattern = key === "unrealizePnl" ? SIGNED_AMOUNT : UNSIGNED_AMOUNT;
@@ -421,6 +421,9 @@ export class WeexPrivateClient {
 
   async verifyAccount(target: ExecutionTarget): Promise<VerifiedAccountSummary> {
     assertTarget(target);
+    if (target.market === "futures" && target.mode === "live") {
+      this.#verifiedFuturesLive = undefined;
+    }
     const response = await this.#safeGet(accountRoute(target));
     const configResponse = target.market === "futures" && target.mode === "live"
       ? await this.#safeGet(FUTURES_ACCOUNT_CONFIG)
@@ -518,7 +521,7 @@ export class WeexPrivateClient {
     const matches: unknown[] = [];
     for (const route of futuresSearchRoutes(query.target)) {
       let routeComplete = false;
-      for (let page = 1; page <= MAX_ORDER_SEARCH_PAGES; page += 1) {
+      for (let page = 0; page < MAX_ORDER_SEARCH_PAGES; page += 1) {
         const response = await this.#safeGet(route, [
           ["symbol", query.symbol], ["page", String(page)], ["limit", String(ORDER_SEARCH_PAGE_SIZE)],
         ]);
@@ -564,7 +567,14 @@ export class WeexPrivateClient {
     try {
       const response = await this.#signedRequest("DELETE", orderRoute(query.target), entries);
       responseReceived = true;
-      const parsed = parseCancellation(response.body, expected, query.target.market === "spot");
+      const parsed = parseCancellation(
+        response.body,
+        expected,
+        query.target.market === "spot",
+        query.exchangeOrderId
+          ? { kind: "orderId", value: query.exchangeOrderId }
+          : { kind: "origClientOrderId", value: query.clientOrderId },
+      );
       return "cancelled" in parsed
         ? { status: "cancelled" }
         : { status: "rejected", reason: parsed.rejected };
