@@ -109,6 +109,9 @@ describe("scoped control-plane repositories", () => {
 
   it("makes cross-owner device reads and mutations invisible and bounds pagination", async () => {
     expect(await devices.get("usr_b", "dev_a")).toBeNull();
+    expect(await devices.touch("usr_b", "dev_a", 40)).toBeNull();
+    expect((await devices.get("usr_a", "dev_a"))?.lastSeenAt).toBeNull();
+    expect(await devices.touch("usr_a", "dev_a", 41)).toMatchObject({ userId: "usr_a", lastSeenAt: 41 });
     expect(await devices.revoke("usr_b", "dev_a", 50)).toBeNull();
     expect((await devices.get("usr_a", "dev_a"))?.status).toBe("active");
     await expect(devices.list("usr_a", { limit: 101 })).rejects.toThrow(/limit/);
@@ -124,24 +127,31 @@ describe("scoped control-plane repositories", () => {
   });
 
   it("stores only device credential hashes and revokes device plus credential atomically", async () => {
-    await credentials.create({ deviceId: "dev_a", credentialHash, now: 100, expiresAt: 1_000 });
-    expect(await credentials.verify("dev_a", credentialHash, 200)).toMatchObject({ deviceId: "dev_a", userId: "usr_a" });
+    await expect(credentials.create({ userId: "usr_b", deviceId: "dev_a", credentialHash, now: 90, expiresAt: 1_000 }))
+      .rejects.toThrow(/owned/);
+    await credentials.create({ userId: "usr_a", deviceId: "dev_a", credentialHash, now: 100, expiresAt: 1_000 });
+    expect(await credentials.verifyForAuthenticatedDevice("dev_a", credentialHash, 200))
+      .toMatchObject({ deviceId: "dev_a", userId: "usr_a" });
+    expect(await credentials.revoke("usr_b", "dev_a", 250)).toBe(false);
+    expect(await credentials.verifyForAuthenticatedDevice("dev_a", credentialHash, 251)).not.toBeNull();
     expect(JSON.stringify(database.raw.prepare("SELECT * FROM device_credentials").all())).not.toContain("opaque-plaintext");
     expect(database.raw.prepare("SELECT credential_hash FROM device_credentials").get()).toEqual({ credential_hash: credentialHash });
 
     await devices.revoke("usr_a", "dev_a", 300);
     expect((await devices.get("usr_a", "dev_a"))?.status).toBe("revoked");
-    expect(await credentials.verify("dev_a", credentialHash, 301)).toBeNull();
+    expect(await credentials.verifyForAuthenticatedDevice("dev_a", credentialHash, 301)).toBeNull();
     expect(database.raw.prepare("SELECT revoked_at FROM device_credentials WHERE device_id = ?").get("dev_a"))
       .toEqual({ revoked_at: 300 });
   });
 
   it("claims each device nonce once and purges only a bounded expired page", async () => {
-    expect(await nonces.claim({ id: "nonce_a", deviceId: "dev_a", nonce: "n".repeat(32), timestamp: 100, expiresAt: 200, now: 100 })).toBe(true);
-    expect(await nonces.claim({ id: "nonce_b", deviceId: "dev_a", nonce: "n".repeat(32), timestamp: 101, expiresAt: 201, now: 101 })).toBe(false);
-    expect(await nonces.claim({ id: "nonce_c", deviceId: "dev_b", nonce: "n".repeat(32), timestamp: 101, expiresAt: 201, now: 101 })).toBe(true);
-    await expect(nonces.purgeExpired("dev_a", 500, 101)).rejects.toThrow(/limit/);
-    expect(await nonces.purgeExpired("dev_a", 500, 1)).toBe(1);
+    expect(await nonces.claim({ id: "nonce_cross", userId: "usr_b", deviceId: "dev_a", nonce: "x".repeat(32), timestamp: 99, expiresAt: 200, now: 99 })).toBe(false);
+    expect(await nonces.claim({ id: "nonce_a", userId: "usr_a", deviceId: "dev_a", nonce: "n".repeat(32), timestamp: 100, expiresAt: 200, now: 100 })).toBe(true);
+    expect(await nonces.claim({ id: "nonce_b", userId: "usr_a", deviceId: "dev_a", nonce: "n".repeat(32), timestamp: 101, expiresAt: 201, now: 101 })).toBe(false);
+    expect(await nonces.claim({ id: "nonce_c", userId: "usr_b", deviceId: "dev_b", nonce: "n".repeat(32), timestamp: 101, expiresAt: 201, now: 101 })).toBe(true);
+    expect(await nonces.purgeExpired("usr_b", "dev_a", 500, 1)).toBe(0);
+    await expect(nonces.purgeExpired("usr_a", "dev_a", 500, 101)).rejects.toThrow(/limit/);
+    expect(await nonces.purgeExpired("usr_a", "dev_a", 500, 1)).toBe(1);
     expect(database.raw.prepare("SELECT count(*) AS count FROM device_nonces WHERE device_id = ?").get("dev_b"))
       .toEqual({ count: 1 });
   });
@@ -152,10 +162,10 @@ describe("scoped control-plane repositories", () => {
       publicKeyJwk: { ...publicKeyJwk, d: "private" }, now: 30,
     })).rejects.toThrow(/public/i);
     await expect(credentials.create({
-      deviceId: "dev_a", credentialHash: "opaque-plaintext", now: 100, expiresAt: 200,
+      userId: "usr_a", deviceId: "dev_a", credentialHash: "opaque-plaintext", now: 100, expiresAt: 200,
     })).rejects.toThrow(/hash/i);
     await expect(credentials.create({
-      deviceId: "dev_a", credentialHash, now: 100, expiresAt: 200, secretKey: "raw-secret",
+      userId: "usr_a", deviceId: "dev_a", credentialHash, now: 100, expiresAt: 200, secretKey: "raw-secret",
     } as never)).rejects.toThrow(/sensitive/i);
     await expect(pairing.issue({ id: "pair_bad", userId: "usr_a", codeHash: pairingHash, now: 200, expiresAt: 200 }))
       .rejects.toThrow(/expiresAt/);

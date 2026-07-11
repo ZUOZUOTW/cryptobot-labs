@@ -56,11 +56,12 @@ export function createDeviceRepository(database: ControlPlaneDatabase) {
       const items = result.results.slice(0, pageSize);
       return { items, nextCursor: more ? items.at(-1)!.id : null };
     },
-    async touch(deviceId: string, nowValue: number): Promise<DeviceRecord | null> {
+    async touch(userId: string, deviceId: string, nowValue: number): Promise<DeviceRecord | null> {
       return database.prepare(`
         UPDATE devices SET last_seen_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'active' RETURNING ${deviceColumns}
-      `).bind(time(nowValue, "now"), nowValue, id(deviceId, "deviceId")).first<DeviceRecord>();
+        WHERE user_id = ? AND id = ? AND status = 'active' RETURNING ${deviceColumns}
+      `).bind(time(nowValue, "now"), nowValue, id(userId, "userId"), id(deviceId, "deviceId"))
+        .first<DeviceRecord>();
     },
     async revoke(userId: string, deviceId: string, nowValue: number): Promise<DeviceRecord | null> {
       const owner = id(userId, "userId");
@@ -103,31 +104,34 @@ export function createPairingCodeRepository(database: ControlPlaneDatabase) {
 
 export function createDeviceCredentialRepository(database: ControlPlaneDatabase) {
   return {
-    async create(input: { deviceId: string; credentialHash: string; now: number; expiresAt: number }): Promise<DeviceCredentialRecord> {
-      exactInput(input, ["deviceId", "credentialHash", "now", "expiresAt"]);
+    async create(input: { userId: string; deviceId: string; credentialHash: string; now: number; expiresAt: number }): Promise<DeviceCredentialRecord> {
+      exactInput(input, ["userId", "deviceId", "credentialHash", "now", "expiresAt"]);
       const now = time(input.now, "now");
       const row = await database.prepare(`
         INSERT INTO device_credentials (device_id, user_id, credential_hash, expires_at, revoked_at, created_at)
-        SELECT id, user_id, ?, ?, NULL, ? FROM devices WHERE id = ? AND status = 'active'
+        SELECT id, user_id, ?, ?, NULL, ? FROM devices
+        WHERE user_id = ? AND id = ? AND status = 'active'
         ON CONFLICT(device_id) DO UPDATE SET credential_hash = excluded.credential_hash,
           expires_at = excluded.expires_at, revoked_at = NULL, created_at = excluded.created_at
         RETURNING ${credentialColumns}
-      `).bind(hash(input.credentialHash), expiry(input.expiresAt, now), now, id(input.deviceId, "deviceId"))
+      `).bind(hash(input.credentialHash), expiry(input.expiresAt, now), now,
+        id(input.userId, "userId"), id(input.deviceId, "deviceId"))
         .first<DeviceCredentialRecord>();
-      if (!row) throw new Error("active device not found");
+      if (!row) throw new Error("owned active device not found");
       return row;
     },
-    verify(deviceId: string, credentialHash: string, nowValue: number): Promise<DeviceCredentialRecord | null> {
+    verifyForAuthenticatedDevice(deviceId: string, credentialHash: string, nowValue: number): Promise<DeviceCredentialRecord | null> {
       const now = time(nowValue, "now");
       return database.prepare(`
         SELECT ${credentialColumns} FROM device_credentials
         WHERE device_id = ? AND credential_hash = ? AND revoked_at IS NULL AND expires_at > ?
       `).bind(id(deviceId, "deviceId"), hash(credentialHash), now).first<DeviceCredentialRecord>();
     },
-    async revoke(deviceId: string, nowValue: number): Promise<boolean> {
+    async revoke(userId: string, deviceId: string, nowValue: number): Promise<boolean> {
       const result = await database.prepare(`
-        UPDATE device_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE device_id = ?
-      `).bind(time(nowValue, "now"), id(deviceId, "deviceId")).run();
+        UPDATE device_credentials SET revoked_at = COALESCE(revoked_at, ?)
+        WHERE user_id = ? AND device_id = ?
+      `).bind(time(nowValue, "now"), id(userId, "userId"), id(deviceId, "deviceId")).run();
       return changed(result);
     },
   };
@@ -135,22 +139,24 @@ export function createDeviceCredentialRepository(database: ControlPlaneDatabase)
 
 export function createDeviceNonceRepository(database: ControlPlaneDatabase) {
   return {
-    async claim(input: { id: string; deviceId: string; nonce: string; timestamp: number; expiresAt: number; now: number }): Promise<boolean> {
-      exactInput(input, ["id", "deviceId", "nonce", "timestamp", "expiresAt", "now"]);
+    async claim(input: { id: string; userId: string; deviceId: string; nonce: string; timestamp: number; expiresAt: number; now: number }): Promise<boolean> {
+      exactInput(input, ["id", "userId", "deviceId", "nonce", "timestamp", "expiresAt", "now"]);
       const now = time(input.now, "now");
       const result = await database.prepare(`
         INSERT OR IGNORE INTO device_nonces (id, device_id, user_id, nonce, timestamp, expires_at)
-        SELECT ?, id, user_id, ?, ?, ? FROM devices WHERE id = ? AND status = 'active'
+        SELECT ?, id, user_id, ?, ?, ? FROM devices
+        WHERE user_id = ? AND id = ? AND status = 'active'
       `).bind(id(input.id, "nonceId"), nonce(input.nonce), time(input.timestamp, "timestamp"),
-        expiry(input.expiresAt, now), id(input.deviceId, "deviceId")).run();
+        expiry(input.expiresAt, now), id(input.userId, "userId"), id(input.deviceId, "deviceId")).run();
       return changed(result);
     },
-    async purgeExpired(deviceId: string, nowValue: number, maximum: number): Promise<number> {
+    async purgeExpired(userId: string, deviceId: string, nowValue: number, maximum: number): Promise<number> {
       const result = await database.prepare(`
         DELETE FROM device_nonces WHERE id IN (
-          SELECT id FROM device_nonces WHERE device_id = ? AND expires_at <= ? ORDER BY expires_at ASC, id ASC LIMIT ?
+          SELECT id FROM device_nonces WHERE user_id = ? AND device_id = ? AND expires_at <= ?
+          ORDER BY expires_at ASC, id ASC LIMIT ?
         )
-      `).bind(id(deviceId, "deviceId"), time(nowValue, "now"), limit(maximum)).run();
+      `).bind(id(userId, "userId"), id(deviceId, "deviceId"), time(nowValue, "now"), limit(maximum)).run();
       if (!result.success) throw new Error("nonce purge failed");
       return result.meta.changes ?? 0;
     },
