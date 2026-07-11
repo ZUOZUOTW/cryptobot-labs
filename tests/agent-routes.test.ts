@@ -82,7 +82,7 @@ describe("signed agent HTTP routes", () => {
     const handlers = createAgentHandlers(dependencies);
     const misplaced = await handlers.events(post("/api/agent/events", JSON.stringify({events:[event("evt_a","heartbeat")] })));
     expect(misplaced.status).toBe(207);
-    expect(await misplaced.json()).toEqual({results:[{index:0,eventId:"evt_a",status:"rejected",code:"invalid_event"}]});
+    expect(await misplaced.json()).toEqual({results:[{index:0,status:"rejected",code:"invalid_event"}]});
     const body = JSON.stringify({ events: [event("evt_a"), event("evt_b")] });
     const first = await handlers.events(post("/api/agent/events", body));
     const retry = await handlers.events(post("/api/agent/events", body));
@@ -132,7 +132,7 @@ describe("signed agent HTTP routes", () => {
     expect(first.status).toBe(207);
     expect(await first.json()).toEqual({results:[
       {index:0,eventId:"evt_real_a",status:"accepted",code:"accepted"},
-      {index:1,eventId:"evt_real_b",status:"rejected",code:"deployment_fence"},
+      {index:1,status:"rejected",code:"deployment_fence"},
       {index:2,eventId:"evt_real_c",status:"accepted",code:"accepted"},
     ]});
     expect(database.raw.prepare("SELECT count(*) AS count FROM audit_events").get()).toEqual({count:2});
@@ -140,9 +140,25 @@ describe("signed agent HTTP routes", () => {
     const retry=await handlers.events(post("/api/agent/events",body,{"x-test-nonce":"nonce_batch_2"}));
     expect(await retry.json()).toEqual({results:[
       {index:0,eventId:"evt_real_a",status:"duplicate",code:"duplicate"},
-      {index:1,eventId:"evt_real_b",status:"rejected",code:"deployment_fence"},
+      {index:1,status:"rejected",code:"deployment_fence"},
       {index:2,eventId:"evt_real_c",status:"duplicate",code:"duplicate"},
     ]});
+
+    const credentialId=`cred_${"A".repeat(43)}`;
+    const bootstrapId=`bst_${"B".repeat(22)}`;
+    const entropyId="Aa0Bc1De2Fg3Hi4Jk5Lm6No7Pq8Rs9Tu";
+    const forbidden={...event("evt_forbidden"),payload:{...event("unused").payload,secretKey:"DO_NOT_REFLECT"}};
+    const sensitiveBody=JSON.stringify({events:[
+      {...event("unused_a"),id:credentialId},
+      {...event("unused_b"),id:bootstrapId},
+      {...event("unused_c"),id:entropyId},
+      forbidden,
+    ]});
+    const sensitive=await handlers.events(post("/api/agent/events",sensitiveBody,{"x-test-nonce":"nonce_batch_3"}));
+    expect(sensitive.status).toBe(207);
+    const sensitiveText=await sensitive.text();
+    for(const secret of [credentialId,bootstrapId,entropyId,"evt_forbidden","DO_NOT_REFLECT"])expect(sensitiveText).not.toContain(secret);
+    expect(JSON.parse(sensitiveText)).toEqual({results:[0,1,2,3].map((index)=>({index,status:"rejected",code:"invalid_event"}))});
   });
 
   it("marks unknown per-event failures retryable, keeps processing, and never reflects unsafe ids or secrets", async () => {
@@ -157,8 +173,8 @@ describe("signed agent HTTP routes", () => {
     const text=await response.text();expect(text).not.toContain("SECRET");
     expect(JSON.parse(text).results).toEqual([
       {index:0,eventId:"evt_before",status:"accepted",code:"accepted"},
-      {index:1,eventId:"evt_fail",status:"retryable",code:"internal"},
-      {index:2,status:"accepted",code:"accepted"},
+      {index:1,status:"retryable",code:"internal"},
+      {index:2,status:"retryable",code:"internal"},
       {index:3,eventId:"evt_after",status:"accepted",code:"accepted"},
     ]);
     expect(dependencies.eventService.ingest).toHaveBeenCalledTimes(4);
