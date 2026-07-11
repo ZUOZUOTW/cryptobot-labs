@@ -18,7 +18,8 @@ export class PairingError extends Error {
 export interface PairingServiceDependencies {
   database: ControlPlaneDatabase;
   randomBytes?: (length: number) => Uint8Array;
-  verifyBootstrapProof?: (input: { deviceId: string; challenge: string; publicKeyJwk: string; proof: unknown }) => Promise<boolean>;
+  verifyBootstrapProof?: (input: { deviceId: string; challenge: string; publicKeyJwk: string;
+    bootstrapTokenHash: string; expiresAt: number; proof: unknown }) => Promise<boolean>;
 }
 
 const productionRandomBytes = (length: number): Uint8Array => crypto.getRandomValues(new Uint8Array(length));
@@ -144,16 +145,17 @@ export function createPairingService(dependencies: PairingServiceDependencies) {
       const now = time(input.now, "now");
       const bootstrapHash = await sha256(input.bootstrapToken);
       const challengeHash = await sha256(input.challenge);
-      const pending = await database.prepare(`SELECT d.public_key_jwk AS publicKeyJwk FROM device_bootstraps b
+      const pending = await database.prepare(`SELECT d.public_key_jwk AS publicKeyJwk,b.expires_at AS expiresAt FROM device_bootstraps b
         JOIN devices d ON d.id=b.device_id AND d.user_id=b.user_id
         WHERE b.device_id=? AND b.bootstrap_hash=? AND b.challenge_hash=?
           AND b.consumed_at IS NULL AND b.expires_at>? AND d.status='pending'`)
-        .bind(deviceId, bootstrapHash, challengeHash, now).first<{ publicKeyJwk: string }>();
+        .bind(deviceId, bootstrapHash, challengeHash, now).first<{ publicKeyJwk: string; expiresAt: number }>();
       if (!pending || !dependencies.verifyBootstrapProof) throw new PairingError();
       let proofValid = false;
       try {
         proofValid = await dependencies.verifyBootstrapProof({ deviceId, challenge: input.challenge,
-          publicKeyJwk: pending.publicKeyJwk, proof: input.proof });
+          publicKeyJwk: pending.publicKeyJwk, bootstrapTokenHash: bootstrapHash,
+          expiresAt: pending.expiresAt, proof: input.proof });
       } catch {
         // Proof verifier internals are never exposed as pairing oracles.
       }
