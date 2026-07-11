@@ -82,12 +82,16 @@ const rejectSecrets = (value: unknown): void => {
       }
     }
     if (typeof item === "string") {
-      const lower = item.toLowerCase();
+      const scanned = item.normalize("NFKC");
+      const lower = scanned.toLowerCase();
+      const highEntropy = (scanned.match(/[A-Za-z0-9+/_=-]{32,}/g) ?? []).some((token) =>
+        /[A-Z]/.test(token) && /[a-z]/.test(token) && /\d/.test(token) && new Set(token).size >= 16);
       if (/-----begin (?:rsa |ec |ed25519 )?private key-----/.test(lower)
-        || /^(?:bearer|basic)\s+[a-z0-9+/_=-]{8,}$/i.test(item)
-        || /(?:api[_ -]?secret|secret[_ -]?key|pass[_ -]?phrase|weex[_ -]?access[_ -]?sign|access[_ -]?sign|authorization|set-cookie|cookie)\s*[:=]/i.test(item)
-        || /\b(?:cred|bst)_[A-Za-z0-9_-]{16,}\b/.test(item)
-        || /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{16,}\b/.test(item)) {
+        || /^(?:bearer|basic)\s+[a-z0-9+/_=-]{8,}$/i.test(scanned)
+        || /(?:api[_ -]?(?:secret|key)|access[_ -]?key|secret[_ -]?key|pass[_ -]?phrase|weex[_ -]?(?:api[_ -]?)?key|weex[_ -]?access[_ -]?sign|access[_ -]?sign|authorization|set-cookie|cookie)\s*[:=]/i.test(scanned)
+        || /\b(?:cred|bst)_[A-Za-z0-9_-]{16,}\b/.test(scanned)
+        || /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{16,}\b/.test(scanned)
+        || highEntropy) {
         throw new DeviceEventError("forbidden-data", "event contains forbidden credential material");
       }
       return;
@@ -177,6 +181,17 @@ export function createDeviceEventService(activity: Activity, options: { deployme
     if(identity?.verified!==true)throw new DeviceEventError("invalid-event","verified device identity is required");
     const event=parseDeviceEvent(input); const now=(options.now??Date.now)();
     try {
+      const storedLedger = await activity.getDeviceAuditByEventId(identity.deviceId, event.id);
+      if (storedLedger) {
+        const expectedPayload = safeCanonicalJsonStringify({ version: 1,
+          expectedDeploymentVersion: event.expectedDeploymentVersion, payload: event.payload }, "device event ledger", 65_536);
+        const exactRetry = storedLedger.actorType === "device" && storedLedger.actorId === identity.deviceId
+          && storedLedger.deviceId === identity.deviceId && storedLedger.deploymentId === event.deploymentId
+          && storedLedger.type === event.type && storedLedger.correlationId === event.correlationId
+          && storedLedger.payloadJson === expectedPayload && storedLedger.occurredAt === event.occurredAt;
+        if (!exactRetry) throw new DeviceEventError("event-conflict", "event conflict");
+        return { kind: "ledger" as const, event: storedLedger, idempotent: true };
+      }
       const persistedTimes = [event.occurredAt];
       if (event.type === "order-state" || event.type === "fill") {
         const order = event.payload.order as unknown as { createdAt: number; updatedAt: number };

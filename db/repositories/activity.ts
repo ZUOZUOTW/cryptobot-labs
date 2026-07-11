@@ -599,6 +599,9 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
     },
 
     getAuditForUser,
+    getDeviceAuditByEventId(deviceId: string, eventId: string): Promise<AuditEventRecord | null> {
+      return getAuditForActor(id(eventId, "auditEventId"), "device", id(deviceId, "deviceId"));
+    },
     async listAuditForUser(userId: string, options: { limit: number; cursor?: { occurredAt: number; id: string } }): Promise<{ items: AuditEventRecord[]; nextCursor: { occurredAt: number; id: string } | null }> {
       exactInput(options, ["limit", "cursor"]);
       const pageSize = limit(options.limit);
