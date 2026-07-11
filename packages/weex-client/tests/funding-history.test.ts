@@ -22,7 +22,8 @@ class RecordingTransport implements HttpTransport {
 const ok = (body: unknown): HttpResponse => ({ status: 200, headers: {}, body });
 const mark = (openTime: number, close: string, closeTime = openTime + 14_399_999) =>
   [openTime, close, close, close, close, "1", closeTime, "1", 1, "1", "1"];
-const rate = (fundingTime: number, fundingRate = "0.0001") => ({ fundingTime, fundingRate });
+const rate = (fundingTime: number, fundingRate = "0.0001", symbol = "cmt_btcusdt") =>
+  ({ symbol, fundingTime, fundingRate });
 
 describe("WEEX historical funding collection", () => {
   it("uses only official V2 funding and V3 MARK query fields with normalized futures symbols", async () => {
@@ -36,7 +37,7 @@ describe("WEEX historical funding collection", () => {
 
     expect(transport.requests.map(({ url }) => url)).toEqual([
       "https://api-contract.weex.com/capi/v2/market/getHistoryFundRate?symbol=cmt_btcusdt&limit=100",
-      "https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=cmt_btcusdt&interval=4h&startTime=5600000&endTime=30000000&limit=100&priceType=MARK",
+      "https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=4h&startTime=5600000&endTime=30000000&limit=100&priceType=MARK",
     ]);
     expect(result.funding).toEqual([{ timestamp: 28_800_000, rate: "0.0001", markPrice: "42000" }]);
     expect(result.provenance).toMatchObject({
@@ -63,15 +64,24 @@ describe("WEEX historical funding collection", () => {
   });
 
   it.each([
-    [{ fundingRate: 0.1, fundingTime: 10 }],
-    [{ fundingRate: "NaN", fundingTime: 10 }],
-    [{ fundingRate: "0.1", fundingTime: "ten" }],
-    [{ fundingRate: "0.1", fundingTime: 10, extra: true }],
+    [{ symbol: "cmt_btcusdt", fundingRate: 0.1, fundingTime: 10 }],
+    [{ symbol: "cmt_btcusdt", fundingRate: "NaN", fundingTime: 10 }],
+    [{ symbol: "cmt_btcusdt", fundingRate: "0.1", fundingTime: "ten" }],
+    [{ symbol: "cmt_btcusdt", fundingRate: "0.1", fundingTime: 10, extra: true }],
+    [{ fundingRate: "0.1", fundingTime: 10 }],
   ])("rejects invalid funding rows %#", async (body) => {
     const transport = new RecordingTransport([ok(body)]);
     await expect(new WeexPublicClient(transport).collectHistoricalFunding({
       market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 20,
     })).rejects.toMatchObject({ category: "schema" });
+  });
+
+  it("rejects a returned V2 symbol that does not match the requested contract", async () => {
+    const transport = new RecordingTransport([ok([rate(10, "0.1", "cmt_ethusdt")])]);
+    await expect(new WeexPublicClient(transport, () => 20).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 20,
+    })).rejects.toMatchObject({ category: "schema" });
+    expect(transport.requests).toHaveLength(1);
   });
 
   it("never uses a future MARK close and marks a missing prior mark incomplete", async () => {
@@ -128,6 +138,29 @@ describe("WEEX historical funding collection", () => {
     expect(DEFAULT_FUNDING_MARK_MAX_AGE_MS).toBeGreaterThan(0);
   });
 
+  it("takes one safe clock snapshot and rejects future ranges before transport", async () => {
+    let calls = 0;
+    const transport = new RecordingTransport([ok([])]);
+    const result = await new WeexPublicClient(transport, () => {
+      calls += 1;
+      return 200;
+    }).collectHistoricalFunding({ market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 200 });
+    expect(calls).toBe(1);
+    expect(result.provenance.collectedAt).toBe(200);
+
+    const future = new RecordingTransport([]);
+    await expect(new WeexPublicClient(future, () => 200).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 201,
+    })).rejects.toMatchObject({ category: "validation" });
+    expect(future.requests).toHaveLength(0);
+
+    const invalidClock = new RecordingTransport([]);
+    await expect(new WeexPublicClient(invalidClock, () => Number.NaN).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 1,
+    })).rejects.toMatchObject({ category: "validation" });
+    expect(invalidClock.requests).toHaveLength(0);
+  });
+
   it("rejects a funding payload beyond the documented latest-100 bound", async () => {
     const transport = new RecordingTransport([
       ok(Array.from({ length: 101 }, (_, index) => rate(index))),
@@ -136,6 +169,36 @@ describe("WEEX historical funding collection", () => {
       market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 100,
     })).rejects.toMatchObject({ category: "schema" });
     expect(transport.requests).toHaveLength(1);
+  });
+
+  it("caps arrays and numeric strings before parsing funding and MARK payloads", async () => {
+    const oversizedFunding = new RecordingTransport([
+      ok(Array.from({ length: 101 }, (_, index) => ({ bad: index }))),
+    ]);
+    await expect(new WeexPublicClient(oversizedFunding, () => 1_000).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 100,
+    })).rejects.toMatchObject({ category: "schema" });
+
+    const hugeRate = new RecordingTransport([ok([rate(10, `0.${"1".repeat(256)}`)])]);
+    await expect(new WeexPublicClient(hugeRate, () => 100).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 20,
+    })).rejects.toMatchObject({ category: "schema" });
+
+    const oversizedMarks = new RecordingTransport([
+      ok([rate(10)]),
+      ok(Array.from({ length: 101 }, () => ({ bad: true }))),
+    ]);
+    await expect(new WeexPublicClient(oversizedMarks, () => 100).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 20,
+    })).rejects.toMatchObject({ category: "schema" });
+
+    const hugePrice = new RecordingTransport([
+      ok([rate(10)]),
+      ok([mark(0, `1${"0".repeat(256)}`, 9)]),
+    ]);
+    await expect(new WeexPublicClient(hugePrice, () => 100).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 20,
+    })).rejects.toMatchObject({ category: "schema" });
   });
 
   it("rejects conflicting duplicate MARK candles rather than choosing one", async () => {
@@ -157,7 +220,7 @@ describe("WEEX historical funding collection", () => {
         return mark(openTime, "1", openTime + interval - 1);
       })))];
     const transport = new RecordingTransport(responses);
-    const result = await new WeexPublicClient(transport, () => 1_000_000).collectHistoricalFunding({
+    const result = await new WeexPublicClient(transport, () => MAX_FUNDING_HISTORY_RANGE_MS).collectHistoricalFunding({
       market: "futures", symbol: "BTCUSDT", startTime: 0,
       endTime: MAX_FUNDING_MARK_PAGES * 100 * interval, maxMarkAgeMs: 1,
     });

@@ -86,6 +86,8 @@ interface RawFundingEvent {
 }
 
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const MAX_MARK_PAGE_ROWS = 100;
+const MAX_NUMERIC_STRING_LENGTH = 128;
 
 function validationError(message: string): WeexApiError {
   return new WeexApiError(message, { category: "validation", retryable: false });
@@ -95,19 +97,23 @@ function schemaError(message: string): WeexApiError {
   return new WeexApiError(message, { category: "schema", retryable: false });
 }
 
-function normalizeFuturesSymbol(symbol: string): string {
-  if (typeof symbol !== "string") throw validationError("Invalid futures symbol");
+function normalizeFundingSymbols(symbol: string): { v2: string; v3: string } {
+  if (typeof symbol !== "string" || symbol.length > 34) throw validationError("Invalid futures symbol");
   const normalized = symbol.toLowerCase();
   const core = normalized.startsWith("cmt_") ? normalized.slice(4) : normalized;
   if (!/^[a-z0-9]{4,30}$/.test(core)) throw validationError("Invalid futures symbol");
-  return `cmt_${core}`;
+  return { v2: `cmt_${core}`, v3: core.toUpperCase() };
 }
 
-function validateFundingRequest(request: HistoricalFundingRequest): { symbol: string; maxMarkAgeMs: number } {
+function validateFundingRequest(
+  request: HistoricalFundingRequest,
+  nowMs: number,
+): { symbols: { v2: string; v3: string }; maxMarkAgeMs: number } {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw validationError("Invalid clock snapshot");
   if (request.market !== "futures") throw validationError("Funding history is available only for futures");
-  const symbol = normalizeFuturesSymbol(request.symbol);
+  const symbols = normalizeFundingSymbols(request.symbol);
   if (!Number.isSafeInteger(request.startTime) || request.startTime < 0 ||
-      !Number.isSafeInteger(request.endTime) || request.endTime <= request.startTime) {
+      !Number.isSafeInteger(request.endTime) || request.endTime <= request.startTime || request.endTime > nowMs) {
     throw validationError("Invalid funding history range");
   }
   if (request.endTime - request.startTime > MAX_FUNDING_HISTORY_RANGE_MS) {
@@ -118,11 +124,12 @@ function validateFundingRequest(request: HistoricalFundingRequest): { symbol: st
     throw validationError("Invalid funding MARK maximum age");
   }
   if (request.endTime > Number.MAX_SAFE_INTEGER - maxMarkAgeMs) throw validationError("Unsafe funding history range");
-  return { symbol, maxMarkAgeMs };
+  return { symbols, maxMarkAgeMs };
 }
 
-function parseFundingRows(body: unknown): RawFundingEvent[] {
+function parseFundingRows(body: unknown, expectedSymbol: string): RawFundingEvent[] {
   if (!Array.isArray(body)) throw schemaError("Invalid funding history collection");
+  if (body.length > FUNDING_LIMIT) throw schemaError("Funding history exceeds the documented limit");
   const byTime = new Map<number, RawFundingEvent>();
   for (const [index, value] of body.entries()) {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -130,21 +137,47 @@ function parseFundingRows(body: unknown): RawFundingEvent[] {
     }
     const row = value as Record<string, unknown>;
     const keys = Object.keys(row).sort();
-    if (keys.length !== 2 || keys[0] !== "fundingRate" || keys[1] !== "fundingTime") {
+    if (keys.length !== 3 || keys[0] !== "fundingRate" || keys[1] !== "fundingTime" || keys[2] !== "symbol") {
       throw schemaError(`Invalid funding history fields at ${index}`);
     }
-    if (typeof row.fundingRate !== "string" || !SIGNED_DECIMAL.test(row.fundingRate)) {
+    if (typeof row.symbol !== "string" || row.symbol.length > 34 || row.symbol !== expectedSymbol) {
+      throw schemaError(`Unexpected funding symbol at ${index}`);
+    }
+    if (typeof row.fundingRate !== "string" || row.fundingRate.length > MAX_NUMERIC_STRING_LENGTH ||
+        !SIGNED_DECIMAL.test(row.fundingRate)) {
       throw schemaError(`Invalid funding rate at ${index}`);
     }
     const timestamp = typeof row.fundingTime === "number"
       ? row.fundingTime
-      : typeof row.fundingTime === "string" && /^\d+$/.test(row.fundingTime) ? Number(row.fundingTime) : NaN;
+      : typeof row.fundingTime === "string" && row.fundingTime.length <= 16 && /^\d+$/.test(row.fundingTime)
+        ? Number(row.fundingTime) : NaN;
     if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw schemaError(`Invalid funding time at ${index}`);
     const current = byTime.get(timestamp);
     if (current && current.rate !== row.fundingRate) throw schemaError(`Conflicting funding rows at ${timestamp}`);
     byTime.set(timestamp, { timestamp, rate: row.fundingRate });
   }
   return [...byTime.values()].sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function preflightMarkRows(body: unknown): unknown[] {
+  if (!Array.isArray(body)) throw schemaError("Invalid MARK candle collection");
+  if (body.length > MAX_MARK_PAGE_ROWS) throw schemaError("MARK candle page exceeds the documented limit");
+  for (const [index, row] of body.entries()) {
+    if (!Array.isArray(row)) continue;
+    for (const field of [1, 2, 3, 4, 5, 7, 9, 10]) {
+      const value = row[field];
+      if (typeof value === "string" && value.length > MAX_NUMERIC_STRING_LENGTH) {
+        throw schemaError(`MARK numeric field exceeds the safe length at row ${index}`);
+      }
+    }
+    for (const field of [0, 6]) {
+      const value = row[field];
+      if (typeof value === "string" && value.length > 16) {
+        throw schemaError(`MARK timestamp exceeds the safe length at row ${index}`);
+      }
+    }
+  }
+  return body;
 }
 
 function mergeMarkCandles(candles: readonly Candle[]): Candle[] {
@@ -315,25 +348,24 @@ export class WeexPublicClient {
   }
 
   async collectHistoricalFunding(request: HistoricalFundingRequest): Promise<HistoricalFundingDataset> {
-    const { symbol, maxMarkAgeMs } = validateFundingRequest(request);
+    const nowMs = this.now();
+    const { symbols, maxMarkAgeMs } = validateFundingRequest(request, nowMs);
     const fundingUrl = new URL(FUNDING_ENDPOINT, FUTURES_ORIGIN);
-    fundingUrl.searchParams.set("symbol", symbol);
+    fundingUrl.searchParams.set("symbol", symbols.v2);
     fundingUrl.searchParams.set("limit", String(FUNDING_LIMIT));
     const fundingResponse = await this.transport.send({
       method: "GET",
       url: fundingUrl.toString(),
       headers: { Accept: "application/json" },
     });
-    const allFunding = parseFundingRows(fundingResponse.body);
-    if (allFunding.length > FUNDING_LIMIT) throw schemaError("Funding history exceeds the documented limit");
+    const allFunding = parseFundingRows(fundingResponse.body, symbols.v2);
     const returnedFundingStartTime = allFunding[0]?.timestamp;
     const returnedFundingEndTime = allFunding.at(-1)?.timestamp;
     // A full latest-100 response whose first event is newer than the requested
     // boundary cannot prove the omitted older portion. A shorter response is
     // treated as the complete exchange history available from this endpoint.
-    const fundingRangeCovered = request.endTime <= this.now() &&
-      (allFunding.length < FUNDING_LIMIT ||
-        (returnedFundingStartTime !== undefined && returnedFundingStartTime <= request.startTime));
+    const fundingRangeCovered = allFunding.length < FUNDING_LIMIT ||
+      (returnedFundingStartTime !== undefined && returnedFundingStartTime <= request.startTime);
     const requestedFunding = allFunding.filter(({ timestamp }) =>
       timestamp >= request.startTime && timestamp < request.endTime);
 
@@ -347,7 +379,7 @@ export class WeexPublicClient {
         break;
       }
       const markUrl = new URL(MARK_ENDPOINT, FUTURES_ORIGIN);
-      markUrl.searchParams.set("symbol", symbol);
+      markUrl.searchParams.set("symbol", symbols.v3);
       markUrl.searchParams.set("interval", MARK_INTERVAL);
       markUrl.searchParams.set("startTime", String(cursor));
       markUrl.searchParams.set("endTime", String(request.endTime));
@@ -358,7 +390,7 @@ export class WeexPublicClient {
         url: markUrl.toString(),
         headers: { Accept: "application/json" },
       });
-      const page = parseFuturesCandleRows(response.body, this.now());
+      const page = parseFuturesCandleRows(preflightMarkRows(response.body), nowMs);
       markPages += 1;
       const capacity = MAX_FUNDING_MARK_CANDLES - markCandles.length;
       markCandles.push(...page.slice(0, capacity));
@@ -411,7 +443,7 @@ export class WeexPublicClient {
         fundingEndpoint: FUNDING_ENDPOINT,
         markEndpoint: MARK_ENDPOINT,
         priceType: "MARK",
-        collectedAt: this.now(),
+        collectedAt: nowMs,
         fundingLimit: FUNDING_LIMIT,
         markMaxAgeMs: maxMarkAgeMs,
         markPages,
