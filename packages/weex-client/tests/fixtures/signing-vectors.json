@@ -1,0 +1,22 @@
+{
+  "getWithoutQuery": {
+    "timestamp": "1690000000000",
+    "method": "GET",
+    "requestPath": "/api/v2/spot/account/assets",
+    "query": "",
+    "body": "",
+    "secret": "test-secret",
+    "payload": "1690000000000GET/api/v2/spot/account/assets",
+    "signature": "47OxBp4Fk3PwS6NQFB3RAszXfbaary11BslcDWpW4dM="
+  },
+  "postWithQueryAndJsonBody": {
+    "timestamp": "1690000000123",
+    "method": "POST",
+    "requestPath": "/api/v2/order/place",
+    "query": "note=fast%20order&symbol=BTC%2FUSDT&tag=%CE%B2&tag=a",
+    "body": "{\"price\":\"30000.5\",\"side\":\"buy\",\"size\":\"0.001\",\"symbol\":\"BTCUSDT\"}",
+    "secret": "another-secret",
+    "payload": "1690000000123POST/api/v2/order/place?note=fast%20order&symbol=BTC%2FUSDT&tag=%CE%B2&tag=a{\"price\":\"30000.5\",\"side\":\"buy\",\"size\":\"0.001\",\"symbol\":\"BTCUSDT\"}",
+    "signature": "BykrfTSMVpdbocuDbt3kR1ErUoS58+QQoNYS5t9kgbY="
+  }
+}
