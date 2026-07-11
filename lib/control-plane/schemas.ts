@@ -17,16 +17,18 @@ const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const MAX_JSON_DEPTH = 32;
 const MAX_JSON_NODES = 2_048;
+const SAFE_MASKED_METADATA_NAMES = new Set(["apikeysuffix", "maskedapikeysuffix"]);
 const SENSITIVE_NAME_PARTS = [
-  "secretkey", "apikey", "accesskey", "passphrase", "accesssign", "signature",
-  "credential", "authorization", "authentication", "accesstoken", "bearertoken", "rawaccount",
+  "secret", "apikey", "accesskey", "passphrase", "accesssign", "signature",
+  "credential", "authorization", "authentication", "token", "rawaccount",
 ] as const;
 
 const normalizedName = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const isSensitiveName = (name: string): boolean => {
   const normalized = normalizedName(name);
-  if (normalized.endsWith("keysuffix")) return false;
+  if (SAFE_MASKED_METADATA_NAMES.has(normalized)) return false;
+  if (normalized.endsWith("keysuffix")) return true;
   return normalized === "auth"
     || normalized.startsWith("auth")
     || SENSITIVE_NAME_PARTS.some((part) => normalized.includes(part));

@@ -92,6 +92,18 @@ describe("strict control-plane DTO parsers", () => {
     { nested: { request_signature: "signature" } },
     { nested: { deviceCredential: "credential" } },
     { nested: { auth_token: "token" } },
+    { nested: { refreshToken: "token" } },
+    { nested: { access_token: "token" } },
+    { nested: { sessionToken: "token" } },
+    { nested: { bearerToken: "token" } },
+    { nested: { privateToken: "token" } },
+    { nested: { keySuffix: "AB12" } },
+    { nested: { secretKeySuffix: "AB12" } },
+    { nested: { credentialKeySuffix: "AB12" } },
+    { nested: { signatureKeySuffix: "AB12" } },
+    { nested: { authKeySuffix: "AB12" } },
+    { nested: { rawAccountKeySuffix: "AB12" } },
+    { nested: { fullSecretSuffix: "AB12" } },
     { AUTHORIZATION: "Bearer credential" },
     { raw_account: { balance: "1" } },
   ])("rejects sensitive names recursively: $sensitive", (sensitive) => {
@@ -106,8 +118,8 @@ describe("strict control-plane DTO parsers", () => {
     expect(parseCommandCreateDto({
       deploymentId: "dep_01",
       type: "revalidate-connection",
-      payload: { apiKeySuffix: "AB12", key_suffix: "AB12" },
-    }).payload).toEqual({ apiKeySuffix: "AB12", key_suffix: "AB12" });
+      payload: { apiKeySuffix: "AB12", masked_api_key_suffix: "AB12" },
+    }).payload).toEqual({ apiKeySuffix: "AB12", masked_api_key_suffix: "AB12" });
   });
 
   it.each([
