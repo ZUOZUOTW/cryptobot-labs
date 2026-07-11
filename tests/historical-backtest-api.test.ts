@@ -133,11 +133,14 @@ describe("historical backtest API", () => {
     const replay = await service.create("usr_a", "request-1", request());
     expect(replay).toMatchObject({ idempotent: true, job: { id: (first.job as { id: string }).id, status: "succeeded" } });
     expect(collectCandles).toHaveBeenCalledTimes(1);
-    const stored = database.raw.prepare(`SELECT d.source, d.gaps_json AS gaps, d.checksum,
-      r.funding_json AS funding, r.provenance_json AS provenance, r.script_hash AS scriptHash
+    const stored = database.raw.prepare(`SELECT d.source, d.gaps_json AS gaps, d.checksum, d.actual_end_at AS actualEnd,
+      r.funding_json AS funding, r.provenance_json AS provenance, r.equity_curve_json AS equity, r.script_hash AS scriptHash
       FROM backtest_datasets d JOIN backtest_results r ON r.backtest_job_id=d.backtest_job_id`).get() as Record<string, unknown>;
     expect(stored.source).toBe("WEEX /capi/v3/market/historyKlines");
     expect(stored.checksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(stored.actualEnd).toBe(7_199_999);
+    expect(Math.max(...(JSON.parse(String(stored.equity)) as Array<{ timestamp: number }>).map(({ timestamp }) => timestamp)))
+      .toBeLessThan(7_200_000);
     expect(JSON.parse(String(stored.funding))).toEqual({ mode: "none", events: [] });
     expect(JSON.parse(String(stored.provenance))).toMatchObject({ provider: "WEEX", fundingMode: "none" });
     expect(stored.scriptHash).toBeNull();
@@ -169,15 +172,48 @@ describe("historical backtest API", () => {
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_results").get()).toEqual({ count: 0 });
   });
 
+  it("rejects forged candle and funding provenance rather than trusting transport metadata", async () => {
+    collectCandles.mockResolvedValueOnce(dataset({ provenance: { ...dataset().provenance, provider: "Other" } }));
+    await expect(service.create("usr_a", "bad-candle-provenance", request()))
+      .rejects.toMatchObject({ code: "historical_dataset_incomplete" });
+    collectCandles.mockResolvedValueOnce(dataset());
+    collectFunding.mockResolvedValueOnce({ ...funding(),
+      provenance: { ...funding().provenance, fundingEndpoint: "/private/funding" as never } });
+    await expect(service.create("usr_a", "bad-funding-provenance", request({ fundingMode: "historical" })))
+      .rejects.toMatchObject({ code: "historical_funding_incomplete" });
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_results").get()).toEqual({ count: 0 });
+  });
+
+  it("rejects unsafe economic inputs before creating a job or contacting WEEX", async () => {
+    for (const [key, overrides] of [
+      ["zero-capital", { initialCapital: "0" }],
+      ["huge-capital", { initialCapital: "100000001" }],
+      ["fee-cap", { feeRate: "0.051" }],
+      ["slippage-cap", { slippageRate: "0.101" }],
+      ["leverage-cap", { leverage: "11" }],
+      ["long-decimal", { feeRate: `0.${"0".repeat(40)}1` }],
+    ] as const) {
+      await expect(service.create("usr_a", key, request(overrides)))
+        .rejects.toMatchObject({ status: 422, code: "invalid_economic_parameters" });
+    }
+    expect(collectCandles).not.toHaveBeenCalled();
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_jobs").get()).toEqual({ count: 0 });
+  });
+
   it("honors fail/disclose gaps and persists disclosed gaps", async () => {
-    const gapped = dataset({ complete: false,
-      validation: { duplicates: [], ordered: true, gaps: [{ from: 3_600_000, to: 7_200_000 }], incompleteCount: 0 } });
+    const gapped = dataset({
+      request: { market: "futures", symbol: "BTCUSDT", interval: "1h", startTime: 0, endTime: 10_800_000 },
+      candles: [candles()[0]!, candles()[2]!], complete: false,
+      validation: { duplicates: [], ordered: true, gaps: [{ from: 3_600_000, to: 7_199_999 }], incompleteCount: 0 },
+      provenance: { ...dataset().provenance, requestedEndTime: 10_800_000, returnedEndTime: 10_800_000 },
+    });
     collectCandles.mockResolvedValue(gapped);
-    await expect(service.create("usr_a", "gap-fail", request())).rejects.toMatchObject({ code: "historical_dataset_incomplete" });
-    const disclosed = await service.create("usr_a", "gap-disclose", request({ gapPolicy: "disclose" }));
+    await expect(service.create("usr_a", "gap-fail", request({ endTime: 10_800_000 })))
+      .rejects.toMatchObject({ code: "historical_dataset_incomplete" });
+    const disclosed = await service.create("usr_a", "gap-disclose", request({ endTime: 10_800_000, gapPolicy: "disclose" }));
     expect(disclosed.job).toMatchObject({ status: "succeeded" });
     const stored = database.raw.prepare("SELECT gaps_json FROM backtest_datasets").get() as { gaps_json: string };
-    expect(JSON.parse(stored.gaps_json)).toEqual([{ from: 3_600_000, to: 7_200_000 }]);
+    expect(JSON.parse(stored.gaps_json)).toEqual([{ from: 3_600_000, to: 7_199_999 }]);
   });
 
   it("rejects custom source before any fetch because QuickJS is unavailable", async () => {

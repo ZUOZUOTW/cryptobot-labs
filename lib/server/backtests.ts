@@ -13,13 +13,22 @@ import type {
 import type { HistoricalDataset, HistoricalBacktestResult } from "../../packages/trading-core/src";
 import { runHistoricalBacktest } from "../../packages/trading-core/src";
 import type { HistoricalFundingDataset } from "../../packages/weex-client/src";
-import { MAX_FUTURES_HISTORY_CANDLES, MAX_FUTURES_HISTORY_RANGE_MS, parseIntervalMs } from "../../packages/weex-client/src";
+import {
+  MAX_FUTURES_HISTORY_CANDLES, MAX_FUTURES_HISTORY_RANGE_MS, MAX_SPOT_HISTORY_CANDLES,
+  parseIntervalMs, validateCandleDataset,
+} from "../../packages/weex-client/src";
 
 export const HISTORICAL_ENGINE_VERSION = "cryptobot-labs-historical-v1";
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const HASH = /^[a-f0-9]{64}$/;
-const MAX_SPOT_RANGE_MS = 31 * 24 * 60 * 60 * 1_000;
+const DATA_ENDPOINTS = {
+  spot: "/api/v3/market/klines",
+  futures: "/capi/v3/market/historyKlines",
+} as const;
+const MAINTENANCE_MARGIN_RATE = { spot: "0", futures: "0.02" } as const;
+const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 type BacktestRepository = {
   createIdempotent(input: { id: string; idempotencyId: string; idempotencyKey: string; requestHash: string;
@@ -120,34 +129,116 @@ const assertRequestMatches = (request: BacktestJobCreateDto, version: OwnedStrat
   }
 };
 
+const decimalNumber = (value: string, label: string): number => {
+  if (typeof value !== "string" || value.length > 32 || !DECIMAL.test(value)) {
+    throw new HistoricalBacktestProblem(422, "invalid_economic_parameters", label);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new HistoricalBacktestProblem(422, "invalid_economic_parameters", label);
+  return parsed;
+};
+
+const assertEconomics = (request: BacktestJobCreateDto): void => {
+  const capital = decimalNumber(request.initialCapital, "initialCapital");
+  const fee = decimalNumber(request.feeRate, "feeRate");
+  const slippage = decimalNumber(request.slippageRate, "slippageRate");
+  const leverage = decimalNumber(request.leverage, "leverage");
+  if (capital <= 0 || capital > 100_000_000 || fee < 0 || fee > 0.05 || slippage < 0 || slippage > 0.1
+    || leverage <= 0 || leverage > 10 || (request.market === "spot" && leverage !== 1)
+    || leverage * fee >= 1) {
+    throw new HistoricalBacktestProblem(422, "invalid_economic_parameters");
+  }
+};
+
 const assertRange = (request: BacktestJobCreateDto, now: number): void => {
   if (request.startTime < 0 || request.endTime > now) throw new HistoricalBacktestProblem(422, "invalid_historical_range");
   let intervalMs: number;
   try { intervalMs = parseIntervalMs(request.interval); }
   catch { throw new HistoricalBacktestProblem(422, "invalid_historical_interval"); }
   const range = request.endTime - request.startTime;
-  const maximumRange = request.market === "futures" ? MAX_FUTURES_HISTORY_RANGE_MS : MAX_SPOT_RANGE_MS;
-  if (range > maximumRange || Math.ceil(range / intervalMs) > MAX_FUTURES_HISTORY_CANDLES || range < intervalMs * 2) {
+  const maximumCandles = request.market === "futures" ? MAX_FUTURES_HISTORY_CANDLES : MAX_SPOT_HISTORY_CANDLES;
+  if (request.startTime % intervalMs !== 0 || request.endTime % intervalMs !== 0
+    || (request.market === "futures" && range > MAX_FUTURES_HISTORY_RANGE_MS)
+    || !Number.isSafeInteger(range / intervalMs) || range / intervalMs > maximumCandles || range < intervalMs * 2) {
     throw new HistoricalBacktestProblem(422, "invalid_historical_range");
   }
 };
 
-const assertDataset = (dataset: HistoricalDataset, request: BacktestJobCreateDto): void => {
-  const first = dataset.candles[0]?.openTime;
-  const last = dataset.candles.at(-1)?.closeTime;
-  const structural = dataset.request.market === request.market && dataset.request.symbol === request.symbol
-    && dataset.request.interval === request.interval && dataset.candles.length >= 2
-    && dataset.candles.length <= MAX_FUTURES_HISTORY_CANDLES
-    && dataset.request.startTime === request.startTime && dataset.request.endTime === request.endTime
-    && dataset.intervalMs === parseIntervalMs(request.interval)
-    && dataset.validation.ordered && dataset.validation.duplicates.length === 0
-    && dataset.validation.incompleteCount === 0 && !dataset.provenance.truncated
-    && first !== undefined && first <= request.startTime && last !== undefined && last >= request.endTime;
-  const disclosedGapsOnly = request.gapPolicy === "disclose" && dataset.validation.gaps.length > 0;
-  if (!structural || (!dataset.complete && !disclosedGapsOnly)
-    || (request.gapPolicy === "fail" && dataset.validation.gaps.length > 0)) {
+const normalizeDataset = (dataset: HistoricalDataset, request: BacktestJobCreateDto): HistoricalDataset => {
+  const intervalMs = parseIntervalMs(request.interval);
+  const endpoint = DATA_ENDPOINTS[request.market];
+  const provenance = dataset?.provenance;
+  const requestMatches = dataset?.request?.market === request.market && dataset.request.symbol === request.symbol
+    && dataset.request.interval === request.interval && dataset.request.startTime === request.startTime
+    && dataset.request.endTime === request.endTime;
+  const provenanceMatches = provenance?.provider === "WEEX" && provenance.sourceKind === "public-api"
+    && provenance.endpoint === endpoint && provenance.requestedStartTime === request.startTime
+    && provenance.requestedEndTime === request.endTime && typeof provenance.singleResponse === "boolean"
+    && typeof provenance.paginated === "boolean" && provenance.singleResponse !== provenance.paginated
+    && provenance.truncated === false && provenance.terminationReason === undefined
+    && Number.isSafeInteger(provenance.collectedAt) && provenance.collectedAt >= 0
+    && Number.isSafeInteger(provenance.returnedStartTime) && provenance.returnedStartTime! <= request.startTime
+    && Number.isSafeInteger(provenance.returnedEndTime) && provenance.returnedEndTime! >= request.endTime;
+  if (!requestMatches || !provenanceMatches || dataset.intervalMs !== intervalMs || !Array.isArray(dataset.candles)) {
     throw new HistoricalBacktestProblem(422, "historical_dataset_incomplete");
   }
+  const candles = dataset.candles.filter(({ openTime }) => openTime >= request.startTime && openTime < request.endTime)
+    .map((candle) => ({ ...candle }));
+  if (candles.length < 2 || candles.length > (request.market === "spot" ? MAX_SPOT_HISTORY_CANDLES : MAX_FUTURES_HISTORY_CANDLES)
+    || candles.some(({ openTime, closeTime }) => openTime % intervalMs !== 0
+      || closeTime !== openTime + intervalMs - 1 || closeTime >= request.endTime)) {
+    throw new HistoricalBacktestProblem(422, "historical_dataset_incomplete");
+  }
+  const validation = validateCandleDataset(candles, intervalMs);
+  const first = candles[0]?.openTime;
+  const last = candles.at(-1)?.closeTime;
+  const exactCoverage = first === request.startTime && last === request.endTime - 1
+    && validation.ordered && validation.duplicates.length === 0 && validation.incompleteCount === 0;
+  const complete = exactCoverage && validation.gaps.length === 0;
+  if (!exactCoverage || (request.gapPolicy === "fail" && !complete)) {
+    throw new HistoricalBacktestProblem(422, "historical_dataset_incomplete");
+  }
+  return {
+    request: { market: request.market, symbol: request.symbol, interval: request.interval,
+      startTime: request.startTime, endTime: request.endTime },
+    candles, intervalMs, complete, validation,
+    provenance: { ...provenance, endpoint, requestedStartTime: request.startTime, requestedEndTime: request.endTime,
+      returnedStartTime: first, returnedEndTime: last + 1 },
+  };
+};
+
+const normalizeFunding = (dataset: HistoricalFundingDataset, request: BacktestJobCreateDto): HistoricalFundingDataset => {
+  const provenance = dataset?.provenance;
+  const coverage = dataset?.coverage;
+  const events = Array.isArray(dataset?.funding) ? dataset.funding : null;
+  const exactRequest = dataset?.request?.market === "futures" && dataset.request.symbol === request.symbol
+    && dataset.request.startTime === request.startTime && dataset.request.endTime === request.endTime
+    && dataset.request.strict === true;
+  const exactProvenance = provenance?.provider === "WEEX" && provenance.sourceKind === "public-api"
+    && provenance.fundingEndpoint === "/capi/v2/market/getHistoryFundRate"
+    && provenance.markEndpoint === "/capi/v3/market/historyKlines" && provenance.priceType === "MARK"
+    && provenance.truncated === false && provenance.terminationReason === undefined
+    && Number.isSafeInteger(provenance.collectedAt) && provenance.collectedAt >= 0
+    && Number.isSafeInteger(provenance.fundingLimit) && provenance.fundingLimit > 0
+    && Number.isSafeInteger(provenance.markPages) && provenance.markPages >= 0
+    && Number.isSafeInteger(provenance.markCandles) && provenance.markCandles >= 0
+    && Number.isSafeInteger(provenance.markMaxAgeMs) && provenance.markMaxAgeMs > 0;
+  const exactCoverage = coverage?.requestedStartTime === request.startTime && coverage.requestedEndTime === request.endTime
+    && coverage.fundingRangeCovered === true && Array.isArray(coverage.missingMarkTimestamps)
+    && coverage.missingMarkTimestamps.length === 0 && Number.isSafeInteger(coverage.requestedEvents)
+    && coverage.requestedEvents >= 0 && events !== null && coverage.matchedEvents === events.length
+    && coverage.requestedEvents === coverage.matchedEvents;
+  const eventsValid = events !== null && events.length <= MAX_FUTURES_HISTORY_CANDLES * 4
+    && events.every((event, index) => event !== null && typeof event === "object"
+      && Number.isSafeInteger(event.timestamp) && event.timestamp >= request.startTime && event.timestamp < request.endTime
+      && (index === 0 || event.timestamp > events[index - 1]!.timestamp)
+      && typeof event.rate === "string" && event.rate.length <= 128 && SIGNED_DECIMAL.test(event.rate)
+      && typeof event.markPrice === "string" && event.markPrice.length <= 128
+      && DECIMAL.test(event.markPrice) && Number(event.markPrice) > 0);
+  if (!exactRequest || !exactProvenance || !exactCoverage || !eventsValid || dataset.complete !== true) {
+    throw new HistoricalBacktestProblem(422, "historical_funding_incomplete");
+  }
+  return dataset;
 };
 
 const failureClass = (error: unknown, phase: BacktestStatus): { code: string; message: string; httpStatus: number } => {
@@ -189,6 +280,7 @@ export function createHistoricalBacktestService(dependencies: {
       try { request = parseBacktestJobCreateDto(candidate); }
       catch { throw new HistoricalBacktestProblem(400, "invalid_request"); }
       const now = safeTime(dependencies.now);
+      assertEconomics(request);
       assertRange(request, now);
       const version = await dependencies.strategies.getOwned(userId, request.strategyVersionId);
       if (!version) throw new HistoricalBacktestProblem(404, "not_found");
@@ -216,13 +308,11 @@ export function createHistoricalBacktestService(dependencies: {
       const fetching = await dependencies.backtests.advanceStatus(userId, created.job.id, "queued", phase, now);
       if (!fetching) throw new Error("new backtest could not enter fetching-data state");
       try {
-        const dataset = await dependencies.marketData.collectHistoricalCandles(request);
-        assertDataset(dataset, request);
+        const dataset = normalizeDataset(await dependencies.marketData.collectHistoricalCandles(request), request);
         let funding: HistoricalFundingDataset | null = null;
         if (request.fundingMode === "historical") {
-          funding = await dependencies.marketData.collectHistoricalFunding({ market: "futures", symbol: request.symbol,
-            startTime: request.startTime, endTime: request.endTime, strict: true });
-          if (!funding.complete) throw new HistoricalBacktestProblem(422, "historical_funding_incomplete");
+          funding = normalizeFunding(await dependencies.marketData.collectHistoricalFunding({ market: "futures", symbol: request.symbol,
+            startTime: request.startTime, endTime: request.endTime, strict: true }), request);
         }
         phase = "running";
         if (!await dependencies.backtests.advanceStatus(userId, created.job.id, "fetching-data", phase, safeTime(dependencies.now))) {
@@ -233,6 +323,7 @@ export function createHistoricalBacktestService(dependencies: {
         const result: HistoricalBacktestResult = await runHistoricalBacktest({ dataset, evaluator,
           initialCapital: request.initialCapital, feeRate: request.feeRate, slippageRate: request.slippageRate,
           leverage: request.leverage, funding: funding?.funding ?? [], gapPolicy: request.gapPolicy,
+          maintenanceMarginRate: MAINTENANCE_MARGIN_RATE[request.market],
           engineVersion: HISTORICAL_ENGINE_VERSION, configHash: integrity.configHash, strategyHash: integrity.strategyHash });
         const completedAt = safeTime(dependencies.now);
         await dependencies.backtests.completeSuccess(userId, created.job.id, {
@@ -251,7 +342,9 @@ export function createHistoricalBacktestService(dependencies: {
               : { mode: "historical", events: funding.funding, coverage: funding.coverage, provenance: funding.provenance },
             metrics: result.metrics,
             provenance: { ...result.provenance, fundingMode: request.fundingMode,
-              fundingCoverageComplete: funding?.complete ?? true },
+              fundingCoverageComplete: funding?.complete ?? true,
+              maintenanceMarginAssumption: { rate: MAINTENANCE_MARGIN_RATE[request.market],
+                model: "fixed-conservative-not-weex-tier-exact" } },
             equityCurve: result.equityCurve, engineVersion: HISTORICAL_ENGINE_VERSION,
             configurationHash: integrity.configHash, strategyHash: integrity.strategyHash,
             scriptHash: null, createdAt: completedAt,

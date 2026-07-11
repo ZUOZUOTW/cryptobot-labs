@@ -23,6 +23,7 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   custom_strategy_runtime_unavailable: "Custom JavaScript backtests require the unavailable QuickJS sandbox.",
   invalid_strategy_configuration: "The selected strategy configuration is invalid.",
   strategy_request_mismatch: "The backtest request does not match the selected strategy version.",
+  invalid_economic_parameters: "The requested capital, fees, slippage, or leverage are outside safe backtest limits.",
   historical_funding_requires_futures: "Historical funding is available only for futures backtests.",
   invalid_historical_range: "The requested historical range is invalid or exceeds server limits.",
   invalid_historical_interval: "The requested historical interval is unsupported.",

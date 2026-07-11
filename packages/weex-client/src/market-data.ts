@@ -27,6 +27,8 @@ const ENDPOINTS = {
 export const MAX_FUTURES_HISTORY_PAGES = 100;
 export const MAX_FUTURES_HISTORY_CANDLES = 10_000;
 export const MAX_FUTURES_HISTORY_RANGE_MS = 90 * 24 * 60 * 60 * 1_000;
+/** The documented spot klines endpoint is a latest-only, single-response feed. */
+export const MAX_SPOT_HISTORY_CANDLES = 1_000;
 
 const FUNDING_ENDPOINT = "/capi/v2/market/getHistoryFundRate";
 const MARK_ENDPOINT = "/capi/v3/market/historyKlines";
@@ -215,6 +217,16 @@ function validateRequest(request: HistoricalCandleRequest): void {
       category: "validation", retryable: false,
     });
   }
+  if (request.market === "spot" && request.startTime !== undefined && request.endTime !== undefined) {
+    const intervalMs = parseIntervalMs(request.interval);
+    const expected = (request.endTime - request.startTime) / intervalMs;
+    if (request.startTime % intervalMs !== 0 || request.endTime % intervalMs !== 0
+      || !Number.isSafeInteger(expected) || expected < 1 || expected > MAX_SPOT_HISTORY_CANDLES) {
+      throw new WeexApiError("Spot history range exceeds the latest-response coverage limit", {
+        category: "validation", retryable: false,
+      });
+    }
+  }
 }
 
 function candleUrl(request: HistoricalCandleRequest): string {
@@ -321,8 +333,17 @@ export class WeexPublicClient {
     const last = candles.at(-1)?.openTime;
     const boundariesCovered = request.startTime !== undefined && request.endTime !== undefined &&
       first !== undefined && last !== undefined && first <= request.startTime && last + intervalMs >= request.endTime;
-    const complete = request.market === "futures" && terminationReason === undefined && boundariesCovered && validation.gaps.length === 0 &&
-      validation.incompleteCount === 0;
+    const requestedCandles = request.startTime === undefined || request.endTime === undefined ? candles
+      : candles.filter(({ openTime }) => openTime >= request.startTime! && openTime < request.endTime!);
+    const requestedRaw = request.startTime === undefined || request.endTime === undefined ? collected
+      : collected.filter(({ openTime }) => openTime >= request.startTime! && openTime < request.endTime!);
+    const requestedValidation = validateCandleDataset(requestedRaw, intervalMs);
+    const expectedCount = request.startTime === undefined || request.endTime === undefined ? undefined
+      : (request.endTime - request.startTime) / intervalMs;
+    const complete = terminationReason === undefined && boundariesCovered
+      && requestedValidation.gaps.length === 0 && requestedValidation.duplicates.length === 0
+      && requestedValidation.incompleteCount === 0 && expectedCount !== undefined
+      && Number.isSafeInteger(expectedCount) && requestedCandles.length === expectedCount;
     const endpoint = ENDPOINTS[request.market].path;
     return {
       request: { ...request },

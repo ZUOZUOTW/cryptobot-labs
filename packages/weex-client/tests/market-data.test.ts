@@ -62,6 +62,24 @@ describe("WeexPublicClient", () => {
     expect(dataset.provenance).toMatchObject({ singleResponse: true, paginated: false });
   });
 
+  it("marks an aligned latest spot range complete only when every requested candle is returned", async () => {
+    const transport = new RecordingTransport([ok([row(0), row(60_000)])]);
+    const dataset = await new WeexPublicClient(transport, () => 200_000).collectHistoricalCandles({
+      market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 120_000,
+    });
+    expect(dataset.complete).toBe(true);
+    expect(dataset.provenance).toMatchObject({ requestedStartTime: 0, requestedEndTime: 120_000,
+      returnedStartTime: 0, returnedEndTime: 120_000, truncated: false });
+  });
+
+  it("rejects spot requests outside the documented latest 1000-candle window before transport", async () => {
+    const transport = new RecordingTransport([]);
+    await expect(new WeexPublicClient(transport).collectHistoricalCandles({
+      market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 60_000 * 1_001,
+    })).rejects.toMatchObject({ category: "validation" });
+    expect(transport.requests).toEqual([]);
+  });
+
   it("stops full futures pages at the hard cap and reports truncation", async () => {
     const responses = Array.from({ length: MAX_FUTURES_HISTORY_PAGES }, (_, index) =>
       ok([row(index * 60_000)]));
