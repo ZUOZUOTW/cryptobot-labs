@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f8169c10-e267-4c03-8fef-415e19861168",
+  "id": "c9f39354-bf7a-4f74-bcf8-a8b332d12c96",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_events": {
@@ -125,60 +125,7 @@
           "isUnique": false
         }
       },
-      "foreignKeys": {
-        "audit_events_user_id_users_id_fk": {
-          "name": "audit_events_user_id_users_id_fk",
-          "tableFrom": "audit_events",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "audit_events_device_id_devices_id_fk": {
-          "name": "audit_events_device_id_devices_id_fk",
-          "tableFrom": "audit_events",
-          "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "audit_events_deployment_id_deployments_id_fk": {
-          "name": "audit_events_deployment_id_deployments_id_fk",
-          "tableFrom": "audit_events",
-          "tableTo": "deployments",
-          "columnsFrom": [
-            "deployment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "audit_events_strategy_version_id_strategy_versions_id_fk": {
-          "name": "audit_events_strategy_version_id_strategy_versions_id_fk",
-          "tableFrom": "audit_events",
-          "tableTo": "strategy_versions",
-          "columnsFrom": [
-            "strategy_version_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -293,6 +240,14 @@
         }
       },
       "indexes": {
+        "backtest_datasets_id_user_uidx": {
+          "name": "backtest_datasets_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "backtest_datasets_job_uidx": {
           "name": "backtest_datasets_job_uidx",
           "columns": [
@@ -330,15 +285,17 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "backtest_datasets_backtest_job_id_backtest_jobs_id_fk": {
-          "name": "backtest_datasets_backtest_job_id_backtest_jobs_id_fk",
+        "backtest_datasets_job_user_fk": {
+          "name": "backtest_datasets_job_user_fk",
           "tableFrom": "backtest_datasets",
           "tableTo": "backtest_jobs",
           "columnsFrom": [
-            "backtest_job_id"
+            "backtest_job_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -430,6 +387,14 @@
         }
       },
       "indexes": {
+        "backtest_jobs_id_user_uidx": {
+          "name": "backtest_jobs_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "backtest_jobs_user_created_idx": {
           "name": "backtest_jobs_user_created_idx",
           "columns": [
@@ -461,15 +426,17 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "backtest_jobs_strategy_version_id_strategy_versions_id_fk": {
-          "name": "backtest_jobs_strategy_version_id_strategy_versions_id_fk",
+        "backtest_jobs_strategy_version_user_fk": {
+          "name": "backtest_jobs_strategy_version_user_fk",
           "tableFrom": "backtest_jobs",
           "tableTo": "strategy_versions",
           "columnsFrom": [
-            "strategy_version_id"
+            "strategy_version_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -610,6 +577,14 @@
         }
       },
       "indexes": {
+        "backtest_results_id_user_uidx": {
+          "name": "backtest_results_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "backtest_results_job_uidx": {
           "name": "backtest_results_job_uidx",
           "columns": [
@@ -640,28 +615,32 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "backtest_results_backtest_job_id_backtest_jobs_id_fk": {
-          "name": "backtest_results_backtest_job_id_backtest_jobs_id_fk",
+        "backtest_results_job_user_fk": {
+          "name": "backtest_results_job_user_fk",
           "tableFrom": "backtest_results",
           "tableTo": "backtest_jobs",
           "columnsFrom": [
-            "backtest_job_id"
+            "backtest_job_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "backtest_results_dataset_id_backtest_datasets_id_fk": {
-          "name": "backtest_results_dataset_id_backtest_datasets_id_fk",
+        "backtest_results_dataset_user_fk": {
+          "name": "backtest_results_dataset_user_fk",
           "tableFrom": "backtest_results",
           "tableTo": "backtest_datasets",
           "columnsFrom": [
-            "dataset_id"
+            "dataset_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -725,6 +704,14 @@
         }
       },
       "indexes": {
+        "command_acknowledgements_id_user_uidx": {
+          "name": "command_acknowledgements_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "command_acknowledgements_command_uidx": {
           "name": "command_acknowledgements_command_uidx",
           "columns": [
@@ -741,19 +728,6 @@
         }
       },
       "foreignKeys": {
-        "command_acknowledgements_command_id_commands_id_fk": {
-          "name": "command_acknowledgements_command_id_commands_id_fk",
-          "tableFrom": "command_acknowledgements",
-          "tableTo": "commands",
-          "columnsFrom": [
-            "command_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "command_acknowledgements_user_id_users_id_fk": {
           "name": "command_acknowledgements_user_id_users_id_fk",
           "tableFrom": "command_acknowledgements",
@@ -767,17 +741,21 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "command_acknowledgements_device_id_devices_id_fk": {
-          "name": "command_acknowledgements_device_id_devices_id_fk",
+        "command_acknowledgements_command_device_user_fk": {
+          "name": "command_acknowledgements_command_device_user_fk",
           "tableFrom": "command_acknowledgements",
-          "tableTo": "devices",
+          "tableTo": "commands",
           "columnsFrom": [
-            "device_id"
+            "command_id",
+            "device_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "device_id",
+            "user_id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -853,6 +831,23 @@
         }
       },
       "indexes": {
+        "commands_id_user_uidx": {
+          "name": "commands_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
+        "commands_id_device_user_uidx": {
+          "name": "commands_id_device_user_uidx",
+          "columns": [
+            "id",
+            "device_id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "commands_device_status_created_idx": {
           "name": "commands_device_status_created_idx",
           "columns": [
@@ -885,28 +880,32 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "commands_deployment_id_deployments_id_fk": {
-          "name": "commands_deployment_id_deployments_id_fk",
+        "commands_deployment_user_fk": {
+          "name": "commands_deployment_user_fk",
           "tableFrom": "commands",
           "tableTo": "deployments",
           "columnsFrom": [
-            "deployment_id"
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "commands_device_id_devices_id_fk": {
-          "name": "commands_device_id_devices_id_fk",
+        "commands_device_user_fk": {
+          "name": "commands_device_user_fk",
           "tableFrom": "commands",
           "tableTo": "devices",
           "columnsFrom": [
-            "device_id"
+            "device_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -1005,6 +1004,14 @@
         }
       },
       "indexes": {
+        "deployments_id_user_uidx": {
+          "name": "deployments_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "deployments_user_state_idx": {
           "name": "deployments_user_state_idx",
           "columns": [
@@ -1036,28 +1043,32 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "deployments_device_id_devices_id_fk": {
-          "name": "deployments_device_id_devices_id_fk",
+        "deployments_device_user_fk": {
+          "name": "deployments_device_user_fk",
           "tableFrom": "deployments",
           "tableTo": "devices",
           "columnsFrom": [
-            "device_id"
+            "device_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "deployments_strategy_version_id_strategy_versions_id_fk": {
-          "name": "deployments_strategy_version_id_strategy_versions_id_fk",
+        "deployments_strategy_version_user_fk": {
+          "name": "deployments_strategy_version_user_fk",
           "tableFrom": "deployments",
           "tableTo": "strategy_versions",
           "columnsFrom": [
-            "strategy_version_id"
+            "strategy_version_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -1074,6 +1085,13 @@
           "name": "device_id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
@@ -1123,15 +1141,30 @@
         }
       },
       "foreignKeys": {
-        "device_credentials_device_id_devices_id_fk": {
-          "name": "device_credentials_device_id_devices_id_fk",
+        "device_credentials_user_id_users_id_fk": {
+          "name": "device_credentials_user_id_users_id_fk",
           "tableFrom": "device_credentials",
-          "tableTo": "devices",
+          "tableTo": "users",
           "columnsFrom": [
-            "device_id"
+            "user_id"
           ],
           "columnsTo": [
             "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "device_credentials_device_user_fk": {
+          "name": "device_credentials_device_user_fk",
+          "tableFrom": "device_credentials",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -1153,6 +1186,13 @@
         },
         "device_id": {
           "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1198,15 +1238,30 @@
         }
       },
       "foreignKeys": {
-        "device_nonces_device_id_devices_id_fk": {
-          "name": "device_nonces_device_id_devices_id_fk",
+        "device_nonces_user_id_users_id_fk": {
+          "name": "device_nonces_user_id_users_id_fk",
           "tableFrom": "device_nonces",
-          "tableTo": "devices",
+          "tableTo": "users",
           "columnsFrom": [
-            "device_id"
+            "user_id"
           ],
           "columnsTo": [
             "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "device_nonces_device_user_fk": {
+          "name": "device_nonces_device_user_fk",
+          "tableFrom": "device_nonces",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -1298,6 +1353,14 @@
         }
       },
       "indexes": {
+        "devices_id_user_uidx": {
+          "name": "devices_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "devices_user_status_idx": {
           "name": "devices_user_status_idx",
           "columns": [
@@ -1416,6 +1479,14 @@
         }
       },
       "indexes": {
+        "fills_id_user_uidx": {
+          "name": "fills_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "fills_order_exchange_fill_uidx": {
           "name": "fills_order_exchange_fill_uidx",
           "columns": [
@@ -1455,28 +1526,19 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "fills_deployment_id_deployments_id_fk": {
-          "name": "fills_deployment_id_deployments_id_fk",
-          "tableFrom": "fills",
-          "tableTo": "deployments",
-          "columnsFrom": [
-            "deployment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "fills_order_id_orders_id_fk": {
-          "name": "fills_order_id_orders_id_fk",
+        "fills_order_deployment_user_fk": {
+          "name": "fills_order_deployment_user_fk",
           "tableFrom": "fills",
           "tableTo": "orders",
           "columnsFrom": [
-            "order_id"
+            "order_id",
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "deployment_id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -1624,6 +1686,23 @@
         }
       },
       "indexes": {
+        "orders_id_user_uidx": {
+          "name": "orders_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
+        "orders_id_deployment_user_uidx": {
+          "name": "orders_id_deployment_user_uidx",
+          "columns": [
+            "id",
+            "deployment_id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "orders_deployment_client_order_uidx": {
           "name": "orders_deployment_client_order_uidx",
           "columns": [
@@ -1670,15 +1749,17 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "orders_deployment_id_deployments_id_fk": {
-          "name": "orders_deployment_id_deployments_id_fk",
+        "orders_deployment_user_fk": {
+          "name": "orders_deployment_user_fk",
           "tableFrom": "orders",
           "tableTo": "deployments",
           "columnsFrom": [
-            "deployment_id"
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -1866,6 +1947,14 @@
         }
       },
       "indexes": {
+        "position_snapshots_id_user_uidx": {
+          "name": "position_snapshots_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "position_snapshots_deployment_captured_idx": {
           "name": "position_snapshots_deployment_captured_idx",
           "columns": [
@@ -1897,30 +1986,36 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "position_snapshots_deployment_id_deployments_id_fk": {
-          "name": "position_snapshots_deployment_id_deployments_id_fk",
+        "position_snapshots_deployment_user_fk": {
+          "name": "position_snapshots_deployment_user_fk",
           "tableFrom": "position_snapshots",
           "tableTo": "deployments",
           "columnsFrom": [
-            "deployment_id"
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "position_snapshots_heartbeat_id_run_heartbeats_id_fk": {
-          "name": "position_snapshots_heartbeat_id_run_heartbeats_id_fk",
+        "position_snapshots_heartbeat_deployment_user_fk": {
+          "name": "position_snapshots_heartbeat_deployment_user_fk",
           "tableFrom": "position_snapshots",
           "tableTo": "run_heartbeats",
           "columnsFrom": [
-            "heartbeat_id"
+            "heartbeat_id",
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "deployment_id",
+            "user_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -2045,6 +2140,14 @@
         }
       },
       "indexes": {
+        "risk_policies_id_user_uidx": {
+          "name": "risk_policies_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "risk_policies_deployment_uidx": {
           "name": "risk_policies_deployment_uidx",
           "columns": [
@@ -2074,15 +2177,17 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "risk_policies_deployment_id_deployments_id_fk": {
-          "name": "risk_policies_deployment_id_deployments_id_fk",
+        "risk_policies_deployment_user_fk": {
+          "name": "risk_policies_deployment_user_fk",
           "tableFrom": "risk_policies",
           "tableTo": "deployments",
           "columnsFrom": [
-            "deployment_id"
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -2167,6 +2272,23 @@
         }
       },
       "indexes": {
+        "run_heartbeats_id_user_uidx": {
+          "name": "run_heartbeats_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
+        "run_heartbeats_id_deployment_user_uidx": {
+          "name": "run_heartbeats_id_deployment_user_uidx",
+          "columns": [
+            "id",
+            "deployment_id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "run_heartbeats_deployment_sequence_uidx": {
           "name": "run_heartbeats_deployment_sequence_uidx",
           "columns": [
@@ -2198,28 +2320,32 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "run_heartbeats_deployment_id_deployments_id_fk": {
-          "name": "run_heartbeats_deployment_id_deployments_id_fk",
+        "run_heartbeats_deployment_user_fk": {
+          "name": "run_heartbeats_deployment_user_fk",
           "tableFrom": "run_heartbeats",
           "tableTo": "deployments",
           "columnsFrom": [
-            "deployment_id"
+            "deployment_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "run_heartbeats_device_id_devices_id_fk": {
-          "name": "run_heartbeats_device_id_devices_id_fk",
+        "run_heartbeats_device_user_fk": {
+          "name": "run_heartbeats_device_user_fk",
           "tableFrom": "run_heartbeats",
           "tableTo": "devices",
           "columnsFrom": [
-            "device_id"
+            "device_id",
+            "user_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -2283,6 +2409,14 @@
         }
       },
       "indexes": {
+        "strategies_id_user_uidx": {
+          "name": "strategies_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "strategies_user_updated_idx": {
           "name": "strategies_user_updated_idx",
           "columns": [
@@ -2318,6 +2452,13 @@
           "name": "id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
@@ -2372,6 +2513,14 @@
         }
       },
       "indexes": {
+        "strategy_versions_id_user_uidx": {
+          "name": "strategy_versions_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
         "strategy_versions_strategy_version_uidx": {
           "name": "strategy_versions_strategy_version_uidx",
           "columns": [
@@ -2396,15 +2545,30 @@
         }
       },
       "foreignKeys": {
-        "strategy_versions_strategy_id_strategies_id_fk": {
-          "name": "strategy_versions_strategy_id_strategies_id_fk",
+        "strategy_versions_user_id_users_id_fk": {
+          "name": "strategy_versions_user_id_users_id_fk",
           "tableFrom": "strategy_versions",
-          "tableTo": "strategies",
+          "tableTo": "users",
           "columnsFrom": [
-            "strategy_id"
+            "user_id"
           ],
           "columnsTo": [
             "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "strategy_versions_strategy_user_fk": {
+          "name": "strategy_versions_strategy_user_fk",
+          "tableFrom": "strategy_versions",
+          "tableTo": "strategies",
+          "columnsFrom": [
+            "strategy_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"

@@ -1,13 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const openDatabases: DatabaseSync[] = [];
-const applySql = async (database: DatabaseSync, file: string): Promise<void> => {
-  const sql = await readFile(resolve(file), "utf8");
-  database.exec(sql.replaceAll("--> statement-breakpoint", ""));
-};
 const rejectsForeignKey = (database: DatabaseSync, sql: string): void => {
   expect(() => database.exec(sql)).toThrow(/FOREIGN KEY constraint failed/);
 };
@@ -35,11 +31,18 @@ afterEach(() => {
 });
 
 describe("D1 tenant integrity migrations", () => {
-  it("migrates legacy ownership, preserves immutable audit identity, and enforces tenant parents", async () => {
+  it("applies one clean baseline, preserves immutable audit identity, and enforces tenant parents", async () => {
     const database = new DatabaseSync(":memory:");
     openDatabases.push(database);
     database.exec("PRAGMA foreign_keys=ON");
-    await applySql(database, "drizzle/0000_real_ultron.sql");
+
+    const migrationFiles = (await readdir(resolve("drizzle"))).filter((file) => file.endsWith(".sql"));
+    expect(migrationFiles).toHaveLength(1);
+    const sql = await readFile(resolve("drizzle", migrationFiles[0]!), "utf8");
+    expect(sql).not.toMatch(/PRAGMA\s+foreign_keys\s*=\s*OFF/i);
+    expect(sql).toMatch(/FOREIGN KEY \(`device_id`,`user_id`\) REFERENCES `devices`\(`id`,`user_id`\)/i);
+    expect(sql).toMatch(/FOREIGN KEY \(`strategy_version_id`,`user_id`\) REFERENCES `strategy_versions`\(`id`,`user_id`\)/i);
+    database.exec(sql.replaceAll("--> statement-breakpoint", ""));
 
     addUser(database, "user_a");
     addUser(database, "user_b");
@@ -47,19 +50,14 @@ describe("D1 tenant integrity migrations", () => {
     addDevice(database, "device_b", "user_b");
     addStrategy(database, "strategy_a", "user_a");
     addStrategy(database, "strategy_b", "user_b");
-    database.exec("INSERT INTO strategy_versions VALUES ('version_a', 'strategy_a', 1, 'config-a', NULL, '{}', NULL, 1)");
-    database.exec("INSERT INTO strategy_versions VALUES ('version_b', 'strategy_b', 1, 'config-b', NULL, '{}', NULL, 1)");
-    database.exec("INSERT INTO device_credentials VALUES ('device_a', 'credential-a', 100, NULL, 1)");
-    database.exec("INSERT INTO device_nonces VALUES ('nonce_a', 'device_a', 'nonce', 1, 100)");
+    addVersion(database, "version_a", "user_a", "strategy_a");
+    addVersion(database, "version_b", "user_b", "strategy_b");
+    database.exec("INSERT INTO device_credentials VALUES ('device_a', 'user_a', 'credential-a', 100, NULL, 1)");
+    database.exec("INSERT INTO device_nonces VALUES ('nonce_a', 'device_a', 'user_a', 'nonce', 1, 100)");
     database.exec("INSERT INTO audit_events VALUES ('audit_a', 'user_a', 'user', 'user_a', 'device_a', NULL, 'version_a', 'paired', 'correlation', '{}', 1, 1)");
-
-    await applySql(database, "drizzle/0001_slow_warbird.sql");
 
     expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(database.prepare("SELECT user_id FROM device_credentials WHERE device_id = 'device_a'").get()).toEqual({ user_id: "user_a" });
-    expect(database.prepare("SELECT user_id FROM device_nonces WHERE id = 'nonce_a'").get()).toEqual({ user_id: "user_a" });
-    expect(database.prepare("SELECT user_id FROM strategy_versions WHERE id = 'version_a'").get()).toEqual({ user_id: "user_a" });
 
     database.exec("DELETE FROM users WHERE id = 'user_a'");
     expect(database.prepare("SELECT user_id, device_id, strategy_version_id FROM audit_events WHERE id = 'audit_a'").get())
