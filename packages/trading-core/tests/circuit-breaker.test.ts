@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CircuitBreaker,
+  MAX_IN_FLIGHT_ACQUISITIONS,
   type CircuitBreakerFailureCategory,
 } from "../src/reliability";
 
@@ -131,6 +132,27 @@ describe("CircuitBreaker", () => {
     expect(breaker.recordSuccess(token, 0)).toBe(true);
     expect(breaker.recordFailure(token, "authentication", 0)).toBe(false);
     expect(breaker.state).toBe("closed");
+  });
+
+  it("bounds in-flight acquisitions and reuses capacity without token collision", () => {
+    expect(MAX_IN_FLIGHT_ACQUISITIONS).toBe(1_024);
+    const breaker = new CircuitBreaker(policy);
+    const tokens = new Set<string>();
+    for (let index = 0; index < MAX_IN_FLIGHT_ACQUISITIONS; index += 1) {
+      tokens.add(acquireToken(breaker, 0));
+    }
+    expect(tokens.size).toBe(MAX_IN_FLIGHT_ACQUISITIONS);
+    expect(breaker.tryAcquire(0)).toEqual({
+      allowed: false,
+      reason: "too-many-in-flight",
+    });
+    expect(breaker.state).toBe("closed");
+
+    const [settled] = tokens;
+    expect(settled).toBeDefined();
+    expect(breaker.recordSuccess(settled!, 0)).toBe(true);
+    const replacement = acquireToken(breaker, 0);
+    expect(tokens.has(replacement)).toBe(false);
   });
 
   it("keeps canSubmit observational and returns false on timestamp regression", () => {

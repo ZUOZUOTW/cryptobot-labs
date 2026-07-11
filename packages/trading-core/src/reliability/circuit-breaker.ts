@@ -14,6 +14,7 @@ export type CircuitBreakerFailureCategory =
 export type CircuitBreakerDenialReason =
   | "cooldown"
   | "probe-in-flight"
+  | "too-many-in-flight"
   | "fail-closed";
 
 export type CircuitBreakerAcquisition =
@@ -43,6 +44,9 @@ interface ActiveAcquisition {
 const MIN_DURATION_MS = 1_000;
 const MAX_DURATION_MS = 3_600_000;
 const MAX_FAILURE_THRESHOLD = 100;
+const MAX_UINT32 = 0xffff_ffff;
+
+export const MAX_IN_FLIGHT_ACQUISITIONS = 1_024;
 
 const failureCategories = new Set<CircuitBreakerFailureCategory>([
   "network",
@@ -227,14 +231,31 @@ export class CircuitBreaker {
   }
 
   #issueToken(kind: AcquisitionKind): CircuitBreakerAcquisition {
-    this.#nextTokenSequence += 1;
-    const token = `cb:${this.#generation}:${this.#nextTokenSequence}`;
-    this.#activeAcquisitions.set(token, { generation: this.#generation, kind });
-    return { allowed: true, token };
+    if (this.#activeAcquisitions.size >= MAX_IN_FLIGHT_ACQUISITIONS) {
+      return { allowed: false, reason: "too-many-in-flight" };
+    }
+
+    // The active set is strictly bounded, so a free uint32 sequence is found
+    // after inspecting at most active-size + 1 candidates, including on wrap.
+    for (let attempts = 0; attempts <= this.#activeAcquisitions.size; attempts += 1) {
+      this.#nextTokenSequence =
+        this.#nextTokenSequence === MAX_UINT32 ? 0 : this.#nextTokenSequence + 1;
+      const token = `cb:${this.#generation}:${this.#nextTokenSequence}`;
+      if (!this.#activeAcquisitions.has(token)) {
+        this.#activeAcquisitions.set(token, { generation: this.#generation, kind });
+        return { allowed: true, token };
+      }
+    }
+
+    this.#failClosed();
+    return { allowed: false, reason: "fail-closed" };
   }
 
   #open(now: number): void {
-    this.#generation += 1;
+    if (!this.#advanceGeneration()) {
+      this.#setPermanentlyOpen();
+      return;
+    }
     this.#state = "open";
     this.#openedAt = now;
     this.#probeAcquired = false;
@@ -256,7 +277,19 @@ export class CircuitBreaker {
   }
 
   #failClosed(): void {
+    this.#advanceGeneration();
+    this.#setPermanentlyOpen();
+  }
+
+  #advanceGeneration(): boolean {
+    if (!Number.isSafeInteger(this.#generation) || this.#generation >= Number.MAX_SAFE_INTEGER) {
+      return false;
+    }
     this.#generation += 1;
+    return true;
+  }
+
+  #setPermanentlyOpen(): void {
     this.#state = "open";
     this.#openedAt = null;
     this.#probeAcquired = false;
