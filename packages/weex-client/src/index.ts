@@ -9,3 +9,4 @@ export * from "./redaction";
 export * from "./schemas";
 export * from "./signing";
 export * from "./transport";
+export * from "./websocket";
