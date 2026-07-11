@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Candle, HistoricalDataset, StrategyEvaluator } from "../src";
+import type { Candle, HistoricalDataset, StrategyEvaluator, StrategyInput } from "../src";
 import { runHistoricalBacktest } from "../src/backtest/engine";
 import fixedCandles from "./fixtures/btcusdt-1h.json";
 
@@ -110,6 +110,50 @@ describe("historical backtest", () => {
     expect(result.trades).toHaveLength(1);
     expect(result.trades[0]).toMatchObject({ side: "long", exitReason: "opposite-signal" });
     expect(result.signalEvents.find((event) => event.signalId === "s2")?.effect).toBe("closed");
+  });
+
+  it("allocates only the requested fraction of usable equity", async () => {
+    const full = await runHistoricalBacktest(request({
+      feeRate: "0",
+      slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: "full", action: candles.length === 1 ? "buy" : "hold", reason: "full", createdAt: candles.at(-1)!.closeTime };
+      } },
+    }));
+    const quarter = await runHistoricalBacktest(request({
+      feeRate: "0",
+      slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: "quarter", action: candles.length === 1 ? "buy" : "hold", reason: "quarter", createdAt: candles.at(-1)!.closeTime, allocationRate: 0.25 };
+      } },
+    }));
+    expect(Number(quarter.trades[0]!.quantity)).toBeCloseTo(Number(full.trades[0]!.quantity) * 0.25, 12);
+  });
+
+  it("provides frozen real position state and resets day-start equity on UTC boundaries", async () => {
+    const shifted = (fixedCandles as Candle[]).map((candle, index) => ({
+      ...candle,
+      openTime: index * 86_400_000,
+      closeTime: (index + 1) * 86_400_000 - 1,
+    }));
+    const seen: Array<{ day: string; dayStart: string; position?: { entryPrice: string; peakPrice: string; troughPrice: string } }> = [];
+    await runHistoricalBacktest(request({
+      dataset: { ...dataset(shifted), intervalMs: 86_400_000, request: { market: "spot", symbol: "BTCUSDT", interval: "1d" } },
+      feeRate: "0",
+      slippageRate: "0",
+      evaluator: { async evaluate(strategyInput: Readonly<StrategyInput>) {
+        expect(Object.isFrozen(strategyInput.portfolio)).toBe(true);
+        if (strategyInput.portfolio) seen.push({
+          day: strategyInput.portfolio.utcDay,
+          dayStart: strategyInput.portfolio.dayStartEquity,
+          ...(strategyInput.portfolio.position ? { position: strategyInput.portfolio.position } : {}),
+        });
+        return { id: `s-${strategyInput.candles.length}`, action: strategyInput.candles.length === 1 ? "buy" : "hold", reason: "snapshot", createdAt: strategyInput.now };
+      } },
+    }));
+    expect(seen.map((item) => item.day)).toEqual(["1970-01-01", "1970-01-02", "1970-01-03"]);
+    expect(seen[1]!.position).toMatchObject({ entryPrice: "101", peakPrice: "111", troughPrice: "100" });
+    expect(seen[2]!.dayStart).not.toBe("1000");
   });
 
   it("rejects spot shorts and records evaluator errors and invalid signals", async () => {

@@ -54,6 +54,9 @@ describe("shared trading contracts", () => {
     expect(() => CandleSchema.parse({ ...validCandle, volume: "0" })).toThrow();
     expect(() => CandleSchema.parse({ ...validCandle, open: "1e3" })).toThrow();
     expect(() => StrategySignalSchema.parse({ ...validSignal, action: "wait" })).toThrow();
+    expect(() => StrategySignalSchema.parse({ ...validSignal, allocationRate: 0 })).toThrow();
+    expect(() => StrategySignalSchema.parse({ ...validSignal, allocationRate: 1.01 })).toThrow();
+    expect(StrategySignalSchema.parse({ ...validSignal, allocationRate: 0.25 }).allocationRate).toBe(0.25);
   });
 
   it("validates every contract enum and the complete strategy input directly", () => {

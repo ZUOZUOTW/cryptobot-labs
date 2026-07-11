@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const finiteTimestampSchema = z.number().finite();
 const decimalPattern = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const signedDecimalPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 export const PositiveDecimalStringSchema = z
   .string()
@@ -74,6 +75,7 @@ export const StrategySignalSchema = z.strictObject({
   action: SignalActionSchema,
   reason: z.string().min(1),
   createdAt: finiteTimestampSchema,
+  allocationRate: z.number().finite().gt(0).lte(1).optional(),
 });
 
 export const StrategyInputSchema = z.strictObject({
@@ -81,6 +83,19 @@ export const StrategyInputSchema = z.strictObject({
   market: MarketSchema,
   symbol: z.string().min(1),
   now: finiteTimestampSchema,
+  timeframe: z.string().min(1).optional(),
+  portfolio: z.strictObject({
+    equity: z.string().regex(signedDecimalPattern),
+    dayStartEquity: z.string().regex(signedDecimalPattern),
+    utcDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    position: z.strictObject({
+      side: z.enum(["long", "short"]),
+      entryPrice: PositiveDecimalStringSchema,
+      peakPrice: PositiveDecimalStringSchema,
+      troughPrice: PositiveDecimalStringSchema,
+      quantity: PositiveDecimalStringSchema,
+    }).optional(),
+  }).optional(),
 });
 
 export type ParsedCandle = z.infer<typeof CandleSchema>;

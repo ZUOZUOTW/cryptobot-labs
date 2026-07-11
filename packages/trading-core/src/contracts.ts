@@ -18,6 +18,23 @@ export interface StrategySignal {
   action: SignalAction;
   reason: string;
   createdAt: number;
+  /** Fraction of usable equity to allocate to a newly opened position. */
+  allocationRate?: number;
+}
+
+export interface StrategyPositionSnapshot {
+  side: "long" | "short";
+  entryPrice: string;
+  peakPrice: string;
+  troughPrice: string;
+  quantity: string;
+}
+
+export interface StrategyPortfolioSnapshot {
+  equity: string;
+  dayStartEquity: string;
+  utcDay: string;
+  position?: Readonly<StrategyPositionSnapshot>;
 }
 
 export interface StrategyInput {
@@ -25,6 +42,8 @@ export interface StrategyInput {
   market: Market;
   symbol: string;
   now: number;
+  timeframe?: string;
+  portfolio?: Readonly<StrategyPortfolioSnapshot>;
 }
 
 export interface StrategyEvaluator {

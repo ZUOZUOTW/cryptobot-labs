@@ -23,6 +23,8 @@ interface Position {
   quantity: Decimal;
   entryFee: Decimal;
   funding: Decimal;
+  peakPrice: Decimal;
+  troughPrice: Decimal;
 }
 
 interface PendingSignal {
@@ -32,6 +34,7 @@ interface PendingSignal {
 
 const UNSIGNED_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const MAX_ECMASCRIPT_TIMESTAMP = 8_640_000_000_000_000;
 
 function numeric(value: string, label: string, options: { positive?: boolean; belowOne?: boolean; signed?: boolean } = {}): Decimal {
   const pattern = options.signed ? SIGNED_DECIMAL : UNSIGNED_DECIMAL;
@@ -94,7 +97,7 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
   if (dataset.candles.length < 2) throw new RangeError("Historical backtests require at least two completed candles");
   for (const candle of dataset.candles) {
     if (!Number.isSafeInteger(candle.openTime) || !Number.isSafeInteger(candle.closeTime) ||
-        candle.openTime < 0 || candle.closeTime <= candle.openTime) {
+        candle.openTime < 0 || candle.closeTime <= candle.openTime || candle.closeTime > MAX_ECMASCRIPT_TIMESTAMP) {
       throw new TypeError("Invalid candle timestamp");
     }
     if (candle.closeTime - candle.openTime !== dataset.intervalMs - 1) {
@@ -194,16 +197,25 @@ export async function runHistoricalBacktest(
     position = undefined;
   }
 
-  function openPosition(side: PositionSide, referencePrice: string, timestamp: number): void {
+  function openPosition(side: PositionSide, referencePrice: string, timestamp: number, allocationRate = 1): void {
     const orderSide = side === "long" ? "buy" : "sell";
     const entryPrice = adverseFill(referencePrice, orderSide, slippageRate);
     // Allocate all usable equity while reserving the entry fee (and futures margin).
     const marginRate = market === "futures" ? decimal(1).div(leverage) : decimal(1);
-    const notional = balance.div(marginRate.plus(feeRate));
+    const notional = balance.times(allocationRate).div(marginRate.plus(feeRate));
     const quantity = notional.div(entryPrice);
     const entryFee = notional.times(feeRate);
     balance = balance.minus(entryFee);
-    position = { side, entryTime: timestamp, entryPrice, quantity, entryFee, funding: decimal(0) };
+    position = {
+      side,
+      entryTime: timestamp,
+      entryPrice,
+      quantity,
+      entryFee,
+      funding: decimal(0),
+      peakPrice: entryPrice,
+      troughPrice: entryPrice,
+    };
   }
 
   function executePending(candle: Readonly<Candle>): void {
@@ -218,7 +230,7 @@ export async function runHistoricalBacktest(
           event.effect = "none";
           event.reason = "nonpositive-equity";
         } else {
-          openPosition("long", candle.open, candle.openTime);
+          openPosition("long", candle.open, candle.openTime, signal.allocationRate);
           event.effect = "opened";
         }
       } else if (signal.action === "sell" && market === "futures") {
@@ -227,7 +239,7 @@ export async function runHistoricalBacktest(
           event.effect = "none";
           event.reason = "nonpositive-equity";
         } else {
-          openPosition("short", candle.open, candle.openTime);
+          openPosition("short", candle.open, candle.openTime, signal.allocationRate);
           event.effect = "opened";
         }
       } else {
@@ -250,9 +262,23 @@ export async function runHistoricalBacktest(
     }
   }
 
+  let utcDay = "";
+  let dayStartEquity = initialCapital;
   for (let index = 0; index < validated.candles.length; index += 1) {
     const candle = validated.candles[index]!;
+    const currentUtcDay = new Date(candle.closeTime).toISOString().slice(0, 10);
+    if (currentUtcDay !== utcDay) {
+      utcDay = currentUtcDay;
+      dayStartEquity = equityCurve.length === 0
+        ? initialCapital
+        : decimal(equityCurve.at(-1)!.equity);
+    }
     executePending(candle);
+
+    if (position) {
+      position.peakPrice = Decimal.max(position.peakPrice, candle.high);
+      position.troughPrice = Decimal.min(position.troughPrice, candle.low);
+    }
 
     let periodFunding = decimal(0);
     while (fundingCursor < validated.funding.length && validated.funding[fundingCursor]!.timestamp <= candle.closeTime) {
@@ -283,6 +309,21 @@ export async function runHistoricalBacktest(
         market,
         symbol: dataset.request.symbol,
         now: evaluatedAt,
+        timeframe: dataset.request.interval,
+        portfolio: Object.freeze({
+          equity: decimalString(equity),
+          dayStartEquity: decimalString(dayStartEquity),
+          utcDay,
+          ...(position ? {
+            position: Object.freeze({
+              side: position.side,
+              entryPrice: decimalString(position.entryPrice),
+              peakPrice: decimalString(position.peakPrice),
+              troughPrice: decimalString(position.troughPrice),
+              quantity: decimalString(position.quantity),
+            }),
+          } : {}),
+        }),
       }));
       const parsed = StrategySignalSchema.safeParse(candidate);
       if (!parsed.success) {
