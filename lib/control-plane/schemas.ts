@@ -15,15 +15,22 @@ type UnknownRecord = Record<string, unknown>;
 
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
-const SENSITIVE_NAMES = new Set([
-  "secretkey",
-  "passphrase",
-  "accesssign",
-  "authorization",
-  "rawaccount",
-]);
+const MAX_JSON_DEPTH = 32;
+const MAX_JSON_NODES = 2_048;
+const SENSITIVE_NAME_PARTS = [
+  "secretkey", "apikey", "accesskey", "passphrase", "accesssign", "signature",
+  "credential", "authorization", "authentication", "accesstoken", "bearertoken", "rawaccount",
+] as const;
 
 const normalizedName = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const isSensitiveName = (name: string): boolean => {
+  const normalized = normalizedName(name);
+  if (normalized.endsWith("keysuffix")) return false;
+  return normalized === "auth"
+    || normalized.startsWith("auth")
+    || SENSITIVE_NAME_PARTS.some((part) => normalized.includes(part));
+};
 
 const asRecord = (value: unknown, label: string): UnknownRecord => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -56,39 +63,75 @@ const decimal = (value: unknown, label: string, signed = false): string => {
   return text;
 };
 
-const assertNoSensitiveNames = (value: unknown, seen = new Set<object>()): void => {
-  if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) throw new Error("JSON 不得包含循環參照");
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) assertNoSensitiveNames(item, seen);
-  } else {
-    for (const [key, item] of Object.entries(value as UnknownRecord)) {
-      if (SENSITIVE_NAMES.has(normalizedName(key))) throw new Error(`偵測到敏感欄位：${key}`);
-      assertNoSensitiveNames(item, seen);
-    }
-  }
-  seen.delete(value);
-};
+type VisitFrame =
+  | { kind: "visit"; value: unknown; depth: number }
+  | { kind: "exit"; value: object };
 
 const jsonValue = (value: unknown, label: string, maximumBytes: number): JsonValue => {
-  assertNoSensitiveNames(value);
-  let encoded: string;
-  try {
-    encoded = JSON.stringify(value);
-  } catch {
-    throw new Error(`${label} 必須是有效 JSON`);
+  const active = new WeakSet<object>();
+  const stack: VisitFrame[] = [{ kind: "visit", value, depth: 0 }];
+  let nodes = 0;
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (frame.kind === "exit") {
+      active.delete(frame.value);
+      continue;
+    }
+
+    nodes += 1;
+    if (nodes > MAX_JSON_NODES) throw new Error(`${label} JSON 節點不得超過 ${MAX_JSON_NODES}`);
+    if (frame.depth > MAX_JSON_DEPTH) throw new Error(`${label} JSON 深度不得超過 ${MAX_JSON_DEPTH}`);
+
+    const item = frame.value;
+    if (item === null || typeof item === "string" || typeof item === "boolean") continue;
+    if (typeof item === "number") {
+      if (!Number.isFinite(item)) throw new Error(`${label} JSON 數字必須是有限值`);
+      continue;
+    }
+    if (typeof item !== "object") throw new Error(`${label} 包含非 JSON 值`);
+    if (active.has(item)) throw new Error(`${label} JSON 不得包含循環參照`);
+    active.add(item);
+    stack.push({ kind: "exit", value: item });
+
+    if (Array.isArray(item)) {
+      if (Object.getOwnPropertySymbols(item).length > 0) throw new Error(`${label} 包含非 JSON symbol 欄位`);
+      for (const key of Object.getOwnPropertyNames(item)) {
+        if (key === "length") continue;
+        const position = Number(key);
+        if (!Number.isSafeInteger(position) || position < 0 || position >= item.length || String(position) !== key) {
+          throw new Error(`${label} JSON 陣列不得包含額外屬性`);
+        }
+      }
+      for (let index = item.length - 1; index >= 0; index -= 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(item, String(index));
+        if (!descriptor) throw new Error(`${label} JSON 陣列不得為稀疏陣列`);
+        if (!("value" in descriptor) || !descriptor.enumerable) throw new Error(`${label} 包含非 JSON 屬性`);
+        stack.push({ kind: "visit", value: descriptor.value, depth: frame.depth + 1 });
+      }
+      continue;
+    }
+
+    const prototype = Object.getPrototypeOf(item);
+    if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} 包含非 JSON 物件`);
+    if (Object.getOwnPropertySymbols(item).length > 0) throw new Error(`${label} 包含非 JSON symbol 欄位`);
+    const descriptors = Object.getOwnPropertyDescriptors(item);
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (isSensitiveName(key)) throw new Error(`偵測到敏感欄位：${key}`);
+      if (!("value" in descriptor) || !descriptor.enumerable) throw new Error(`${label} 包含非 JSON 屬性`);
+      stack.push({ kind: "visit", value: descriptor.value, depth: frame.depth + 1 });
+    }
   }
-  if (encoded === undefined) throw new Error(`${label} 必須是有效 JSON`);
+
+  const encoded = JSON.stringify(value);
   if (new TextEncoder().encode(encoded).byteLength > maximumBytes) {
     throw new Error(`${label} JSON 大小不得超過 ${maximumBytes} bytes`);
   }
-  const parsed = JSON.parse(encoded) as JsonValue;
-  return parsed;
+  return value as JsonValue;
 };
 
 export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto {
-  assertNoSensitiveNames(value);
+  jsonValue(value, "回測工作", 32_768);
   const record = asRecord(value, "回測工作");
   assertExactKeys(record, [
     "strategyVersionId", "market", "symbol", "interval", "startTime", "endTime",
@@ -113,7 +156,7 @@ export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto 
 }
 
 export function parseCommandCreateDto(value: unknown): CommandCreateDto {
-  assertNoSensitiveNames(value);
+  jsonValue(value, "控制命令", 32_768);
   const record = asRecord(value, "控制命令");
   assertExactKeys(record, ["deploymentId", "type", "payload"]);
   if (typeof record.type !== "string" || !COMMAND_TYPES.includes(record.type as CommandType)) {
@@ -141,7 +184,7 @@ const parsePosition = (value: unknown): HeartbeatPositionDto => {
 };
 
 export function parseHeartbeatDto(value: unknown): HeartbeatDto {
-  assertNoSensitiveNames(value);
+  jsonValue(value, "heartbeat", 65_536);
   const record = asRecord(value, "heartbeat");
   assertExactKeys(record, ["deploymentId", "sequence", "occurredAt", "mode", "health", "positions"]);
   if (typeof record.mode !== "string" || !RUN_MODES.includes(record.mode as RunMode)) {

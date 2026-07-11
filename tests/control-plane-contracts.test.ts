@@ -84,8 +84,14 @@ describe("strict control-plane DTO parsers", () => {
 
   it.each([
     { secretKey: "secret" },
+    { apiKey: "secret" },
+    { "ACCESS-KEY": "secret" },
+    { "ACCESS_PASSPHRASE": "secret" },
     { nested: { pass_phrase: "secret" } },
     { nested: [{ "ACCESS-SIGN": "signature" }] },
+    { nested: { request_signature: "signature" } },
+    { nested: { deviceCredential: "credential" } },
+    { nested: { auth_token: "token" } },
     { AUTHORIZATION: "Bearer credential" },
     { raw_account: { balance: "1" } },
   ])("rejects sensitive names recursively: $sensitive", (sensitive) => {
@@ -94,6 +100,50 @@ describe("strict control-plane DTO parsers", () => {
       type: "deploy",
       payload: { safe: true, ...sensitive },
     })).toThrow(/敏感欄位/);
+  });
+
+  it("allows masked API key suffix metadata", () => {
+    expect(parseCommandCreateDto({
+      deploymentId: "dep_01",
+      type: "revalidate-connection",
+      payload: { apiKeySuffix: "AB12", key_suffix: "AB12" },
+    }).payload).toEqual({ apiKeySuffix: "AB12", key_suffix: "AB12" });
+  });
+
+  it.each([
+    ["undefined", { value: undefined }],
+    ["function", { value: () => true }],
+    ["symbol", { value: Symbol("bad") }],
+    ["bigint", { value: 1n }],
+    ["NaN", { value: Number.NaN }],
+    ["Infinity", { value: Number.POSITIVE_INFINITY }],
+    ["Date", { value: new Date(0) }],
+  ])("rejects non-JSON payload values: %s", (_label, payload) => {
+    expect(() => parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", payload }))
+      .toThrow(/JSON/);
+  });
+
+  it("rejects cycles, sparse arrays, excessive depth, and excessive nodes", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", payload: cyclic }))
+      .toThrow(/循環/);
+
+    const sparse = Array(2) as unknown[];
+    sparse[1] = "value";
+    expect(() => parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", payload: { sparse } }))
+      .toThrow(/稀疏/);
+
+    let deep: Record<string, unknown> = {};
+    for (let index = 0; index < 40; index += 1) deep = { nested: deep };
+    expect(() => parseCommandCreateDto({ deploymentId: "dep_01", type: "deploy", payload: deep }))
+      .toThrow(/深度/);
+
+    expect(() => parseCommandCreateDto({
+      deploymentId: "dep_01",
+      type: "deploy",
+      payload: { nodes: Array.from({ length: 2_100 }, () => null) },
+    })).toThrow(/節點/);
   });
 
   it("bounds strings, arrays, JSON payloads, integer timestamps, and decimal strings", () => {
