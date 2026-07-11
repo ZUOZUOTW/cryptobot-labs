@@ -99,6 +99,11 @@ interface AuditInput {
   deploymentId?: string; strategyVersionId?: string;
 }
 
+export interface DeviceEventLedgerInput {
+  version: 1; expectedDeploymentVersion: number; type: string; correlationId: string;
+  payload: JsonObject; occurredAt: number; now: number;
+}
+
 type FillRecord = FillInput & { userId: string; deploymentId: string; orderId: string };
 
 const normalizeOrder = (input: OrderInput): OrderInput => {
@@ -196,11 +201,28 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
     deploymentId: input.deploymentId === undefined ? null : id(input.deploymentId, "deploymentId"),
     strategyVersionId: input.strategyVersionId === undefined ? null : id(input.strategyVersionId, "strategyVersionId"),
   });
+  const normalizeLedger = (eventId: string, deploymentId: string, input: DeviceEventLedgerInput) =>
+    normalizeAudit({ id: eventId, deploymentId, type: input.type, correlationId: input.correlationId,
+      payload: { version: input.version, expectedDeploymentVersion: version(input.expectedDeploymentVersion), payload: input.payload },
+      occurredAt: input.occurredAt, now: input.now });
+  const ledgerMatches = (row: AuditEventRecord, value: ReturnType<typeof normalizeAudit>, deviceId: string) =>
+    row.actorType === "device" && row.actorId === deviceId && row.deviceId === deviceId
+    && row.deploymentId === value.deploymentId && row.strategyVersionId === value.strategyVersionId
+    && row.type === value.type && row.correlationId === value.correlationId
+    && row.payloadJson === value.payloadJson && row.occurredAt === value.occurredAt;
+  const deviceLedgerInsert = (value: ReturnType<typeof normalizeAudit>, deviceId: string, expectedVersion: number) =>
+    database.prepare(`INSERT INTO audit_events
+      (id,user_id,actor_type,actor_id,device_id,deployment_id,strategy_version_id,type,correlation_id,payload_json,occurred_at,created_at)
+      SELECT ?,v.user_id,'device',v.id,v.id,d.id,NULL,?,?,?,?,? FROM devices v
+      JOIN deployments d ON d.device_id=v.id AND d.user_id=v.user_id
+      WHERE v.id=? AND v.status='active' AND d.id=? AND d.version=?`)
+      .bind(value.eventId, value.type, value.correlationId, value.payloadJson, value.occurredAt, value.createdAt,
+        deviceId, value.deploymentId, expectedVersion);
 
   return {
     async ingestHeartbeat(input: { id: string; deviceId: string; expectedDeploymentVersion: number;
-      positionIds: string[]; heartbeat: HeartbeatDto }): Promise<{ heartbeat: HeartbeatRecord; idempotent: boolean }> {
-      exactInput(input, ["id", "deviceId", "expectedDeploymentVersion", "positionIds", "heartbeat"]);
+      positionIds: string[]; heartbeat: HeartbeatDto; event?: DeviceEventLedgerInput }): Promise<{ heartbeat: HeartbeatRecord; idempotent: boolean }> {
+      exactInput(input, ["id", "deviceId", "expectedDeploymentVersion", "positionIds", "heartbeat", "event"]);
       const heartbeat = parseHeartbeatDto(input.heartbeat);
       if (!Array.isArray(input.positionIds) || input.positionIds.length !== heartbeat.positions.length) {
         throw new Error("positionIds must exactly match positions");
@@ -211,6 +233,13 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       const heartbeatId = id(input.id, "heartbeatId");
       const expectedVersion = version(input.expectedDeploymentVersion);
       const deploymentId = id(heartbeat.deploymentId, "deploymentId");
+      if (input.event) {
+        exactInput(input.event, ["version", "expectedDeploymentVersion", "type", "correlationId", "payload", "occurredAt", "now"]);
+        if (input.event.version !== 1 || input.event.expectedDeploymentVersion !== expectedVersion) {
+          throw new Error("device event ledger version fence is invalid");
+        }
+      }
+      const ledger = input.event ? normalizeLedger(heartbeatId, deploymentId, input.event) : null;
       const telemetryJson = safeCanonicalJsonStringify({
         health: heartbeat.health, mode: heartbeat.mode, positions: heartbeat.positions, state: heartbeat.state,
       }, "heartbeat telemetry", 65_536);
@@ -224,8 +253,13 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
         const same = existing.mode === heartbeat.mode && existing.state === heartbeat.state && existing.health === heartbeat.health
           && existing.summaryJson === telemetryJson && existing.occurredAt === heartbeat.occurredAt;
         if (!same) throw new Error("heartbeat sequence conflict");
+        if (ledger) {
+          const storedLedger = await getAuditForActor(ledger.eventId, "device", deviceId);
+          if (!storedLedger || !ledgerMatches(storedLedger, ledger, deviceId)) throw new Error("device event ledger conflict");
+        }
         return { heartbeat: existing, idempotent: true };
       }
+      if (ledger && await auditIdExists(ledger.eventId)) throw new Error("device event ledger conflict");
       const latest = await database.prepare(`SELECT MAX(sequence) AS sequence FROM run_heartbeats
         WHERE deployment_id=? AND device_id=?`).bind(deploymentId, deviceId).first<{ sequence: number | null }>();
       if (latest?.sequence !== null && latest?.sequence !== undefined && latest.sequence >= heartbeat.sequence) {
@@ -246,7 +280,13 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       }));
       const positionKeys = normalizedPositions.map((position) => `${position.symbol}\u0000${position.side}`);
       if (new Set(positionKeys).size !== positionKeys.length) throw new Error("duplicate position symbol and side");
+      const ledgerClause = ledger ? `AND EXISTS (SELECT 1 FROM audit_events a WHERE a.id=? AND a.actor_type='device'
+        AND a.actor_id=? AND a.device_id=? AND a.deployment_id=? AND a.type=? AND a.correlation_id=?
+        AND a.payload_json=? AND a.occurred_at=?)` : "";
+      const ledgerValues = ledger ? [ledger.eventId, deviceId, deviceId, deploymentId, ledger.type,
+        ledger.correlationId, ledger.payloadJson, ledger.occurredAt] : [];
       const statements = [
+        ...(ledger ? [deviceLedgerInsert(ledger, deviceId, expectedVersion)] : []),
         database.prepare(`INSERT INTO run_heartbeats
           (id,user_id,deployment_id,device_id,sequence,mode,state,health,summary_json,occurred_at)
           SELECT ?,d.user_id,d.id,d.device_id,?,?,?,?,?,? FROM deployments d
@@ -284,21 +324,25 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
               AND h.mode=? AND h.state=? AND h.health=? AND h.summary_json=? AND h.occurred_at=?
               AND d.version=? AND d.mode=? AND d.state=? AND v.status='active'
               AND (SELECT COUNT(*) FROM position_snapshots p
-                WHERE p.heartbeat_id=h.id AND p.deployment_id=h.deployment_id)=?
+                WHERE p.heartbeat_id=h.id AND p.deployment_id=h.deployment_id)=? ${ledgerClause}
           )`).bind(heartbeatId, deploymentId, deviceId, heartbeat.sequence, heartbeat.mode, heartbeat.state,
             heartbeat.health, telemetryJson, heartbeat.occurredAt, heartbeatId, deviceId, deploymentId,
             heartbeat.sequence, heartbeat.mode, heartbeat.state, heartbeat.health, telemetryJson, heartbeat.occurredAt,
-            expectedVersion, heartbeat.mode, heartbeat.state, normalizedPositions.length),
+            expectedVersion, heartbeat.mode, heartbeat.state, normalizedPositions.length, ...ledgerValues),
       ];
       try {
         const results = await database.batch(statements);
-        if (results[0]?.meta.changes !== 1 || normalizedPositions.some((_, index) => results[index + 2]?.meta.changes !== 1)) {
+        const offset = ledger ? 1 : 0;
+        if ((ledger && results[0]?.meta.changes !== 1) || results[offset]?.meta.changes !== 1
+          || normalizedPositions.some((_, index) => results[index + offset + 2]?.meta.changes !== 1)) {
           throw new Error("atomic heartbeat replacement failed");
         }
       } catch (error) {
         const raced = await getHeartbeat(deviceId, deploymentId, heartbeat.sequence);
         if (raced && raced.summaryJson === telemetryJson && raced.occurredAt === heartbeat.occurredAt) {
-          return { heartbeat: raced, idempotent: true };
+          if (!ledger) return { heartbeat: raced, idempotent: true };
+          const racedLedger = await getAuditForActor(ledger.eventId, "device", deviceId);
+          if (racedLedger && ledgerMatches(racedLedger, ledger, deviceId)) return { heartbeat: raced, idempotent: true };
         }
         if (raced) throw new Error("heartbeat sequence conflict");
         throw error;
@@ -309,11 +353,19 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
     },
 
     async ingestOrderTelemetry(input: { deviceId: string; expectedDeploymentVersion: number; mode: "paper" | "futures-demo" | "live";
-      deploymentState: "running" | "paused" | "stopped" | "error"; order: OrderInput; fills: FillInput[] }): Promise<{ order: OrderRecord; idempotent: boolean }> {
-      exactInput(input, ["deviceId", "expectedDeploymentVersion", "mode", "deploymentState", "order", "fills"]);
+      deploymentState: "running" | "paused" | "stopped" | "error"; order: OrderInput; fills: FillInput[];
+      event?: DeviceEventLedgerInput & { id: string } }): Promise<{ order: OrderRecord; idempotent: boolean }> {
+      exactInput(input, ["deviceId", "expectedDeploymentVersion", "mode", "deploymentState", "order", "fills", "event"]);
       const deviceId = id(input.deviceId, "deviceId");
       const expectedVersion = version(input.expectedDeploymentVersion);
       const order = normalizeOrder(input.order);
+      if (input.event) {
+        exactInput(input.event, ["id", "version", "expectedDeploymentVersion", "type", "correlationId", "payload", "occurredAt", "now"]);
+        if (input.event.version !== 1 || input.event.expectedDeploymentVersion !== expectedVersion) {
+          throw new Error("device event ledger version fence is invalid");
+        }
+      }
+      const ledger = input.event ? normalizeLedger(id(input.event.id, "deviceEventId"), order.deploymentId, input.event) : null;
       if (input.mode !== "paper" && input.mode !== "futures-demo" && input.mode !== "live") throw new Error("mode is invalid");
       if (input.deploymentState !== "running" && input.deploymentState !== "paused"
         && input.deploymentState !== "stopped" && input.deploymentState !== "error") throw new Error("deploymentState is invalid");
@@ -353,7 +405,14 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
         if (!stored) newFills.push(fill);
         else if (stored.orderId !== winnerId || !fillMatches(stored, fill)) throw new Error("exchange fill conflict or wrong order");
       }
-      if (existing && exactOrderMatches(existing, order) && newFills.length === 0) return { order: existing, idempotent: true };
+      if (existing && exactOrderMatches(existing, order) && newFills.length === 0) {
+        if (ledger) {
+          const storedLedger = await getAuditForActor(ledger.eventId, "device", deviceId);
+          if (!storedLedger || !ledgerMatches(storedLedger, ledger, deviceId)) throw new Error("device event ledger conflict");
+        }
+        return { order: existing, idempotent: true };
+      }
+      if (ledger && await auditIdExists(ledger.eventId)) throw new Error("device event ledger conflict");
 
       const orderStatement = existing
         ? database.prepare(`UPDATE orders SET exchange_order_id=?,state=?,filled_quantity=?,average_fill_price=?,updated_at=?
@@ -388,6 +447,11 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       const fillFilter = fills.length === 0
         ? { sql: "0=1", values: [] as string[] }
         : { sql: `f.exchange_fill_id IN (${fills.map(() => "?").join(",")})`, values: fills.map((fill) => fill.exchangeFillId) };
+      const ledgerClause = ledger ? `AND EXISTS (SELECT 1 FROM audit_events a WHERE a.id=? AND a.actor_type='device'
+        AND a.actor_id=? AND a.device_id=? AND a.deployment_id=? AND a.type=? AND a.correlation_id=?
+        AND a.payload_json=? AND a.occurred_at=?)` : "";
+      const ledgerValues = ledger ? [ledger.eventId, deviceId, deviceId, order.deploymentId, ledger.type,
+        ledger.correlationId, ledger.payloadJson, ledger.occurredAt] : [];
       const guard = database.prepare(`INSERT INTO fills
         (id,user_id,deployment_id,order_id,exchange_fill_id,price,quantity,fee,fee_currency,realized_pnl,filled_at)
         SELECT ?,NULL,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (
@@ -398,21 +462,23 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
             AND o.price IS ? AND o.quantity=? AND o.filled_quantity=? AND o.average_fill_price IS ?
             AND o.notional=? AND o.correlation_id=? AND o.created_at=? AND o.updated_at=?
             AND d.device_id=? AND d.version=? AND d.mode=? AND d.state=? AND v.status='active'
-            AND (SELECT COUNT(*) FROM fills f WHERE f.order_id=o.id AND ${fillFilter.sql})=?
+            AND (SELECT COUNT(*) FROM fills f WHERE f.order_id=o.id AND ${fillFilter.sql})=? ${ledgerClause}
         )`).bind(winnerId, order.deploymentId, winnerId, "guard", "1", "1", "0", "NA", null, 0,
           winnerId, order.deploymentId, order.clientOrderId, order.exchangeOrderId, order.market, order.symbol,
           order.side, order.positionSide, order.orderType, order.state, order.price, order.quantity,
           order.filledQuantity, order.averageFillPrice, order.notional, order.correlationId, order.createdAt,
           order.updatedAt, deviceId, expectedVersion, input.mode, input.deploymentState,
-          ...fillFilter.values, fills.length);
+          ...fillFilter.values, fills.length, ...ledgerValues);
       try {
-        await database.batch([orderStatement, ...fillStatements, guard]);
+        await database.batch([...(ledger ? [deviceLedgerInsert(ledger, deviceId, expectedVersion)] : []), orderStatement, ...fillStatements, guard]);
       } catch (error) {
         const racedOrder = await getOrderByIdentity(order.deploymentId, order.clientOrderId);
         if (racedOrder && exactOrderMatches(racedOrder, order)) {
           const racedFills = await Promise.all(fills.map((fill) => getFillByExchangeId(order.deploymentId, fill.exchangeFillId)));
           if (racedFills.every((row, index) => row && row.orderId === racedOrder.id && fillMatches(row, fills[index]!))) {
-            return { order: racedOrder, idempotent: true };
+            if (!ledger) return { order: racedOrder, idempotent: true };
+            const racedLedger = await getAuditForActor(ledger.eventId, "device", deviceId);
+            if (racedLedger && ledgerMatches(racedLedger, ledger, deviceId)) return { order: racedOrder, idempotent: true };
           }
         }
         if (racedOrder) throw new Error("order or fill telemetry conflict");
@@ -485,10 +551,11 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       return { event: row, idempotent: false };
     },
 
-    async appendDeviceAudit(input: AuditInput & { deviceId: string }): Promise<{ event: AuditEventRecord; idempotent: boolean }> {
-      exactInput(input, ["id", "deviceId", "deploymentId", "strategyVersionId", "type", "correlationId", "payload", "occurredAt", "now"]);
+    async appendDeviceAudit(input: AuditInput & { deviceId: string; expectedDeploymentVersion?: number }): Promise<{ event: AuditEventRecord; idempotent: boolean }> {
+      exactInput(input, ["id", "deviceId", "deploymentId", "strategyVersionId", "type", "correlationId", "payload", "occurredAt", "now", "expectedDeploymentVersion"]);
       const deviceId = id(input.deviceId, "deviceId");
       const value = normalizeAudit(input);
+      const expectedVersion = input.expectedDeploymentVersion === undefined ? null : version(input.expectedDeploymentVersion);
       const same = (row: AuditEventRecord) => row.actorType === "device" && row.actorId === deviceId
         && row.deviceId === deviceId && row.deploymentId === value.deploymentId
         && row.strategyVersionId === value.strategyVersionId && row.type === value.type
@@ -497,7 +564,10 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       const existing = await getAuditForActor(value.eventId, "device", deviceId);
       if (existing) {
         if (!same(existing)) throw new Error("audit event conflict");
-        return { event: existing, idempotent: true };
+        // Version-fenced device events deliberately continue into the INSERT SELECT. A matching
+        // assignment causes the global id PK to resolve as an exact retry in catch; a stale
+        // assignment selects no row, so a service precheck cannot bypass the atomic SQL fence.
+        if (expectedVersion === null) return { event: existing, idempotent: true };
       }
       let row: AuditEventRecord | null;
       try {
@@ -505,12 +575,14 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
         (id,user_id,actor_type,actor_id,device_id,deployment_id,strategy_version_id,type,correlation_id,payload_json,occurred_at,created_at)
         SELECT ?,v.user_id,'device',v.id,v.id,?,?,?,?,?,?,? FROM devices v WHERE v.id=? AND v.status='active'
           AND (? IS NULL OR EXISTS (SELECT 1 FROM deployments WHERE id=? AND user_id=v.user_id AND device_id=v.id))
+          AND (? IS NULL OR EXISTS (SELECT 1 FROM deployments WHERE id=? AND user_id=v.user_id AND device_id=v.id AND version=?))
           AND (? IS NULL OR EXISTS (SELECT 1 FROM strategy_versions WHERE id=? AND user_id=v.user_id))
           AND (? IS NULL OR ? IS NULL OR EXISTS (SELECT 1 FROM deployments WHERE id=? AND user_id=v.user_id
             AND device_id=v.id AND strategy_version_id=?))
         RETURNING ${auditColumns}`)
         .bind(value.eventId, value.deploymentId, value.strategyVersionId, value.type, value.correlationId,
           value.payloadJson, value.occurredAt, value.createdAt, deviceId, value.deploymentId, value.deploymentId,
+          expectedVersion, value.deploymentId, expectedVersion,
           value.strategyVersionId, value.strategyVersionId, value.deploymentId, value.strategyVersionId,
           value.deploymentId, value.strategyVersionId).first<AuditEventRecord>();
       } catch (error) {

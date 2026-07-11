@@ -85,7 +85,9 @@ const rejectSecrets = (value: unknown): void => {
       const lower = item.toLowerCase();
       if (/-----begin (?:rsa |ec |ed25519 )?private key-----/.test(lower)
         || /^(?:bearer|basic)\s+[a-z0-9+/_=-]{8,}$/i.test(item)
-        || /(?:weex_access_sign|access-sign|authorization|set-cookie)\s*[:=]/i.test(item)) {
+        || /(?:api[_ -]?secret|secret[_ -]?key|pass[_ -]?phrase|weex[_ -]?access[_ -]?sign|access[_ -]?sign|authorization|set-cookie|cookie)\s*[:=]/i.test(item)
+        || /\b(?:cred|bst)_[A-Za-z0-9_-]{16,}\b/.test(item)
+        || /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{16,}\b/.test(item)) {
         throw new DeviceEventError("forbidden-data", "event contains forbidden credential material");
       }
       return;
@@ -149,6 +151,22 @@ export function parseDeviceEvent(value: unknown): DeviceEventEnvelope {
   if(envelope.version!==1)throw new DeviceEventError("invalid-event","event version is unsupported");
   const type=oneOf(envelope.type,DEVICE_EVENT_TYPES,"event type"); const deploymentId=id(envelope.deploymentId,"deploymentId");
   const parsed:DeviceEventEnvelope={version:1,id:id(envelope.id,"eventId"),type,deploymentId,expectedDeploymentVersion:integer(envelope.expectedDeploymentVersion,"expectedDeploymentVersion",1),correlationId:id(envelope.correlationId,"correlationId"),occurredAt:integer(envelope.occurredAt,"occurredAt"),payload:payloadParsers[type](envelope.payload,deploymentId)};
+  if (type === "heartbeat") {
+    const heartbeat = parsed.payload.heartbeat as unknown as { occurredAt: number };
+    if (heartbeat.occurredAt !== parsed.occurredAt) throw new DeviceEventError("invalid-event", "heartbeat and envelope timestamps must match");
+  }
+  if (type === "order-state" || type === "fill") {
+    const order = parsed.payload.order as unknown as { correlationId: string; createdAt: number; updatedAt: number };
+    const fills = parsed.payload.fills as unknown as Array<{ filledAt: number }>;
+    if (order.correlationId !== parsed.correlationId) throw new DeviceEventError("invalid-event", "order and envelope correlation ids must match");
+    if (order.createdAt > order.updatedAt || order.updatedAt !== parsed.occurredAt) {
+      throw new DeviceEventError("invalid-event", "order and envelope timestamps are incoherent");
+    }
+    if (fills.some((fill) => fill.filledAt < order.createdAt || fill.filledAt > parsed.occurredAt)
+      || (fills.length > 0 && Math.max(...fills.map((fill) => fill.filledAt)) !== parsed.occurredAt)) {
+      throw new DeviceEventError("invalid-event", "fill timestamps must be bounded and end at the event timestamp");
+    }
+  }
   // Re-clone, bound and canonicalize before anything reaches persistence.
   parsed.payload=JSON.parse(safeCanonicalJsonStringify(parsed.payload,"device event payload",65_536)) as JsonObject;
   return parsed;
@@ -159,16 +177,23 @@ export function createDeviceEventService(activity: Activity, options: { deployme
     if(identity?.verified!==true)throw new DeviceEventError("invalid-event","verified device identity is required");
     const event=parseDeviceEvent(input); const now=(options.now??Date.now)();
     try {
-      if (event.occurredAt > now + 300_000 || event.occurredAt < now - 2_592_000_000) {
+      const persistedTimes = [event.occurredAt];
+      if (event.type === "order-state" || event.type === "fill") {
+        const order = event.payload.order as unknown as { createdAt: number; updatedAt: number };
+        const fills = event.payload.fills as unknown as Array<{ filledAt: number }>;
+        persistedTimes.push(order.createdAt, order.updatedAt, ...fills.map((fill) => fill.filledAt));
+      }
+      if (persistedTimes.some((value) => value > now + 300_000 || value < now - 2_592_000_000)) {
         throw new DeviceEventError("invalid-event", "event timestamp is outside the accepted clock window");
       }
       const deployment = await options.deployments.getForDevice(identity.deviceId, event.deploymentId);
       if (!deployment || deployment.version !== event.expectedDeploymentVersion) {
         throw new DeviceEventError("deployment-fence", "deployment fence failed");
       }
-      if(event.type==="heartbeat") { const p=event.payload as unknown as {heartbeat: Parameters<Activity["ingestHeartbeat"]>[0]["heartbeat"];positionIds:string[]}; return {kind:"heartbeat" as const,...await activity.ingestHeartbeat({id:event.id,deviceId:identity.deviceId,expectedDeploymentVersion:event.expectedDeploymentVersion,heartbeat:p.heartbeat,positionIds:p.positionIds})}; }
-      if(event.type==="order-state"||event.type==="fill") { const p=event.payload as unknown as {mode:"paper"|"futures-demo"|"live";deploymentState:"running"|"paused"|"stopped"|"error";order:Parameters<Activity["ingestOrderTelemetry"]>[0]["order"];fills:Parameters<Activity["ingestOrderTelemetry"]>[0]["fills"]}; return {kind:"order" as const,...await activity.ingestOrderTelemetry({deviceId:identity.deviceId,expectedDeploymentVersion:event.expectedDeploymentVersion,...p})}; }
-      const audit=await activity.appendDeviceAudit({id:event.id,deviceId:identity.deviceId,deploymentId:event.deploymentId,type:event.type,correlationId:event.correlationId,payload:event.payload,occurredAt:event.occurredAt,now});
+      const ledger={version:1 as const,expectedDeploymentVersion:event.expectedDeploymentVersion,type:event.type,correlationId:event.correlationId,payload:event.payload,occurredAt:event.occurredAt,now};
+      if(event.type==="heartbeat") { const p=event.payload as unknown as {heartbeat: Parameters<Activity["ingestHeartbeat"]>[0]["heartbeat"];positionIds:string[]}; return {kind:"heartbeat" as const,...await activity.ingestHeartbeat({id:event.id,deviceId:identity.deviceId,expectedDeploymentVersion:event.expectedDeploymentVersion,heartbeat:p.heartbeat,positionIds:p.positionIds,event:ledger})}; }
+      if(event.type==="order-state"||event.type==="fill") { const p=event.payload as unknown as {mode:"paper"|"futures-demo"|"live";deploymentState:"running"|"paused"|"stopped"|"error";order:Parameters<Activity["ingestOrderTelemetry"]>[0]["order"];fills:Parameters<Activity["ingestOrderTelemetry"]>[0]["fills"]}; return {kind:"order" as const,...await activity.ingestOrderTelemetry({deviceId:identity.deviceId,expectedDeploymentVersion:event.expectedDeploymentVersion,...p,event:{id:event.id,...ledger}})}; }
+      const audit=await activity.appendDeviceAudit({id:event.id,deviceId:identity.deviceId,deploymentId:event.deploymentId,expectedDeploymentVersion:event.expectedDeploymentVersion,type:event.type,correlationId:event.correlationId,payload:{version:1,expectedDeploymentVersion:event.expectedDeploymentVersion,payload:event.payload},occurredAt:event.occurredAt,now});
       return {kind:"audit" as const,...audit};
     } catch(error) { if(error instanceof DeviceEventError)throw error; const message=error instanceof Error?error.message:"event persistence failed"; throw new DeviceEventError(/conflict|duplicate|sequence/i.test(message)?"event-conflict":"deployment-fence",/conflict|duplicate|sequence/i.test(message)?"event conflict":"deployment fence failed"); }
   }};
