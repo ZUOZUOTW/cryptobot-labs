@@ -4,6 +4,7 @@ import {
   deriveClientOrderId,
   executionTargetFor,
   isExecutionTarget,
+  parseTrackedOrder,
   sameExecutionTarget,
   transitionOrder,
   type ApprovedOrderIntent,
@@ -76,12 +77,42 @@ function sameTrackedOrder(left: TrackedOrder, right: TrackedOrder): boolean {
     sameIntent(left.approvedIntent, right.approvedIntent);
 }
 
+function sameTrackedOrderState(left: TrackedOrder, right: TrackedOrder): boolean {
+  return sameTrackedOrder(left, right) &&
+    left.status === right.status &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.cancelAttemptedAt === right.cancelAttemptedAt &&
+    left.cumulativeFilledQuantity === right.cumulativeFilledQuantity &&
+    left.averageFillPrice === right.averageFillPrice &&
+    left.fees === right.fees &&
+    left.reason === right.reason &&
+    left.version === right.version;
+}
+
+function validateExecutionContext(context: ExecutionContext): void {
+  if (typeof context !== "object" || context === null ||
+      typeof context.riskContext !== "object" || context.riskContext === null ||
+      typeof context.instrumentRules !== "object" || context.instrumentRules === null ||
+      context.market !== context.riskContext.market ||
+      context.market !== context.instrumentRules.market) {
+    throw new TypeError("inconsistent execution market context");
+  }
+  if (context.riskContext.symbol !== context.instrumentRules.symbol) {
+    throw new TypeError("inconsistent execution symbol context");
+  }
+}
+
 function sameOrderIdentity(
   order: TrackedOrder,
+  deploymentId: string,
+  clientOrderId: string,
   target: ExecutionTarget,
   intent: ApprovedOrderIntent,
 ): boolean {
-  return sameExecutionTarget(order.executionTarget, target) &&
+  return order.deploymentId === deploymentId &&
+    order.clientOrderId === clientOrderId &&
+    sameExecutionTarget(order.executionTarget, target) &&
     sameIntent(order.approvedIntent, intent);
 }
 
@@ -168,8 +199,16 @@ export class ExecutionCoordinator {
     if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid timestamp");
 
     const result = { cancelled: 0, rejected: 0, unresolved: 0, skipped: 0 };
-    const orders = await this.#dependencies.repository.listActive(deploymentId);
-    for (const candidate of orders) {
+    const rawOrders = await this.#dependencies.repository.listActive(deploymentId);
+    if (!Array.isArray(rawOrders)) throw new TypeError("repository returned an invalid order list");
+    for (const rawCandidate of rawOrders) {
+      let candidate: TrackedOrder;
+      try {
+        candidate = parseTrackedOrder(rawCandidate);
+      } catch {
+        result.unresolved += 1;
+        continue;
+      }
       if (candidate.deploymentId !== deploymentId) {
         result.skipped += 1;
         continue;
@@ -243,6 +282,7 @@ export class ExecutionCoordinator {
   ): Promise<ExecutionOutcome> {
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
     const signal = parseSignal(candidateSignal);
+    validateExecutionContext(context);
     const executionTarget = executionTargetFor(context.market, context.mode);
     if (executionTarget === null) throw new TypeError("invalid execution target");
     if (this.#pending >= MAX_PENDING) return { status: "blocked", reason: "queue-full" };
@@ -251,6 +291,10 @@ export class ExecutionCoordinator {
     try {
       const intent = await this.#dependencies.normalizer.normalize(signal, context);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+      if (intent.symbol !== context.riskContext.symbol ||
+          intent.symbol !== context.instrumentRules.symbol) {
+        throw new TypeError("normalized intent does not match execution symbol context");
+      }
 
       const clientOrderId = await deriveClientOrderId({
         deploymentId: context.deploymentId,
@@ -260,10 +304,12 @@ export class ExecutionCoordinator {
       });
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
 
-      const existing = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+      const existing = await this.#repositoryGet(clientOrderId);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       if (existing !== null) {
-        if (!sameOrderIdentity(existing, executionTarget, intent)) {
+        if (!sameOrderIdentity(
+          existing, context.deploymentId, clientOrderId, executionTarget, intent,
+        )) {
           return { status: "blocked", reason: "client-order-id-collision" };
         }
         if (existing.status !== "proposed") return { status: "idempotent", order: existing };
@@ -274,10 +320,12 @@ export class ExecutionCoordinator {
         const completed = await active;
         if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
         if (completed.status === "blocked") return completed;
-        const order = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+        const order = await this.#repositoryGet(clientOrderId);
         if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
         if (order === null) throw new Error("completed proposal was not persisted");
-        return sameOrderIdentity(order, executionTarget, intent)
+        return sameOrderIdentity(
+          order, context.deploymentId, clientOrderId, executionTarget, intent,
+        )
           ? { status: "idempotent", order }
           : { status: "blocked", reason: "client-order-id-collision" };
       }
@@ -307,11 +355,13 @@ export class ExecutionCoordinator {
     intent: ApprovedOrderIntent,
     existingProposal: TrackedOrder | null,
   ): Promise<ExecutionOutcome> {
-    const conflicts = await this.#dependencies.repository.listActive(
+    const rawConflicts = await this.#dependencies.repository.listActive(
       context.deploymentId,
       intent.symbol,
     );
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+    if (!Array.isArray(rawConflicts)) throw new TypeError("repository returned an invalid order list");
+    const conflicts = rawConflicts.map((order) => parseTrackedOrder(order));
     if (conflicts.some((order) => order.clientOrderId !== clientOrderId)) {
       return { status: "blocked", reason: "active-order-conflict" };
     }
@@ -330,7 +380,7 @@ export class ExecutionCoordinator {
       });
       let claim: ProposalClaim;
       try {
-        claim = await this.#dependencies.repository.claim(proposal);
+        claim = await this.#repositoryClaim(proposal);
       } catch (claimFailure) {
         if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
         throw claimFailure;
@@ -340,7 +390,9 @@ export class ExecutionCoordinator {
         if (claim.reason === "active-order-conflict") {
           return { status: "blocked", reason: "active-order-conflict" };
         }
-        if (!sameOrderIdentity(claim.order, executionTarget, intent)) {
+        if (!sameOrderIdentity(
+          claim.order, context.deploymentId, clientOrderId, executionTarget, intent,
+        )) {
           return { status: "blocked", reason: "client-order-id-collision" };
         }
         if (claim.order.status !== "proposed") {
@@ -365,7 +417,7 @@ export class ExecutionCoordinator {
         reason: risk.reason,
         at: context.now,
       });
-      order = await this.#dependencies.repository.save(order, order.version - 1);
+      order = await this.#repositorySave(order, order.version - 1);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       return { status: "risk-rejected", order };
     }
@@ -382,15 +434,17 @@ export class ExecutionCoordinator {
     try {
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       order = transitionOrder(order, { type: "submit-start", at: context.now });
-      order = await this.#dependencies.repository.save(order, order.version - 1);
+      order = await this.#repositorySave(order, order.version - 1);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
     } catch (failure) {
       try {
-        const winner = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+        const winner = await this.#repositoryGet(clientOrderId);
         if (
           winner !== null &&
           winner.status !== "proposed" &&
-          sameOrderIdentity(winner, executionTarget, intent)
+          sameOrderIdentity(
+            winner, context.deploymentId, clientOrderId, executionTarget, intent,
+          )
         ) {
           settlement.success();
           return { status: "idempotent", order: winner };
@@ -432,7 +486,7 @@ export class ExecutionCoordinator {
             })
           : transitionOrder(order, { type: "submit-timeout", at: context.now });
 
-      order = await this.#dependencies.repository.save(order, order.version - 1);
+      order = await this.#repositorySave(order, order.version - 1);
       const settled = failureCategory === null
         ? settlement.success()
         : settlement.failure(failureCategory);
@@ -480,11 +534,11 @@ export class ExecutionCoordinator {
         at: Math.max(at, base.updatedAt),
       });
       try {
-        const saved = await this.#dependencies.repository.save(pending, base.version);
+        const saved = await this.#repositorySave(pending, base.version);
         return { status: "claimed", order: saved };
       } catch {
         try {
-          const winner = await this.#dependencies.repository.getByClientOrderId(
+          const winner = await this.#repositoryGet(
             base.clientOrderId,
           );
           if (winner === null || !sameTrackedOrder(winner, base)) {
@@ -541,10 +595,10 @@ export class ExecutionCoordinator {
             at: Math.max(at, cancelPending.updatedAt),
           });
       try {
-        return await this.#dependencies.repository.save(next, base.version);
+        return await this.#repositorySave(next, base.version);
       } catch {
         try {
-          const winner = await this.#dependencies.repository.getByClientOrderId(
+          const winner = await this.#repositoryGet(
             base.clientOrderId,
           );
           if (winner === null || !sameTrackedOrder(winner, base)) return null;
@@ -563,7 +617,7 @@ export class ExecutionCoordinator {
   ): Promise<TrackedOrder | null> {
     let base: TrackedOrder | null;
     try {
-      base = await this.#dependencies.repository.getByClientOrderId(
+      base = await this.#repositoryGet(
         pending.clientOrderId,
       );
     } catch {
@@ -581,10 +635,10 @@ export class ExecutionCoordinator {
         at: Math.max(at, base.updatedAt),
       });
       try {
-        return await this.#dependencies.repository.save(restored, base.version);
+        return await this.#repositorySave(restored, base.version);
       } catch {
         try {
-          const winner = await this.#dependencies.repository.getByClientOrderId(
+          const winner = await this.#repositoryGet(
             pending.clientOrderId,
           );
           if (winner === null || !sameTrackedOrder(winner, pending)) return null;
@@ -597,6 +651,54 @@ export class ExecutionCoordinator {
     return null;
   }
 
+  async #repositoryGet(clientOrderId: string): Promise<TrackedOrder | null> {
+    const value = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+    if (value === null) return null;
+    const order = parseTrackedOrder(value);
+    if (order.clientOrderId !== clientOrderId) {
+      throw new TypeError("repository returned a different client order id");
+    }
+    return order;
+  }
+
+  async #repositoryClaim(proposal: TrackedOrder): Promise<ProposalClaim> {
+    const claim = await this.#dependencies.repository.claim(proposal);
+    if (typeof claim !== "object" || claim === null || typeof claim.claimed !== "boolean") {
+      throw new TypeError("repository returned an invalid proposal claim");
+    }
+    if (claim.claimed) {
+      const order = parseTrackedOrder(claim.order);
+      if (!sameTrackedOrderState(order, proposal)) {
+        throw new TypeError("repository mutated the claimed proposal");
+      }
+      return { claimed: true, order };
+    }
+    if (claim.reason === "active-order-conflict") {
+      return { claimed: false, reason: "active-order-conflict" };
+    }
+    if (claim.reason !== "client-order-id-exists" || !("order" in claim)) {
+      throw new TypeError("repository returned an invalid proposal conflict");
+    }
+    return {
+      claimed: false,
+      reason: "client-order-id-exists",
+      order: parseTrackedOrder(claim.order),
+    };
+  }
+
+  async #repositorySave(
+    expected: TrackedOrder,
+    expectedVersion: number | null,
+  ): Promise<TrackedOrder> {
+    const saved = parseTrackedOrder(
+      await this.#dependencies.repository.save(expected, expectedVersion),
+    );
+    if (!sameTrackedOrderState(saved, expected)) {
+      throw new TypeError("repository mutated the persisted order");
+    }
+    return saved;
+  }
+
   #persistenceFailed(): ExecutionOutcome {
     this.emergencyStop();
     return { status: "persistence-failed", reason: "unknown-order-not-persisted" };
@@ -605,11 +707,17 @@ export class ExecutionCoordinator {
   async #persistUnknown(order: TrackedOrder, at: number): Promise<TrackedOrder | null> {
     let base: TrackedOrder | null;
     try {
-      base = await this.#dependencies.repository.getByClientOrderId(order.clientOrderId);
+      base = await this.#repositoryGet(order.clientOrderId);
     } catch {
       return null;
     }
-    if (base === null || !sameIntent(base.approvedIntent, order.approvedIntent)) return null;
+    if (base === null || !sameOrderIdentity(
+      base,
+      order.deploymentId,
+      order.clientOrderId,
+      order.executionTarget,
+      order.approvedIntent,
+    )) return null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (base.status === "unknown" || base.status !== "submitting") {
@@ -617,15 +725,21 @@ export class ExecutionCoordinator {
       }
       const uncertain = transitionOrder(base, { type: "submit-timeout", at });
       try {
-        return await this.#dependencies.repository.save(uncertain, base.version);
+        return await this.#repositorySave(uncertain, base.version);
       } catch {
         if (attempt === 1) return null;
         try {
-          base = await this.#dependencies.repository.getByClientOrderId(order.clientOrderId);
+          base = await this.#repositoryGet(order.clientOrderId);
         } catch {
           return null;
         }
-        if (base === null || !sameIntent(base.approvedIntent, order.approvedIntent)) return null;
+        if (base === null || !sameOrderIdentity(
+          base,
+          order.deploymentId,
+          order.clientOrderId,
+          order.executionTarget,
+          order.approvedIntent,
+        )) return null;
       }
     }
     return null;

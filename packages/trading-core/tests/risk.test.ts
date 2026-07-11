@@ -22,6 +22,15 @@ function reason(
 }
 
 describe("evaluateOrderRisk", () => {
+  it("rejects market and symbol disagreements across default risk inputs", () => {
+    expect(reason({ instrument: { market: "futures", maximumLeverage: "10" } }))
+      .toBe("instrument-mismatch");
+    expect(reason({ instrument: { symbol: "ETHUSDT" } }))
+      .toBe("instrument-mismatch");
+    expect(reason({ intent: { symbol: "ETHUSDT" } }))
+      .toBe("symbol-mismatch");
+  });
+
   it("returns invalid reasons instead of throwing for malformed runtime objects", () => {
     expect(
       evaluateOrderRisk(policy, null as unknown as RiskContext, intent, instrument),

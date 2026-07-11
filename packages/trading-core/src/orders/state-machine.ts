@@ -13,6 +13,18 @@ const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/u;
 const ID = /^[A-Za-z0-9_.:@/+\-]{1,128}$/u;
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,36}$/u;
 const TERMINAL = new Set(["filled", "cancelled", "rejected", "risk-rejected"]);
+const ORDER_STATUSES = new Set([
+  "proposed", "risk-rejected", "submitting", "acknowledged", "partially-filled",
+  "filled", "cancel-pending", "cancelled", "rejected", "unknown", "reconciled",
+]);
+const ORDER_KEYS = new Set([
+  "deploymentId", "clientOrderId", "executionTarget", "approvedIntent", "status",
+  "createdAt", "updatedAt", "exchangeOrderId", "cancelAttemptedAt",
+  "cumulativeFilledQuantity", "averageFillPrice", "fees", "reason", "version",
+]);
+const INTENT_KEYS = new Set([
+  "symbol", "side", "quantity", "price", "expectedSlippageBps", "reduceOnly",
+]);
 
 function decimal(value: unknown, positive = false): value is string {
   if (typeof value !== "string" || !DECIMAL.test(value)) return false;
@@ -38,6 +50,88 @@ function validateIntent(intent: unknown): asserts intent is ApprovedOrderIntent 
   if (!decimal(value.price, true)) throw new TypeError("invalid price");
   if (!decimal(value.expectedSlippageBps)) throw new TypeError("invalid slippage");
   if (typeof value.reduceOnly !== "boolean") throw new TypeError("invalid reduce-only flag");
+}
+
+/** Validates and snapshots an order crossing an untrusted persistence boundary. */
+export function parseTrackedOrder(value: unknown): TrackedOrder {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("invalid repository order");
+  }
+  const order = value as Record<string, unknown>;
+  if (Object.keys(order).some((key) => !ORDER_KEYS.has(key))) {
+    throw new TypeError("invalid repository order property");
+  }
+  if (!ID.test(order.deploymentId as string)) throw new TypeError("invalid repository deployment id");
+  if (!CLIENT_ID.test(order.clientOrderId as string)) throw new TypeError("invalid repository client order id");
+  if (!isExecutionTarget(order.executionTarget)) throw new TypeError("invalid repository execution target");
+  validateIntent(order.approvedIntent);
+  const intent = order.approvedIntent as unknown as Record<string, unknown>;
+  if (Object.keys(intent).some((key) => !INTENT_KEYS.has(key))) {
+    throw new TypeError("invalid repository order intent property");
+  }
+  if (!ORDER_STATUSES.has(order.status as string)) throw new TypeError("invalid repository order status");
+  if (!timestamp(order.createdAt) || !timestamp(order.updatedAt) ||
+      (order.updatedAt as number) < (order.createdAt as number)) {
+    throw new TypeError("invalid repository order timestamp");
+  }
+  if (!Number.isSafeInteger(order.version) || (order.version as number) < 0) {
+    throw new TypeError("invalid repository order version");
+  }
+  if (order.exchangeOrderId !== undefined && !ID.test(order.exchangeOrderId as string)) {
+    throw new TypeError("invalid repository exchange order id");
+  }
+  if (order.cancelAttemptedAt !== undefined &&
+      (!timestamp(order.cancelAttemptedAt) ||
+       (order.cancelAttemptedAt as number) < (order.createdAt as number) ||
+       (order.cancelAttemptedAt as number) > (order.updatedAt as number))) {
+    throw new TypeError("invalid repository cancellation timestamp");
+  }
+  if (!decimal(order.cumulativeFilledQuantity)) throw new TypeError("invalid repository cumulative fill");
+  if (order.averageFillPrice !== undefined && !decimal(order.averageFillPrice, true)) {
+    throw new TypeError("invalid repository average fill price");
+  }
+  if (order.fees !== undefined && !decimal(order.fees)) throw new TypeError("invalid repository fees");
+  if (order.reason !== undefined && !reason(order.reason)) throw new TypeError("invalid repository reason");
+
+  const cumulative = new ExactDecimal(order.cumulativeFilledQuantity as string);
+  const quantity = new ExactDecimal(intent.quantity as string);
+  if (cumulative.gt(quantity)) throw new TypeError("repository cumulative fill exceeds quantity");
+  if (cumulative.gt(0) && (order.averageFillPrice === undefined || order.fees === undefined)) {
+    throw new TypeError("repository filled order is missing economics");
+  }
+  if (order.status === "partially-filled" && (!cumulative.gt(0) || !cumulative.lt(quantity))) {
+    throw new TypeError("invalid repository partial fill status");
+  }
+  if (order.status === "filled" && !cumulative.eq(quantity)) {
+    throw new TypeError("invalid repository filled status");
+  }
+  if (["proposed", "submitting", "acknowledged", "risk-rejected", "rejected", "unknown"]
+    .includes(order.status as string) && !cumulative.isZero()) {
+    throw new TypeError("invalid repository unfilled status");
+  }
+  if (order.status === "proposed" && order.version !== 0) {
+    throw new TypeError("invalid repository proposal version");
+  }
+  if (order.status !== "proposed" && (order.version as number) === 0) {
+    throw new TypeError("invalid repository transitioned order version");
+  }
+  if (["acknowledged", "partially-filled", "cancel-pending", "cancelled"]
+    .includes(order.status as string) && order.exchangeOrderId === undefined) {
+    throw new TypeError("repository order status requires an exchange order id");
+  }
+  if (order.status === "cancel-pending" && order.cancelAttemptedAt === undefined) {
+    throw new TypeError("invalid repository cancellation claim");
+  }
+  if (["risk-rejected", "rejected", "unknown"].includes(order.status as string) &&
+      order.reason === undefined) {
+    throw new TypeError("invalid repository status reason");
+  }
+
+  return Object.freeze({
+    ...(order as unknown as TrackedOrder),
+    executionTarget: Object.freeze({ ...(order.executionTarget as TrackedOrder["executionTarget"]) }),
+    approvedIntent: Object.freeze({ ...(order.approvedIntent as ApprovedOrderIntent) }),
+  });
 }
 
 export function createTrackedOrder(input: CreateTrackedOrderInput): TrackedOrder {

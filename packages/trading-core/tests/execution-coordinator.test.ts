@@ -71,16 +71,6 @@ const executionContext: ExecutionContext = {
   now: 10_000,
 };
 
-const allowedRisk = {
-  allowed: true as const,
-  normalized: {
-    notional: "100",
-    projectedPositionNotional: "100",
-    projectedTotalExposure: "100",
-    dailyPnl: "0",
-  },
-};
-
 function setup(overrides: Partial<ConstructorParameters<typeof ExecutionCoordinator>[0]> = {}) {
   const repository = new MemoryOrderRepository();
   const normalizer = {
@@ -119,7 +109,7 @@ describe("ExecutionCoordinator", () => {
     expect(outcome.status).toBe("submitted");
     if (outcome.status !== "submitted") throw new Error("expected submission");
     expect(outcome.order).toMatchObject({ status: "acknowledged", exchangeOrderId: "exchange-1" });
-    expect(repository.orders.get(outcome.order.clientOrderId)).toBe(outcome.order);
+    expect(repository.orders.get(outcome.order.clientOrderId)).toEqual(outcome.order);
     expect(normalizer.normalize).toHaveBeenCalledTimes(1);
     expect(exchange.submit).toHaveBeenCalledTimes(1);
     expect(exchange.submit).toHaveBeenCalledWith({
@@ -135,13 +125,12 @@ describe("ExecutionCoordinator", () => {
     [{ market: "futures" as const, mode: "live" as const }, { market: "futures", mode: "live" }],
     [{ market: "futures" as const, mode: "futures-demo" as const }, { market: "futures", mode: "futures-demo" }],
   ])("routes an explicit execution target for %o", async (contextTarget, expectedTarget) => {
-    const { coordinator, exchange } = setup({
-      riskEvaluator: vi.fn(() => allowedRisk),
-    });
+    const { coordinator, exchange } = setup();
     const outcome = await coordinator.propose(signal, {
       ...executionContext,
       ...contextTarget,
-      instrumentRules: { ...instrument, market: "futures" },
+      riskContext: { ...riskContext, market: "futures", leverage: "2" },
+      instrumentRules: { ...instrument, market: "futures", maximumLeverage: "10" },
     });
 
     expect(outcome.status).toBe("submitted");
@@ -168,25 +157,101 @@ describe("ExecutionCoordinator", () => {
     expect(first.status).toBe("submitted");
     expect(second.status).toBe("idempotent");
     if (first.status !== "submitted" || second.status !== "idempotent") throw new Error("unexpected outcome");
-    expect(second.order).toBe(repository.orders.get(first.order.clientOrderId));
+    expect(second.order).toEqual(repository.orders.get(first.order.clientOrderId));
     expect(exchange.submit).toHaveBeenCalledTimes(1);
   });
 
   it("treats the persisted execution target as part of deterministic order identity", async () => {
-    const { coordinator, exchange } = setup({
-      riskEvaluator: vi.fn(() => allowedRisk),
-    });
+    const { coordinator, exchange } = setup();
     const first = await coordinator.propose(signal, executionContext);
     const second = await coordinator.propose(signal, {
       ...executionContext,
       market: "futures",
       mode: "live",
-      instrumentRules: { ...instrument, market: "futures" },
+      riskContext: { ...riskContext, market: "futures", leverage: "2" },
+      instrumentRules: { ...instrument, market: "futures", maximumLeverage: "10" },
     });
 
     expect(first.status).toBe("submitted");
     expect(second).toEqual({ status: "blocked", reason: "client-order-id-collision" });
     expect(exchange.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects inconsistent execution, risk, and instrument markets before normalization", async () => {
+    for (const context of [
+      { ...executionContext, riskContext: { ...riskContext, market: "futures" as const } },
+      { ...executionContext, instrumentRules: { ...instrument, market: "futures" as const, maximumLeverage: "10" } },
+    ]) {
+      const { coordinator, normalizer, exchange } = setup();
+      await expect(coordinator.propose(signal, context)).rejects.toThrow(/market|context/i);
+      expect(normalizer.normalize).not.toHaveBeenCalled();
+      expect(exchange.submit).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects normalized symbols inconsistent with risk and instrument context before persistence", async () => {
+    const { coordinator, repository, exchange } = setup({
+      normalizer: { normalize: vi.fn(async () => ({
+        symbol: "ETHUSDT", side: "buy" as const, quantity: "0.1", price: "1000",
+        expectedSlippageBps: "25", reduceOnly: false,
+      })) },
+    });
+    await expect(coordinator.propose(signal, executionContext)).rejects.toThrow(/symbol|context/i);
+    expect(repository.orders.size).toBe(0);
+    expect(exchange.submit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["client id", (order: TrackedOrder) => ({ ...order, clientOrderId: "mutated" })],
+    ["target", (order: TrackedOrder) => ({ ...order, executionTarget: { market: "futures" as const, mode: "live" as const } })],
+    ["intent", (order: TrackedOrder) => ({ ...order, approvedIntent: { ...order.approvedIntent, quantity: "0.2" } })],
+    ["status", (order: TrackedOrder) => ({ ...order, status: "acknowledged" as const })],
+  ])("never submits a repository-mutated %s returned from save", async (_label, mutate) => {
+    const { coordinator, repository, exchange } = setup();
+    vi.spyOn(repository, "save").mockImplementation(async (order) => {
+      if (order.status === "submitting") return mutate(order);
+      repository.orders.set(order.clientOrderId, order);
+      return order;
+    });
+
+    await expect(coordinator.propose(signal, executionContext)).rejects.toThrow(/repository|persisted|order/i);
+    expect(exchange.submit).not.toHaveBeenCalled();
+  });
+
+  it("never submits a mutated order returned by an atomic claim", async () => {
+    const { coordinator, repository, exchange } = setup();
+    vi.spyOn(repository, "claim").mockImplementation(async (order) => ({
+      claimed: true,
+      order: { ...order, version: -1 },
+    }));
+
+    await expect(coordinator.propose(signal, executionContext)).rejects.toThrow(/repository|order|version/i);
+    expect(exchange.submit).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a target mutation while reloading an ambiguous submission", async () => {
+    const exchange = {
+      submit: vi.fn(async () => { throw new Error("timeout after send"); }),
+      cancel: vi.fn(),
+      findByClientOrderId: vi.fn(),
+    };
+    const { coordinator, repository } = setup({ exchange });
+    const originalGet = repository.getByClientOrderId.bind(repository);
+    vi.spyOn(repository, "getByClientOrderId").mockImplementation(async (clientOrderId) => {
+      const order = await originalGet(clientOrderId);
+      if (order?.status === "submitting") {
+        return { ...order, executionTarget: { market: "futures", mode: "live" } };
+      }
+      return order;
+    });
+
+    const outcome = await coordinator.propose(signal, executionContext);
+    expect(outcome).toEqual({
+      status: "persistence-failed",
+      reason: "unknown-order-not-persisted",
+    });
+    expect(coordinator.stopped).toBe(true);
+    expect(exchange.submit).toHaveBeenCalledOnce();
   });
 
   it("serializes concurrent duplicate signals so only one submit occurs", async () => {
@@ -270,7 +335,7 @@ describe("ExecutionCoordinator", () => {
       clientOrderId: "other",
       executionTarget: { market: "spot", mode: "live" },
       approvedIntent: { symbol: "BTCUSDT", side: "buy", quantity: "0.1", price: "1000", expectedSlippageBps: "25", reduceOnly: false },
-      status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", version: 0,
+      status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", reason: "submit-timeout", version: 1,
     });
     expect((await conflict.coordinator.propose(signal, executionContext)).status).toBe("blocked");
     expect(conflict.exchange.submit).not.toHaveBeenCalled();
@@ -306,7 +371,7 @@ describe("ExecutionCoordinator", () => {
       clientOrderId: "other",
       executionTarget: { market: "spot", mode: "live" },
       approvedIntent: { symbol: "BTCUSDT", side: "buy", quantity: "0.1", price: "1000", expectedSlippageBps: "25", reduceOnly: false },
-      status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", version: 0,
+      status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", reason: "submit-timeout", version: 1,
     });
     expect(await conflict.coordinator.propose(signal, executionContext)).toEqual({
       status: "blocked",
