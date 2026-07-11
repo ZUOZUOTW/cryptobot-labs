@@ -432,6 +432,47 @@ describe("WeexPrivateClient", () => {
     expect(revokedTransport.requests).toHaveLength(beforeSubmit);
   });
 
+  it("rechecks account authorization after deferred rules and before POST", async () => {
+    let now = 1_700_000_000_000;
+    let releaseRules!: (snapshot: { rules: InstrumentRules; verifiedAt: number }) => void;
+    let markRulesStarted!: () => void;
+    const rulesStarted = new Promise<void>((resolve) => { markRulesStarted = resolve; });
+    const deferredRules = new Promise<{ rules: InstrumentRules; verifiedAt: number }>((resolve) => { releaseRules = resolve; });
+    const ttlTransport = new ScriptedTransport([verifiedSpotAccount]);
+    const ttlClient = new WeexPrivateClient({
+      transport: ttlTransport, credentials, clock, now: () => now,
+      rulesProvider: async () => { markRulesStarted(); return await deferredRules; },
+    });
+    await ttlClient.verifyAccount({ market: "spot", mode: "live" });
+    const ttlSubmit = ttlClient.submitOrder(request);
+    await rulesStarted;
+    now += 5 * 60_000 + 1;
+    releaseRules({ rules, verifiedAt: now });
+    await expect(ttlSubmit).rejects.toMatchObject({ category: "validation" });
+    expect(ttlTransport.requests.filter(({ method }) => method === "POST")).toHaveLength(0);
+
+    let releaseConcurrentRules!: (snapshot: { rules: InstrumentRules; verifiedAt: number }) => void;
+    let markConcurrentStarted!: () => void;
+    const concurrentStarted = new Promise<void>((resolve) => { markConcurrentStarted = resolve; });
+    const concurrentRules = new Promise<{ rules: InstrumentRules; verifiedAt: number }>((resolve) => { releaseConcurrentRules = resolve; });
+    const concurrentTransport = new ScriptedTransport([
+      verifiedSpotAccount,
+      new WeexApiError("revoked", { category: "authentication", retryable: false }),
+    ]);
+    const concurrentClient = new WeexPrivateClient({
+      transport: concurrentTransport, credentials, clock,
+      rulesProvider: async () => { markConcurrentStarted(); return await concurrentRules; },
+    });
+    await concurrentClient.verifyAccount({ market: "spot", mode: "live" });
+    const concurrentSubmit = concurrentClient.submitOrder(request);
+    await concurrentStarted;
+    await expect(concurrentClient.verifyAccount({ market: "spot", mode: "live" }))
+      .rejects.toMatchObject({ category: "authentication" });
+    releaseConcurrentRules({ rules, verifiedAt: 1_700_000_000_000 });
+    await expect(concurrentSubmit).rejects.toMatchObject({ category: "validation" });
+    expect(concurrentTransport.requests.filter(({ method }) => method === "POST")).toHaveLength(0);
+  });
+
   it("coalesces identical concurrent client ids and rejects a different identity before dispatch", async () => {
     let release!: (response: HttpResponse) => void;
     const pending = new Promise<HttpResponse>((resolve) => { release = resolve; });

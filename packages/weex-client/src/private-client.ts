@@ -110,6 +110,11 @@ interface Route {
   readonly path: string;
 }
 
+interface AuthorizationSnapshot {
+  readonly target: ExecutionTarget;
+  readonly generation: number;
+}
+
 function validation(message: string): WeexApiError {
   return new WeexApiError(message, { category: "validation", retryable: false });
 }
@@ -292,12 +297,15 @@ export class WeexPrivateClient {
     promise?: Promise<SubmitOutcome>;
     outcome?: SubmitOutcome;
   }>();
-  #verifiedSpotLive: { readonly verifiedAt: number } | undefined;
+  #spotVerificationGeneration = 0;
+  #futuresVerificationGeneration = 0;
+  #verifiedSpotLive: { readonly verifiedAt: number; readonly generation: number } | undefined;
   #verifiedFuturesLive: {
     readonly canTrade: boolean;
     readonly canWithdraw: boolean;
     readonly dualSidePosition: boolean;
     readonly verifiedAt: number;
+    readonly generation: number;
   } | undefined;
 
   constructor(options: WeexPrivateClientOptions) {
@@ -323,6 +331,7 @@ export class WeexPrivateClient {
     route: Route,
     queryEntries: readonly QueryEntry[] = [],
     bodyValue?: unknown,
+    preDispatch?: () => void,
   ): Promise<HttpResponse> {
     const query = canonicalQuery(queryEntries);
     const body = bodyValue === undefined ? "" : canonicalJson(bodyValue);
@@ -334,6 +343,7 @@ export class WeexPrivateClient {
     return this.#credentials.use(async ({ apiKey, secretKey, passphrase }) => {
       const payload = buildSignaturePayload({ timestamp, method, requestPath: route.path, query, body });
       const signature = await signWeexRequest(payload, secretKey);
+      preDispatch?.();
       try {
         const response = await this.#transport.send({
           method,
@@ -369,7 +379,42 @@ export class WeexPrivateClient {
     throw new Error("unreachable");
   }
 
-  async #validateOrder(request: ExchangeSubmitRequest): Promise<ExpectedOrderIdentity> {
+  #authorizationSnapshot(target: ExecutionTarget): AuthorizationSnapshot | undefined {
+    const now = this.#now();
+    if (!Number.isSafeInteger(now)) throw validation("Invalid authorization time");
+    if (target.market === "spot") {
+      const verified = this.#verifiedSpotLive;
+      if (!verified || now < verified.verifiedAt || now - verified.verifiedAt > MAX_RULES_AGE_MS) {
+        throw validation("Fresh verified spot trading permission is required");
+      }
+      return { target, generation: verified.generation };
+    }
+    if (target.mode === "live") {
+      const verified = this.#verifiedFuturesLive;
+      if (!verified || !verified.canTrade || verified.canWithdraw || !verified.dualSidePosition ||
+          now < verified.verifiedAt || now - verified.verifiedAt > MAX_RULES_AGE_MS) {
+        throw validation("Verified futures hedge-mode trading permission is required");
+      }
+      return { target, generation: verified.generation };
+    }
+    return undefined;
+  }
+
+  #assertAuthorization(snapshot: AuthorizationSnapshot | undefined): void {
+    if (!snapshot) return;
+    const current = this.#authorizationSnapshot(snapshot.target);
+    if (!current || current.generation !== snapshot.generation ||
+        (snapshot.target.market === "spot"
+          ? this.#spotVerificationGeneration !== snapshot.generation
+          : this.#futuresVerificationGeneration !== snapshot.generation)) {
+      throw validation("Account verification changed during order preflight");
+    }
+  }
+
+  async #validateOrder(request: ExchangeSubmitRequest): Promise<{
+    readonly identity: ExpectedOrderIdentity;
+    readonly authorization: AuthorizationSnapshot | undefined;
+  }> {
     assertTarget(request?.target);
     if (!(request.target.market === "futures"
       ? isFuturesClientOrderId(request.clientOrderId)
@@ -384,22 +429,7 @@ export class WeexPrivateClient {
         ((intent.side === "sell" && !intent.reduceOnly) || (intent.side === "buy" && intent.reduceOnly))) {
       throw validation("Unsafe spot order direction");
     }
-    if (request.target.market === "spot") {
-      const verified = this.#verifiedSpotLive;
-      const now = this.#now();
-      if (!verified || !Number.isSafeInteger(now) || now < verified.verifiedAt ||
-          now - verified.verifiedAt > MAX_RULES_AGE_MS) {
-        throw validation("Fresh verified spot trading permission is required");
-      }
-    }
-    if (request.target.market === "futures" && request.target.mode === "live") {
-      const verified = this.#verifiedFuturesLive;
-      const now = this.#now();
-      if (!verified || !verified.canTrade || verified.canWithdraw || !verified.dualSidePosition ||
-          !Number.isSafeInteger(now) || now < verified.verifiedAt || now - verified.verifiedAt > MAX_RULES_AGE_MS) {
-        throw validation("Verified futures hedge-mode trading permission is required");
-      }
-    }
+    const authorization = this.#authorizationSnapshot(request.target);
     if (!this.#rulesProvider) throw validation("Current instrument rules are required before order submission");
     {
       const snapshot = await this.#rulesProvider(request.target, intent.symbol);
@@ -415,13 +445,17 @@ export class WeexPrivateClient {
         throw validation("Order violates current instrument precision or minimums");
       }
     }
+    this.#assertAuthorization(authorization);
     return {
-      clientOrderId: request.clientOrderId,
-      symbol: intent.symbol,
-      side: intent.side,
-      quantity: intent.quantity,
-      price: intent.price,
-      reduceOnly: intent.reduceOnly,
+      authorization,
+      identity: {
+        clientOrderId: request.clientOrderId,
+        symbol: intent.symbol,
+        side: intent.side,
+        quantity: intent.quantity,
+        price: intent.price,
+        reduceOnly: intent.reduceOnly,
+      },
     };
   }
 
@@ -461,8 +495,15 @@ export class WeexPrivateClient {
 
   async verifyAccount(target: ExecutionTarget): Promise<VerifiedAccountSummary> {
     assertTarget(target);
-    if (target.market === "spot") this.#verifiedSpotLive = undefined;
+    let verificationGeneration: number | undefined;
+    if (target.market === "spot") {
+      this.#spotVerificationGeneration += 1;
+      verificationGeneration = this.#spotVerificationGeneration;
+      this.#verifiedSpotLive = undefined;
+    }
     if (target.market === "futures" && target.mode === "live") {
+      this.#futuresVerificationGeneration += 1;
+      verificationGeneration = this.#futuresVerificationGeneration;
       this.#verifiedFuturesLive = undefined;
     }
     const response = await this.#safeGet(accountRoute(target));
@@ -470,22 +511,28 @@ export class WeexPrivateClient {
       ? await this.#safeGet(FUTURES_ACCOUNT_CONFIG)
       : undefined;
     const summary = parseAccount(response.body, target, Math.floor(this.#now()), configResponse?.body);
-    if (target.market === "spot" && summary.canTrade === true && summary.withdrawalPermission === "absent") {
-      this.#verifiedSpotLive = { verifiedAt: summary.verifiedAt };
+    if (target.market === "spot" && verificationGeneration === this.#spotVerificationGeneration &&
+        summary.canTrade === true && summary.withdrawalPermission === "absent") {
+      this.#verifiedSpotLive = {
+        verifiedAt: summary.verifiedAt,
+        generation: verificationGeneration,
+      };
     }
-    if (target.market === "futures" && target.mode === "live") {
+    if (target.market === "futures" && target.mode === "live" &&
+        verificationGeneration === this.#futuresVerificationGeneration) {
       this.#verifiedFuturesLive = {
         canTrade: summary.canTrade === true,
         canWithdraw: summary.withdrawalPermission === "present",
         dualSidePosition: summary.positionMode === "hedge",
         verifiedAt: summary.verifiedAt,
+        generation: verificationGeneration,
       };
     }
     return summary;
   }
 
   async submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome> {
-    const identity = await this.#validateOrder(request);
+    const { identity, authorization } = await this.#validateOrder(request);
     const { intent, target, clientOrderId } = request;
     const body = {
       symbol: intent.symbol,
@@ -504,7 +551,7 @@ export class WeexPrivateClient {
     const identityKey = `${target.market}:${target.mode}:${clientOrderId}`;
     const claimed = this.#claimSubmission(identityKey, identity);
     if ("existing" in claimed) return await claimed.existing;
-    const submission = this.#performSubmit(target, clientOrderId, body, identityKey, identity);
+    const submission = this.#performSubmit(target, clientOrderId, body, identityKey, identity, authorization);
     claimed.claim.promise = submission;
     try {
       const outcome = await submission;
@@ -524,11 +571,18 @@ export class WeexPrivateClient {
     body: Readonly<Record<string, unknown>>,
     identityKey: string,
     identity: ExpectedOrderIdentity,
+    authorization: AuthorizationSnapshot | undefined,
   ): Promise<SubmitOutcome> {
     this.#rememberIdentity(identityKey, identity);
     let responseReceived = false;
     try {
-      const response = await this.#signedRequest("POST", orderRoute(target), [], body);
+      const response = await this.#signedRequest(
+        "POST",
+        orderRoute(target),
+        [],
+        body,
+        () => this.#assertAuthorization(authorization),
+      );
       responseReceived = true;
       const parsed = parseAcknowledgedOrder(response.body, clientOrderId);
       if (typeof parsed === "string") {
