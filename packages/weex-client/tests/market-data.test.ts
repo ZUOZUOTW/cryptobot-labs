@@ -1,0 +1,101 @@
+import { describe, expect, it } from "vitest";
+
+import type { HttpRequest, HttpResponse, HttpTransport } from "../src/transport";
+import { WeexPublicClient, validateCandleDataset } from "../src/market-data";
+
+class RecordingTransport implements HttpTransport {
+  readonly requests: HttpRequest[] = [];
+  constructor(private readonly responses: HttpResponse[]) {}
+  async send(request: HttpRequest): Promise<HttpResponse> {
+    this.requests.push(request);
+    const response = this.responses.shift();
+    if (!response) throw new Error("Unexpected request");
+    return response;
+  }
+}
+
+const ok = (data: unknown): HttpResponse => ({ status: 200, headers: {}, body: { code: "00000", msg: "success", data } });
+
+describe("WeexPublicClient", () => {
+  it("uses only documented symbol and interval query parameters for spot candles", async () => {
+    const transport = new RecordingTransport([ok([[0, "1", "2", "0.5", "1.5", "10"]])]);
+    const client = new WeexPublicClient(transport, () => 30_000);
+    const candles = await client.fetchCandles({
+      market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 60_000, limit: 50,
+    });
+    expect(transport.requests[0]?.url).toBe("https://api-spot.weex.com/api/v3/market/klines?symbol=BTCUSDT&interval=1m");
+    expect(candles[0]).toMatchObject({ openTime: 0, closeTime: 59_999, open: "1", close: "1.5" });
+  });
+
+  it("uses documented futures history parameters and rejects invalid limits", async () => {
+    const transport = new RecordingTransport([ok([[60_000, "2", "3", "1", "2.5", "20"]])]);
+    const client = new WeexPublicClient(transport, () => 200_000);
+    await client.fetchCandles({ market: "futures", symbol: "cmt_btcusdt", interval: "1m", startTime: 60_000, endTime: 120_000, limit: 100 });
+    expect(transport.requests[0]?.url).toBe("https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=cmt_btcusdt&interval=1m&startTime=60000&endTime=120000&limit=100");
+    await expect(client.fetchCandles({ market: "futures", symbol: "x", interval: "1m", limit: 101 }))
+      .rejects.toMatchObject({ category: "validation" });
+  });
+
+  it("normalizes reversed futures pages, deduplicates, excludes incomplete candles, and reports provenance", async () => {
+    const transport = new RecordingTransport([
+      ok([
+        [120_000, "3", "4", "2", "3.5", "30"],
+        [60_000, "2", "3", "1", "2.5", "20"],
+        [0, "1", "2", "0.5", "1.5", "10"],
+      ]),
+      ok([
+        [180_000, "4", "5", "3", "4.5", "40"],
+        [120_000, "3", "4", "2", "3.5", "30"],
+      ]),
+    ]);
+    const dataset = await new WeexPublicClient(transport, () => 210_000).collectHistoricalCandles({
+      market: "futures", symbol: "cmt_btcusdt", interval: "1m", startTime: 0, endTime: 240_000, limit: 3,
+    });
+    expect(dataset.candles.map((candle) => candle.openTime)).toEqual([0, 60_000, 120_000]);
+    expect(dataset.validation).toMatchObject({ duplicates: [120_000], gaps: [], incompleteCount: 1 });
+    expect(dataset.provenance).toMatchObject({ source: "weex-public-api", endpoint: "/capi/v3/market/historyKlines", paginated: true });
+    expect(dataset.complete).toBe(false);
+  });
+
+  it("truthfully marks spot single-response coverage incomplete when the range cannot be proven", async () => {
+    const transport = new RecordingTransport([ok([[60_000, "1", "2", "0.5", "1.5", "10"]])]);
+    const dataset = await new WeexPublicClient(transport, () => 200_000).collectHistoricalCandles({
+      market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 120_000,
+    });
+    expect(transport.requests).toHaveLength(1);
+    expect(dataset.complete).toBe(false);
+    expect(dataset.provenance).toMatchObject({ singleResponse: true, paginated: false });
+  });
+
+  it("gets strict spot and futures instrument rules without coercing decimals", async () => {
+    const transport = new RecordingTransport([
+      ok({ symbols: [{ symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", pricePrecision: "0.01", quantityPrecision: "0.0001", minQuantity: "0.0001", minNotional: "5" }] }),
+      ok({ symbols: [{ symbol: "cmt_btcusdt", baseAsset: "BTC", quoteAsset: "USDT", pricePrecision: "0.1", quantityPrecision: "0.001", minQuantity: "0.001", minNotional: "5", maxLeverage: "125" }] }),
+    ]);
+    const client = new WeexPublicClient(transport);
+    await expect(client.getInstrumentRules("spot", "BTCUSDT")).resolves.toMatchObject({ tickSize: "0.01", stepSize: "0.0001" });
+    await expect(client.getInstrumentRules("futures", "cmt_btcusdt")).resolves.toMatchObject({ maximumLeverage: "125" });
+    expect(transport.requests.map(({ url }) => url)).toEqual([
+      "https://api-spot.weex.com/api/v3/exchangeInfo",
+      "https://api-contract.weex.com/capi/v3/market/exchangeInfo",
+    ]);
+  });
+});
+
+describe("validateCandleDataset", () => {
+  it("reports duplicates, ordering, gaps, and incomplete rows without interpolation", () => {
+    const report = validateCandleDataset([
+      { openTime: 60_000, closeTime: 119_999, open: "1", high: "1", low: "1", close: "1", volume: "1", complete: true },
+      { openTime: 0, closeTime: 59_999, open: "1", high: "1", low: "1", close: "1", volume: "1", complete: true },
+      { openTime: 60_000, closeTime: 119_999, open: "1", high: "1", low: "1", close: "1", volume: "1", complete: false },
+      { openTime: 180_000, closeTime: 239_999, open: "1", high: "1", low: "1", close: "1", volume: "1", complete: true },
+    ], 60_000);
+    expect(report).toEqual({ duplicates: [60_000], ordered: false, gaps: [{ from: 120_000, to: 179_999 }], incompleteCount: 1 });
+  });
+
+  it("rejects malformed decimal and OHLC rows", async () => {
+    const transport = new RecordingTransport([ok([[0, "NaN", "2", "0.5", "1.5", "10"]])]);
+    await expect(new WeexPublicClient(transport).fetchCandles({ market: "spot", symbol: "BTCUSDT", interval: "1m" }))
+      .rejects.toMatchObject({ category: "schema" });
+  });
+});

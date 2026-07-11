@@ -9,5 +9,8 @@
   "scripts": {
     "test": "vitest run tests",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cryptobot-labs/trading-core": "workspace:*"
   }
 }
