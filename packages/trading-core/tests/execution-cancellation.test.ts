@@ -188,6 +188,37 @@ describe("ExecutionCoordinator cancellation", () => {
     }
   });
 
+  it("reasserts cancel-pending after a concurrent fill when cancellation becomes ambiguous", async () => {
+    for (const outcome of ["throw", "unknown", "malformed"] as const) {
+      const repository = new MemoryOrderRepository();
+      repository.orders.set("ack", orderAt("ack", "acknowledged"));
+      const cancel = vi.fn(async () => {
+        const pending = repository.orders.get("ack");
+        if (pending === undefined) throw new Error("missing pending order");
+        repository.orders.set("ack", transitionOrder(pending, {
+          type: "fill-snapshot",
+          cumulativeFilledQuantity: "1",
+          averageFillPrice: "1001",
+          fees: "0.1",
+          at: 11,
+        }));
+        if (outcome === "throw") throw new Error("timeout after send");
+        if (outcome === "unknown") return { status: "unknown" as const, reason: "timeout" };
+        return { status: "cancelled" as const, surprise: true };
+      });
+      const { coordinator } = setup(repository, cancel);
+
+      const first = await coordinator.cancelOpenOrders("deployment-1", 10);
+      const second = await coordinator.cancelOpenOrders("deployment-1", 12);
+
+      expect(first.unresolved).toBe(1);
+      expect(second.skipped).toBe(1);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(repository.orders.get("ack")?.status).toBe("cancel-pending");
+      expect(repository.orders.get("ack")?.cumulativeFilledQuantity).toBe("1");
+    }
+  });
+
   it("maps a rejection back to the legal pre-cancel state", async () => {
     const cancel = vi.fn(async () => ({ status: "rejected" as const, reason: "already closed" }));
     const { coordinator, repository } = setup(new MemoryOrderRepository(), cancel);

@@ -182,17 +182,20 @@ export class ExecutionCoordinator {
       try {
         const candidateOutcome = await this.#dependencies.exchange.cancel(query);
         if (!isCancelOutcome(candidateOutcome)) {
+          await this.#preserveCancelPending(pending, now);
           result.unresolved += 1;
           continue;
         }
         outcome = candidateOutcome;
       } catch {
         // The request may have reached the exchange. Keep cancel-pending and never retry.
+        await this.#preserveCancelPending(pending, now);
         result.unresolved += 1;
         continue;
       }
 
       if (outcome.status === "unknown") {
+        await this.#preserveCancelPending(pending, now);
         result.unresolved += 1;
         continue;
       }
@@ -508,6 +511,46 @@ export class ExecutionCoordinator {
             base.clientOrderId,
           );
           if (winner === null || !sameTrackedOrder(winner, base)) return null;
+          base = winner;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  async #preserveCancelPending(
+    pending: TrackedOrder,
+    at: number,
+  ): Promise<TrackedOrder | null> {
+    let base: TrackedOrder | null;
+    try {
+      base = await this.#dependencies.repository.getByClientOrderId(
+        pending.clientOrderId,
+      );
+    } catch {
+      return null;
+    }
+    if (base === null || !sameTrackedOrder(base, pending)) return null;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (base.status === "cancel-pending") return base;
+      if (base.status !== "acknowledged" && base.status !== "partially-filled") {
+        return base;
+      }
+      const restored = transitionOrder(base, {
+        type: "cancel-request",
+        at: Math.max(at, base.updatedAt),
+      });
+      try {
+        return await this.#dependencies.repository.save(restored, base.version);
+      } catch {
+        try {
+          const winner = await this.#dependencies.repository.getByClientOrderId(
+            pending.clientOrderId,
+          );
+          if (winner === null || !sameTrackedOrder(winner, pending)) return null;
           base = winner;
         } catch {
           return null;
