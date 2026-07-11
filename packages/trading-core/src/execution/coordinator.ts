@@ -2,10 +2,14 @@ import type { ExecutionMode, StrategySignal } from "../contracts";
 import {
   createTrackedOrder,
   deriveClientOrderId,
+  executionTargetFor,
+  isExecutionTarget,
+  sameExecutionTarget,
   transitionOrder,
   type ApprovedOrderIntent,
   type CancelOutcome,
-  type OrderQuery,
+  type ExchangeOrderQuery,
+  type ExecutionTarget,
   type SubmitOutcome,
   type TrackedOrder,
 } from "../orders";
@@ -68,7 +72,17 @@ function sameTrackedOrder(left: TrackedOrder, right: TrackedOrder): boolean {
   return left.deploymentId === right.deploymentId &&
     left.clientOrderId === right.clientOrderId &&
     left.exchangeOrderId === right.exchangeOrderId &&
+    sameExecutionTarget(left.executionTarget, right.executionTarget) &&
     sameIntent(left.approvedIntent, right.approvedIntent);
+}
+
+function sameOrderIdentity(
+  order: TrackedOrder,
+  target: ExecutionTarget,
+  intent: ApprovedOrderIntent,
+): boolean {
+  return sameExecutionTarget(order.executionTarget, target) &&
+    sameIntent(order.approvedIntent, intent);
 }
 
 class BreakerSettlement {
@@ -160,6 +174,10 @@ export class ExecutionCoordinator {
         result.skipped += 1;
         continue;
       }
+      if (!isExecutionTarget(candidate.executionTarget)) {
+        result.unresolved += 1;
+        continue;
+      }
       const claim = await this.#claimCancellation(candidate, now);
       if (claim.status === "skipped") {
         result.skipped += 1;
@@ -171,7 +189,13 @@ export class ExecutionCoordinator {
       }
 
       const pending = claim.order;
-      const query: OrderQuery = {
+      if (!isExecutionTarget(pending.executionTarget) ||
+          !sameExecutionTarget(pending.executionTarget, candidate.executionTarget)) {
+        result.unresolved += 1;
+        continue;
+      }
+      const query: ExchangeOrderQuery = {
+        target: pending.executionTarget,
         symbol: pending.approvedIntent.symbol,
         clientOrderId: pending.clientOrderId,
         ...(pending.exchangeOrderId === undefined
@@ -219,6 +243,8 @@ export class ExecutionCoordinator {
   ): Promise<ExecutionOutcome> {
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
     const signal = parseSignal(candidateSignal);
+    const executionTarget = executionTargetFor(context.market, context.mode);
+    if (executionTarget === null) throw new TypeError("invalid execution target");
     if (this.#pending >= MAX_PENDING) return { status: "blocked", reason: "queue-full" };
     this.#pending += 1;
 
@@ -237,7 +263,7 @@ export class ExecutionCoordinator {
       const existing = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       if (existing !== null) {
-        if (!sameIntent(existing.approvedIntent, intent)) {
+        if (!sameOrderIdentity(existing, executionTarget, intent)) {
           return { status: "blocked", reason: "client-order-id-collision" };
         }
         if (existing.status !== "proposed") return { status: "idempotent", order: existing };
@@ -251,13 +277,14 @@ export class ExecutionCoordinator {
         const order = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
         if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
         if (order === null) throw new Error("completed proposal was not persisted");
-        return sameIntent(order.approvedIntent, intent)
+        return sameOrderIdentity(order, executionTarget, intent)
           ? { status: "idempotent", order }
           : { status: "blocked", reason: "client-order-id-collision" };
       }
 
       const work = this.#execute(
         context,
+        executionTarget,
         clientOrderId,
         intent,
         existing?.status === "proposed" ? existing : null,
@@ -275,6 +302,7 @@ export class ExecutionCoordinator {
 
   async #execute(
     context: ExecutionContext,
+    executionTarget: ExecutionTarget,
     clientOrderId: string,
     intent: ApprovedOrderIntent,
     existingProposal: TrackedOrder | null,
@@ -296,6 +324,7 @@ export class ExecutionCoordinator {
       const proposal = createTrackedOrder({
         deploymentId: context.deploymentId,
         clientOrderId,
+        executionTarget,
         approvedIntent: intent,
         at: context.now,
       });
@@ -311,7 +340,7 @@ export class ExecutionCoordinator {
         if (claim.reason === "active-order-conflict") {
           return { status: "blocked", reason: "active-order-conflict" };
         }
-        if (!sameIntent(claim.order.approvedIntent, intent)) {
+        if (!sameOrderIdentity(claim.order, executionTarget, intent)) {
           return { status: "blocked", reason: "client-order-id-collision" };
         }
         if (claim.order.status !== "proposed") {
@@ -361,7 +390,7 @@ export class ExecutionCoordinator {
         if (
           winner !== null &&
           winner.status !== "proposed" &&
-          sameIntent(winner.approvedIntent, intent)
+          sameOrderIdentity(winner, executionTarget, intent)
         ) {
           settlement.success();
           return { status: "idempotent", order: winner };
@@ -376,7 +405,14 @@ export class ExecutionCoordinator {
     }
 
     try {
-      const submitResult = await this.#dependencies.exchange.submit(order.approvedIntent);
+      if (!sameExecutionTarget(order.executionTarget, executionTarget)) {
+        throw new TypeError("invalid persisted execution target");
+      }
+      const submitResult = await this.#dependencies.exchange.submit({
+        target: order.executionTarget,
+        clientOrderId: order.clientOrderId,
+        intent: order.approvedIntent,
+      });
       if (!isSubmitOutcome(submitResult)) throw new TypeError("malformed submit outcome");
 
       const failureCategory = submitResult.status === "unknown"

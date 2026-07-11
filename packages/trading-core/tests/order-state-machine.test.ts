@@ -16,6 +16,7 @@ function proposed(): TrackedOrder {
   return createTrackedOrder({
     deploymentId: "deploy-1",
     clientOrderId: "cb_order_1",
+    executionTarget: { market: "spot", mode: "live" },
     approvedIntent: intent,
     at: 100,
   });
@@ -177,6 +178,18 @@ describe("order state machine", () => {
     expect(() => transitionOrder(proposed(), { type: "submit-start", at: 99 })).toThrow(/time/i);
     expect(() => createTrackedOrder({
       deploymentId: "d", clientOrderId: "c", approvedIntent: { ...intent, quantity: "1e3" }, at: 1,
+      executionTarget: { market: "spot", mode: "live" },
     })).toThrow();
+  });
+
+  it("persists and validates the immutable execution target", () => {
+    expect(proposed().executionTarget).toEqual({ market: "spot", mode: "live" });
+    expect(() => createTrackedOrder({
+      deploymentId: "d",
+      clientOrderId: "c",
+      executionTarget: { market: "spot", mode: "futures-demo" } as never,
+      approvedIntent: intent,
+      at: 1,
+    })).toThrow(/execution target/i);
   });
 });

@@ -41,6 +41,7 @@ function orderAt(
   let order = createTrackedOrder({
     deploymentId: "deployment-1",
     clientOrderId,
+    executionTarget: { market: "futures", mode: "futures-demo" },
     approvedIntent: {
       symbol: "BTCUSDT",
       side: "buy",
@@ -113,9 +114,43 @@ describe("ExecutionCoordinator cancellation", () => {
 
     expect(result).toMatchObject({ cancelled: 2, rejected: 0, unresolved: 0, skipped: 0 });
     expect(exchange.cancel).toHaveBeenCalledTimes(2);
+    expect(exchange.cancel).toHaveBeenCalledWith(expect.objectContaining({
+      target: { market: "futures", mode: "futures-demo" },
+      clientOrderId: "ack",
+    }));
     expect(repository.orders.get("ack")?.status).toBe("cancelled");
     expect(repository.orders.get("partial")?.status).toBe("cancelled");
     expect(exchange.submit).not.toHaveBeenCalled();
+  });
+
+  it("routes cancellation from the durable target after a coordinator restart", async () => {
+    const repository = new MemoryOrderRepository();
+    repository.orders.set("ack", orderAt("ack", "acknowledged"));
+
+    const restarted = setup(repository);
+    const result = await restarted.coordinator.cancelOpenOrders("deployment-1", 10);
+
+    expect(result.cancelled).toBe(1);
+    expect(restarted.exchange.cancel).toHaveBeenCalledWith({
+      target: { market: "futures", mode: "futures-demo" },
+      symbol: "BTCUSDT",
+      clientOrderId: "ack",
+      exchangeOrderId: "exchange-ack",
+    });
+  });
+
+  it("does not call the exchange for an invalid persisted execution target", async () => {
+    const { coordinator, repository, exchange } = setup();
+    repository.orders.set("ack", {
+      ...orderAt("ack", "acknowledged"),
+      executionTarget: undefined,
+    } as unknown as TrackedOrder);
+
+    await expect(coordinator.cancelOpenOrders("deployment-1", 10)).resolves.toMatchObject({
+      cancelled: 0,
+      unresolved: 1,
+    });
+    expect(exchange.cancel).not.toHaveBeenCalled();
   });
 
   it("skips cancel-pending, unknown, and terminal orders without exchange side effects", async () => {
@@ -126,6 +161,7 @@ describe("ExecutionCoordinator cancellation", () => {
     const proposed = createTrackedOrder({
       deploymentId: "deployment-1",
       clientOrderId: "proposed",
+      executionTarget: { market: "spot", mode: "live" },
       approvedIntent: {
         symbol: "BTCUSDT", side: "buy", quantity: "2", price: "1000",
         expectedSlippageBps: "25", reduceOnly: false,

@@ -1,4 +1,5 @@
 import type { OrderIntent } from "../risk/types";
+import type { ExecutionTarget } from "./execution-target";
 
 export type OrderStatus =
   | "proposed"
@@ -18,6 +19,7 @@ export type ApprovedOrderIntent = Readonly<OrderIntent>;
 export interface TrackedOrder {
   readonly deploymentId: string;
   readonly clientOrderId: string;
+  readonly executionTarget: ExecutionTarget;
   readonly approvedIntent: ApprovedOrderIntent;
   readonly status: OrderStatus;
   readonly createdAt: number;
@@ -52,6 +54,7 @@ export type OrderEvent =
 export interface CreateTrackedOrderInput {
   readonly deploymentId: string;
   readonly clientOrderId: string;
+  readonly executionTarget: ExecutionTarget;
   readonly approvedIntent: ApprovedOrderIntent;
   readonly at: number;
 }

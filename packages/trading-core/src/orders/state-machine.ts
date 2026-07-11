@@ -6,6 +6,7 @@ import type {
   OrderEvent,
   TrackedOrder,
 } from "./types";
+import { isExecutionTarget } from "./execution-target";
 
 const ExactDecimal = Decimal.clone({ precision: 96 });
 const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/u;
@@ -43,12 +44,15 @@ export function createTrackedOrder(input: CreateTrackedOrderInput): TrackedOrder
   if (typeof input !== "object" || input === null) throw new TypeError("invalid tracked order input");
   if (!ID.test(input.deploymentId)) throw new TypeError("invalid deployment id");
   if (!CLIENT_ID.test(input.clientOrderId)) throw new TypeError("invalid client order id");
+  if (!isExecutionTarget(input.executionTarget)) throw new TypeError("invalid execution target");
   if (!timestamp(input.at)) throw new TypeError("invalid timestamp");
   validateIntent(input.approvedIntent);
   const approvedIntent = Object.freeze({ ...input.approvedIntent });
+  const executionTarget = Object.freeze({ ...input.executionTarget });
   return Object.freeze({
     deploymentId: input.deploymentId,
     clientOrderId: input.clientOrderId,
+    executionTarget,
     approvedIntent,
     status: "proposed",
     createdAt: input.at,

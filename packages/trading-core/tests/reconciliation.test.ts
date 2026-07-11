@@ -16,6 +16,7 @@ const approvedIntent: ApprovedOrderIntent = {
 function unknown() {
   const proposed = createTrackedOrder({
     deploymentId: "deployment", clientOrderId: "client-1", approvedIntent, at: 10,
+    executionTarget: { market: "futures", mode: "live" },
   });
   return transitionOrder(
     transitionOrder(proposed, { type: "submit-start", at: 11 }),
@@ -83,6 +84,7 @@ describe("order reconciliation", () => {
   it("does not request reconciliation for a fresh submitting order without an explicit timeout", () => {
     const local = transitionOrder(createTrackedOrder({
       deploymentId: "deployment", clientOrderId: "client-1", approvedIntent, at: 10,
+      executionTarget: { market: "futures", mode: "live" },
     }), { type: "submit-start", at: 11 });
     expect(nextReconciliationAction(local)).toBe("none");
   });
@@ -175,6 +177,7 @@ describe("order reconciliation", () => {
     const local = transitionOrder(
       transitionOrder(createTrackedOrder({
         deploymentId: "deployment", clientOrderId: "client-1", approvedIntent, at: 10,
+        executionTarget: { market: "futures", mode: "live" },
       }), { type: "submit-start", at: 11 }),
       { type: "submit-timeout", at: 12 },
     );

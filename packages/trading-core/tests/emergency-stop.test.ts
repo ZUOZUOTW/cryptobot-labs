@@ -74,7 +74,7 @@ describe("ExecutionCoordinator emergency stop", () => {
     const signal: StrategySignal = { id: "signal-1", action: "buy", reason: "test", createdAt: 10_000 };
     const context: ExecutionContext = {
       deploymentId: "deployment-1", configurationVersion: "configuration-1", signalSequence: 1,
-      market: "spot", mode: "paper", riskPolicy: policy, riskContext,
+      market: "spot", mode: "live", riskPolicy: policy, riskContext,
       instrumentRules: instrument, now: 10_000,
     };
 

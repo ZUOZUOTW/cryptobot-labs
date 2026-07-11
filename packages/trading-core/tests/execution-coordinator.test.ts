@@ -64,11 +64,21 @@ const executionContext: ExecutionContext = {
   configurationVersion: "configuration-1",
   signalSequence: 1,
   market: "spot",
-  mode: "paper",
+  mode: "live",
   riskPolicy: policy,
   riskContext,
   instrumentRules: instrument,
   now: 10_000,
+};
+
+const allowedRisk = {
+  allowed: true as const,
+  normalized: {
+    notional: "100",
+    projectedPositionNotional: "100",
+    projectedTotalExposure: "100",
+    dailyPnl: "0",
+  },
 };
 
 function setup(overrides: Partial<ConstructorParameters<typeof ExecutionCoordinator>[0]> = {}) {
@@ -112,7 +122,42 @@ describe("ExecutionCoordinator", () => {
     expect(repository.orders.get(outcome.order.clientOrderId)).toBe(outcome.order);
     expect(normalizer.normalize).toHaveBeenCalledTimes(1);
     expect(exchange.submit).toHaveBeenCalledTimes(1);
+    expect(exchange.submit).toHaveBeenCalledWith({
+      target: { market: "spot", mode: "live" },
+      clientOrderId: outcome.order.clientOrderId,
+      intent: outcome.order.approvedIntent,
+    });
+    expect(outcome.order.executionTarget).toEqual({ market: "spot", mode: "live" });
     expect(breaker.state).toBe("closed");
+  });
+
+  it.each([
+    [{ market: "futures" as const, mode: "live" as const }, { market: "futures", mode: "live" }],
+    [{ market: "futures" as const, mode: "futures-demo" as const }, { market: "futures", mode: "futures-demo" }],
+  ])("routes an explicit execution target for %o", async (contextTarget, expectedTarget) => {
+    const { coordinator, exchange } = setup({
+      riskEvaluator: vi.fn(() => allowedRisk),
+    });
+    const outcome = await coordinator.propose(signal, {
+      ...executionContext,
+      ...contextTarget,
+      instrumentRules: { ...instrument, market: "futures" },
+    });
+
+    expect(outcome.status).toBe("submitted");
+    expect(exchange.submit).toHaveBeenCalledWith(expect.objectContaining({ target: expectedTarget }));
+  });
+
+  it("rejects paper and unsupported spot-demo targets without touching the exchange", async () => {
+    for (const context of [
+      { ...executionContext, mode: "paper" as const },
+      { ...executionContext, mode: "futures-demo" as const },
+    ]) {
+      const { coordinator, exchange, normalizer } = setup();
+      await expect(coordinator.propose(signal, context)).rejects.toThrow(/execution target/i);
+      expect(normalizer.normalize).not.toHaveBeenCalled();
+      expect(exchange.submit).not.toHaveBeenCalled();
+    }
   });
 
   it("returns the immutable existing order for the same deterministic signal", async () => {
@@ -124,6 +169,23 @@ describe("ExecutionCoordinator", () => {
     expect(second.status).toBe("idempotent");
     if (first.status !== "submitted" || second.status !== "idempotent") throw new Error("unexpected outcome");
     expect(second.order).toBe(repository.orders.get(first.order.clientOrderId));
+    expect(exchange.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the persisted execution target as part of deterministic order identity", async () => {
+    const { coordinator, exchange } = setup({
+      riskEvaluator: vi.fn(() => allowedRisk),
+    });
+    const first = await coordinator.propose(signal, executionContext);
+    const second = await coordinator.propose(signal, {
+      ...executionContext,
+      market: "futures",
+      mode: "live",
+      instrumentRules: { ...instrument, market: "futures" },
+    });
+
+    expect(first.status).toBe("submitted");
+    expect(second).toEqual({ status: "blocked", reason: "client-order-id-collision" });
     expect(exchange.submit).toHaveBeenCalledTimes(1);
   });
 
@@ -206,6 +268,7 @@ describe("ExecutionCoordinator", () => {
     conflict.repository.orders.set("other", {
       deploymentId: executionContext.deploymentId,
       clientOrderId: "other",
+      executionTarget: { market: "spot", mode: "live" },
       approvedIntent: { symbol: "BTCUSDT", side: "buy", quantity: "0.1", price: "1000", expectedSlippageBps: "25", reduceOnly: false },
       status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", version: 0,
     });
@@ -241,6 +304,7 @@ describe("ExecutionCoordinator", () => {
     conflict.repository.orders.set("other", {
       deploymentId: executionContext.deploymentId,
       clientOrderId: "other",
+      executionTarget: { market: "spot", mode: "live" },
       approvedIntent: { symbol: "BTCUSDT", side: "buy", quantity: "0.1", price: "1000", expectedSlippageBps: "25", reduceOnly: false },
       status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", version: 0,
     });
