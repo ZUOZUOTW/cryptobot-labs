@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   buildPrivateHeaders,
@@ -7,6 +7,7 @@ import {
   canonicalQuery,
   signWeexRequest,
 } from "../src/signing";
+import type { SigningInput } from "../src/signing";
 import signingVectors from "./fixtures/signing-vectors.json";
 
 describe("canonicalQuery", () => {
@@ -65,9 +66,16 @@ describe("canonicalJson", () => {
 });
 
 describe("WEEX request signing", () => {
+  it("requires explicit query and body strings at the type boundary", () => {
+    expectTypeOf<SigningInput>().toMatchTypeOf<{
+      query: string;
+      body: string;
+    }>();
+  });
+
   it("builds and signs the independent GET golden vector", async () => {
     const vector = signingVectors.getWithoutQuery;
-    const payload = buildSignaturePayload(vector);
+    const payload = buildSignaturePayload(vector as SigningInput);
 
     expect(payload).toBe(vector.payload);
     await expect(signWeexRequest(payload, vector.secret)).resolves.toBe(vector.signature);
@@ -82,7 +90,7 @@ describe("WEEX request signing", () => {
       price: "30000.5",
     });
     const signedBody = transmittedBody;
-    const payload = buildSignaturePayload({ ...vector, body: signedBody });
+    const payload = buildSignaturePayload({ ...vector, body: signedBody } as SigningInput);
 
     expect(signedBody).toBe(transmittedBody);
     expect(transmittedBody).toBe(vector.body);
@@ -110,9 +118,40 @@ describe("WEEX request signing", () => {
     { method: "GET", requestPath: "/orders", query: "?symbol=BTCUSDT" },
   ])("rejects malformed signature components: %o", (input) => {
     expect(() =>
-      buildSignaturePayload({ timestamp: "123", body: "", ...input }),
+      buildSignaturePayload({
+        timestamp: "123",
+        body: "",
+        ...input,
+      } as SigningInput),
     ).toThrow();
   });
+
+  it("rejects unsupported HTTP methods at runtime", () => {
+    expect(() =>
+      buildSignaturePayload({
+        timestamp: "1690000000000",
+        method: "PATCH",
+        requestPath: "/orders",
+        query: "",
+        body: "",
+      } as unknown as SigningInput),
+    ).toThrow(/method/i);
+  });
+
+  it.each(["", "1690000000000.5", "-1", " 1690000000000", "now"])(
+    "rejects invalid millisecond timestamp %j",
+    (timestamp) => {
+      expect(() =>
+        buildSignaturePayload({
+          timestamp,
+          method: "GET",
+          requestPath: "/orders",
+          query: "",
+          body: "",
+        }),
+      ).toThrow(/timestamp/i);
+    },
+  );
 
   it("builds the required private request headers", () => {
     expect(

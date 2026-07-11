@@ -1,11 +1,11 @@
 export type QueryEntry = readonly [key: string, value: string];
 
-export interface SignaturePayloadInput {
+export interface SigningInput {
   timestamp: string;
-  method: string;
+  method: "GET" | "POST" | "DELETE" | "get" | "post" | "delete";
   requestPath: string;
-  query?: string;
-  body?: string;
+  query: string;
+  body: string;
 }
 
 export interface PrivateHeaderInput {
@@ -98,19 +98,22 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(canonical);
 }
 
-export function buildSignaturePayload(input: SignaturePayloadInput): string {
-  if (!/^[A-Za-z]+$/.test(input.method)) {
-    throw new TypeError("HTTP method must contain letters only");
+export function buildSignaturePayload(input: SigningInput): string {
+  if (!/^(?:GET|POST|DELETE)$/i.test(input.method)) {
+    throw new TypeError("Unsupported HTTP method for WEEX signing");
+  }
+  if (!/^\d+$/.test(input.timestamp)) {
+    throw new TypeError("Timestamp must be a non-empty millisecond digit string");
   }
   if (!/^\/(?!\/)[^\s?#]*$/.test(input.requestPath)) {
     throw new TypeError("Request path must be an absolute path without query or fragment");
   }
-  if (input.query?.startsWith("?")) {
+  if (input.query.startsWith("?")) {
     throw new TypeError("Canonical query must not start with a question mark");
   }
 
   const query = input.query ? `?${input.query}` : "";
-  return `${input.timestamp}${input.method.toUpperCase()}${input.requestPath}${query}${input.body ?? ""}`;
+  return `${input.timestamp}${input.method.toUpperCase()}${input.requestPath}${query}${input.body}`;
 }
 
 export async function signWeexRequest(payload: string, secret: string): Promise<string> {
