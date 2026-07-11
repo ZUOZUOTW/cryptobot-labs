@@ -70,4 +70,30 @@ describe("order activity repository",()=>{
     expect(first.items.map((item)=>item.id)).toEqual(["order_c"]);
     expect((await activity.listOrdersForUser("usr_a",{limit:2,cursor:first.nextCursor!})).items.map((item)=>item.id)).toEqual(["order_a"]);
   });
+
+  it("CAS-rejects an interleaved same-timestamp material update",async()=>{
+    const initial={...order(),quantity:"2",notional:"200"};
+    await ingest({order:initial});
+    let raced=false;
+    const racingDatabase:ControlPlaneDatabase={prepare:(sql)=>database.prepare(sql),batch:async(items)=>{
+      if(!raced){raced=true;database.raw.exec("UPDATE orders SET state='partially-filled',filled_quantity='1.5',average_fill_price='101',updated_at=300 WHERE client_order_id='client_a'");}
+      return database.batch(items);
+    }};
+    const racing=createActivityRepository(racingDatabase);
+    await expect(racing.ingestOrderTelemetry({deviceId:"dev_a",expectedDeploymentVersion:2,mode:"paper",deploymentState:"running",
+      order:{...initial,state:"partially-filled",filledQuantity:"1",averageFillPrice:"100",updatedAt:300},fills:[]})).rejects.toThrow(/conflict|guard/i);
+    expect(database.raw.prepare("SELECT filled_quantity AS quantity FROM orders WHERE client_order_id='client_a'").get()).toEqual({quantity:"1.5"});
+  });
+
+  it("allows cancel-pending with no new fills without counting historical fills",async()=>{
+    const partial={...order("partially-filled"),quantity:"2",notional:"200",filledQuantity:"1",averageFillPrice:"100",updatedAt:300};
+    await ingest({order:partial,fills:[fill()]});
+    await expect(ingest({order:{...partial,state:"cancel-pending",updatedAt:400},fills:[]})).resolves.toMatchObject({
+      idempotent:false,order:{state:"cancel-pending"},
+    });
+    const pending={...order(),id:"order_pending",clientOrderId:"client_pending",exchangeOrderId:"exchange_pending",
+      correlationId:"corr_pending",state:"cancel-pending",updatedAt:300};
+    await ingest({order:pending,fills:[]});
+    await expect(ingest({order:{...pending,state:"unknown",updatedAt:400},fills:[]})).rejects.toThrow(/state|illegal/i);
+  });
 });

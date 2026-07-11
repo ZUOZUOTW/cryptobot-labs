@@ -53,7 +53,7 @@ const ORDER_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> =
   acknowledged: ["partially-filled", "filled", "cancel-pending"],
   "partially-filled": ["partially-filled", "filled", "cancel-pending"],
   filled: [],
-  "cancel-pending": ["cancel-pending", "partially-filled", "filled", "cancelled", "unknown"],
+  "cancel-pending": ["cancel-pending", "partially-filled", "filled", "cancelled"],
   cancelled: [],
   rejected: [],
   unknown: ["acknowledged", "partially-filled", "filled", "cancelled", "rejected", "reconciled"],
@@ -329,13 +329,14 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       const existing = await getOrderByIdentity(order.deploymentId, order.clientOrderId);
       const winnerId = existing?.id ?? order.id;
       if (existing) {
+        const exactRetry = exactOrderMatches(existing, order);
         if (!immutableOrderMatches(existing, order)) throw new Error("order semantic conflict");
         if (existing.exchangeOrderId !== null && existing.exchangeOrderId !== order.exchangeOrderId) throw new Error("exchange order id conflict");
         if (TERMINAL_ORDER_STATES.has(existing.state) && !exactOrderMatches(existing, order)) {
           throw new Error(`terminal order ${existing.state} is immutable`);
         }
         if (existing.averageFillPrice !== null && order.averageFillPrice === null) throw new Error("average fill price cannot be cleared");
-        if (order.updatedAt < existing.updatedAt) throw new Error("order state timestamp regression");
+        if (!exactRetry && order.updatedAt <= existing.updatedAt) throw new Error("material order update timestamp must increase");
         if (compareUnsignedDecimals(order.filledQuantity, existing.filledQuantity) < 0) throw new Error("filled quantity regression");
         if (order.state !== existing.state && !ORDER_TRANSITIONS[existing.state].includes(order.state)) {
           throw new Error(`illegal order state regression: ${existing.state} -> ${order.state}`);
@@ -356,11 +357,13 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
 
       const orderStatement = existing
         ? database.prepare(`UPDATE orders SET exchange_order_id=?,state=?,filled_quantity=?,average_fill_price=?,updated_at=?
-            WHERE id=? AND deployment_id=? AND client_order_id=? AND state=? AND updated_at=?
+            WHERE id=? AND deployment_id=? AND client_order_id=? AND exchange_order_id IS ?
+              AND state=? AND filled_quantity=? AND average_fill_price IS ? AND updated_at=?
               AND EXISTS (SELECT 1 FROM deployments d JOIN devices v ON v.id=d.device_id AND v.user_id=d.user_id
                 WHERE d.id=orders.deployment_id AND d.device_id=? AND d.version=? AND d.mode=? AND d.state=? AND v.status='active')`)
           .bind(order.exchangeOrderId, order.state, order.filledQuantity, order.averageFillPrice, order.updatedAt,
-            winnerId, order.deploymentId, order.clientOrderId, existing.state, existing.updatedAt,
+            winnerId, order.deploymentId, order.clientOrderId, existing.exchangeOrderId, existing.state,
+            existing.filledQuantity, existing.averageFillPrice, existing.updatedAt,
             deviceId, expectedVersion, input.mode, input.deploymentState)
         : database.prepare(`INSERT INTO orders
             (id,user_id,deployment_id,client_order_id,exchange_order_id,market,symbol,side,position_side,order_type,state,
@@ -383,7 +386,7 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
           fill.filledAt, winnerId, order.deploymentId, order.clientOrderId, deviceId, expectedVersion,
           input.mode, input.deploymentState));
       const fillFilter = fills.length === 0
-        ? { sql: "0=0", values: [] as string[] }
+        ? { sql: "0=1", values: [] as string[] }
         : { sql: `f.exchange_fill_id IN (${fills.map(() => "?").join(",")})`, values: fills.map((fill) => fill.exchangeFillId) };
       const guard = database.prepare(`INSERT INTO fills
         (id,user_id,deployment_id,order_id,exchange_fill_id,price,quantity,fee,fee_currency,realized_pnl,filled_at)
