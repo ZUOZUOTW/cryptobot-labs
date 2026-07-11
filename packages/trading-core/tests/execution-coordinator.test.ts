@@ -201,4 +201,157 @@ describe("ExecutionCoordinator", () => {
     expect(normalizer.normalize).not.toHaveBeenCalled();
     expect(MAX_PENDING).toBe(1_024);
   });
+
+  it("checks emergency stop before parsing and normalizes before deriving an id", async () => {
+    const stopped = setup();
+    stopped.coordinator.emergencyStop();
+    await expect(stopped.coordinator.propose(
+      { ...signal, surprise: true } as StrategySignal,
+      executionContext,
+    )).resolves.toEqual({ status: "blocked", reason: "emergency-stop" });
+
+    const normalizer = { normalize: vi.fn(async () => { throw new Error("normalized-first"); }) };
+    const ordered = setup({ normalizer });
+    await expect(ordered.coordinator.propose(signal, {
+      ...executionContext,
+      deploymentId: "",
+    })).rejects.toThrow("normalized-first");
+  });
+
+  it("checks active conflicts before persisting a proposal", async () => {
+    const conflict = setup();
+    conflict.repository.orders.set("other", {
+      deploymentId: executionContext.deploymentId,
+      clientOrderId: "other",
+      approvedIntent: { symbol: "BTCUSDT", side: "buy", quantity: "0.1", price: "1000", expectedSlippageBps: "25", reduceOnly: false },
+      status: "unknown", createdAt: 1, updatedAt: 1, cumulativeFilledQuantity: "0", version: 0,
+    });
+    expect(await conflict.coordinator.propose(signal, executionContext)).toEqual({
+      status: "blocked",
+      reason: "active-order-conflict",
+    });
+    expect(conflict.repository.orders.size).toBe(1);
+  });
+
+  it("lets emergency stop win when active-order lookup is awaiting", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const repository = new MemoryOrderRepository();
+    const listActive = vi.fn(async () => {
+      await gate;
+      return [{ status: "unknown" }] as unknown as readonly TrackedOrder[];
+    });
+    repository.listActive = listActive;
+    const save = vi.spyOn(repository, "save");
+    const { coordinator } = setup({ repository });
+    const pending = coordinator.propose(signal, executionContext);
+    await vi.waitFor(() => expect(listActive).toHaveBeenCalledOnce());
+    coordinator.emergencyStop();
+    release();
+    await expect(pending).resolves.toEqual({ status: "blocked", reason: "emergency-stop" });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("counts duplicate waiters toward the bounded pending limit", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const normalizer = {
+      normalize: vi.fn(async () => {
+        await gate;
+        return { symbol: "BTCUSDT", side: "buy" as const, quantity: "0.1", price: "1000", expectedSlippageBps: "25", reduceOnly: false };
+      }),
+    };
+    const { coordinator } = setup({ normalizer });
+    const pending = Array.from({ length: MAX_PENDING }, () => coordinator.propose(signal, executionContext));
+    expect(coordinator.pending).toBe(MAX_PENDING);
+    await expect(coordinator.propose(signal, executionContext)).resolves.toEqual({
+      status: "blocked",
+      reason: "queue-full",
+    });
+    release();
+    await Promise.all(pending);
+    expect(coordinator.pending).toBe(0);
+  });
+
+  it("resolves an optimistic create race across coordinators as idempotent", async () => {
+    const repository = new MemoryOrderRepository();
+    const exchange = {
+      submit: vi.fn(async () => ({ status: "acknowledged" as const, exchangeOrderId: "exchange-1" })),
+      cancel: vi.fn(), findByClientOrderId: vi.fn(),
+    };
+    const first = setup({ repository, exchange }).coordinator;
+    const second = setup({ repository, exchange }).coordinator;
+    const outcomes = await Promise.all([
+      first.propose(signal, executionContext),
+      second.propose(signal, executionContext),
+    ]);
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["idempotent", "submitted"]);
+    expect(exchange.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists unknown when breaker success settlement fails after submission", async () => {
+    const circuitBreaker = {
+      tryAcquire: vi.fn(() => ({ allowed: true as const, token: "token" })),
+      recordSuccess: vi.fn(() => false),
+      recordFailure: vi.fn(() => true),
+    };
+    const { coordinator, repository } = setup({ circuitBreaker });
+    const outcome = await coordinator.propose(signal, executionContext);
+    expect(outcome.status).toBe("submitted");
+    if (outcome.status !== "submitted") throw new Error("unexpected outcome");
+    expect(outcome.order.status).toBe("unknown");
+    expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("unknown");
+    expect(circuitBreaker.recordSuccess).toHaveBeenCalledOnce();
+    expect(circuitBreaker.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("settles failure without submitting when the submitting-state save fails", async () => {
+    const repository = new MemoryOrderRepository();
+    const save = vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
+      if (order.status === "submitting") throw new Error("submitting save failed");
+      const current = repository.orders.get(order.clientOrderId);
+      if ((current?.version ?? null) !== expectedVersion) throw new Error("optimistic conflict");
+      repository.orders.set(order.clientOrderId, order);
+      return order;
+    });
+    const circuitBreaker = {
+      tryAcquire: vi.fn(() => ({ allowed: true as const, token: "token" })),
+      recordSuccess: vi.fn(() => true),
+      recordFailure: vi.fn(() => true),
+    };
+    const { coordinator, exchange } = setup({ repository, circuitBreaker });
+    await expect(coordinator.propose(signal, executionContext)).rejects.toThrow("submitting save failed");
+    expect(exchange.submit).not.toHaveBeenCalled();
+    expect(circuitBreaker.recordFailure).toHaveBeenCalledOnce();
+    expect(circuitBreaker.recordSuccess).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalled();
+  });
+
+  it("persists unknown and settles failure when the terminal save fails", async () => {
+    const repository = new MemoryOrderRepository();
+    let failTerminalSave = true;
+    vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
+      if (order.status === "acknowledged" && failTerminalSave) {
+        failTerminalSave = false;
+        throw new Error("terminal save failed");
+      }
+      const current = repository.orders.get(order.clientOrderId);
+      if ((current?.version ?? null) !== expectedVersion) throw new Error("optimistic conflict");
+      repository.orders.set(order.clientOrderId, order);
+      return order;
+    });
+    const circuitBreaker = {
+      tryAcquire: vi.fn(() => ({ allowed: true as const, token: "token" })),
+      recordSuccess: vi.fn(() => true),
+      recordFailure: vi.fn(() => true),
+    };
+    const { coordinator } = setup({ repository, circuitBreaker });
+    const outcome = await coordinator.propose(signal, executionContext);
+    expect(outcome.status).toBe("submitted");
+    if (outcome.status !== "submitted") throw new Error("unexpected outcome");
+    expect(outcome.order.status).toBe("unknown");
+    expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("unknown");
+    expect(circuitBreaker.recordFailure).toHaveBeenCalledOnce();
+    expect(circuitBreaker.recordSuccess).not.toHaveBeenCalled();
+  });
 });

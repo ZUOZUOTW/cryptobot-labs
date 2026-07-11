@@ -3,8 +3,11 @@ import {
   createTrackedOrder,
   deriveClientOrderId,
   transitionOrder,
+  type ApprovedOrderIntent,
   type SubmitOutcome,
+  type TrackedOrder,
 } from "../orders";
+import type { CircuitBreakerFailureCategory } from "../reliability";
 import { StrategySignalSchema } from "../schemas";
 import type {
   ExecutionContext,
@@ -31,6 +34,71 @@ function isSubmitOutcome(value: unknown): value is SubmitOutcome {
   }
   return outcome.status === "unknown" &&
     (outcome.reason === undefined || typeof outcome.reason === "string");
+}
+
+function sameIntent(left: ApprovedOrderIntent, right: ApprovedOrderIntent): boolean {
+  return left.symbol === right.symbol &&
+    left.side === right.side &&
+    left.quantity === right.quantity &&
+    left.price === right.price &&
+    left.expectedSlippageBps === right.expectedSlippageBps &&
+    left.reduceOnly === right.reduceOnly;
+}
+
+function unknownOrder(order: TrackedOrder, at: number): TrackedOrder {
+  return Object.freeze({
+    ...order,
+    status: "unknown",
+    exchangeOrderId: undefined,
+    reason: "submit-outcome-uncertain",
+    updatedAt: at,
+    version: order.version + 1,
+  });
+}
+
+class BreakerSettlement {
+  #settled = false;
+  readonly #dependencies: ExecutionCoordinatorDependencies;
+  readonly #token: string;
+  readonly #now: number;
+
+  constructor(
+    dependencies: ExecutionCoordinatorDependencies,
+    token: string,
+    now: number,
+  ) {
+    this.#dependencies = dependencies;
+    this.#token = token;
+    this.#now = now;
+  }
+
+  get settled(): boolean {
+    return this.#settled;
+  }
+
+  success(): boolean {
+    if (this.#settled) return false;
+    this.#settled = true;
+    try {
+      return this.#dependencies.circuitBreaker.recordSuccess(this.#token, this.#now);
+    } catch {
+      return false;
+    }
+  }
+
+  failure(category: CircuitBreakerFailureCategory): boolean {
+    if (this.#settled) return false;
+    this.#settled = true;
+    try {
+      return this.#dependencies.circuitBreaker.recordFailure(
+        this.#token,
+        category,
+        this.#now,
+      );
+    } catch {
+      return false;
+    }
+  }
 }
 
 export class ExecutionCoordinator {
@@ -65,53 +133,67 @@ export class ExecutionCoordinator {
     candidateSignal: StrategySignal,
     context: ExecutionContext,
   ): Promise<ExecutionOutcome> {
-    const signal = parseSignal(candidateSignal);
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-
-    const clientOrderId = await deriveClientOrderId({
-      deploymentId: context.deploymentId,
-      configurationVersion: context.configurationVersion,
-      signalId: signal.id,
-      sequence: context.signalSequence,
-    });
-
-    const active = this.#inFlight.get(clientOrderId);
-    if (active !== undefined) {
-      await active;
-      const order = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
-      if (order === null) throw new Error("completed proposal was not persisted");
-      return { status: "idempotent", order };
-    }
-
-    const existing = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
-    if (existing !== null) return { status: "idempotent", order: existing };
-
-    const raced = this.#inFlight.get(clientOrderId);
-    if (raced !== undefined) {
-      await raced;
-      const order = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
-      if (order === null) throw new Error("completed proposal was not persisted");
-      return { status: "idempotent", order };
-    }
+    const signal = parseSignal(candidateSignal);
     if (this.#pending >= MAX_PENDING) return { status: "blocked", reason: "queue-full" };
-
-    const work = this.#execute(signal, context, clientOrderId);
-    this.#inFlight.set(clientOrderId, work);
     this.#pending += 1;
+
     try {
-      return await work;
+      const intent = await this.#dependencies.normalizer.normalize(signal, context);
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+
+      const clientOrderId = await deriveClientOrderId({
+        deploymentId: context.deploymentId,
+        configurationVersion: context.configurationVersion,
+        signalId: signal.id,
+        sequence: context.signalSequence,
+      });
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+
+      const existing = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+      if (existing !== null) {
+        return sameIntent(existing.approvedIntent, intent)
+          ? { status: "idempotent", order: existing }
+          : { status: "blocked", reason: "client-order-id-collision" };
+      }
+
+      const active = this.#inFlight.get(clientOrderId);
+      if (active !== undefined) {
+        const completed = await active;
+        if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+        if (completed.status === "blocked") return completed;
+        const order = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+        if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+        if (order === null) throw new Error("completed proposal was not persisted");
+        return sameIntent(order.approvedIntent, intent)
+          ? { status: "idempotent", order }
+          : { status: "blocked", reason: "client-order-id-collision" };
+      }
+
+      const work = this.#execute(context, clientOrderId, intent);
+      this.#inFlight.set(clientOrderId, work);
+      try {
+        return await work;
+      } finally {
+        this.#inFlight.delete(clientOrderId);
+      }
     } finally {
       this.#pending -= 1;
-      this.#inFlight.delete(clientOrderId);
     }
   }
 
   async #execute(
-    signal: StrategySignal,
     context: ExecutionContext,
     clientOrderId: string,
+    intent: ApprovedOrderIntent,
   ): Promise<ExecutionOutcome> {
-    const intent = await this.#dependencies.normalizer.normalize(signal, context);
+    const conflicts = await this.#dependencies.repository.listActive(
+      context.deploymentId,
+      intent.symbol,
+    );
+    if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+    if (conflicts.length > 0) return { status: "blocked", reason: "active-order-conflict" };
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
 
     let order = createTrackedOrder({
@@ -120,14 +202,25 @@ export class ExecutionCoordinator {
       approvedIntent: intent,
       at: context.now,
     });
-    order = await this.#dependencies.repository.save(order, null);
+    try {
+      order = await this.#dependencies.repository.save(order, null);
+    } catch (createFailure) {
+      const raced = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+      if (raced === null) throw createFailure;
+      return sameIntent(raced.approvedIntent, intent)
+        ? { status: "idempotent", order: raced }
+        : { status: "blocked", reason: "client-order-id-collision" };
+    }
+    if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
 
-    const risk = this.#dependencies.riskEvaluator(
+    const risk = await this.#dependencies.riskEvaluator(
       context.riskPolicy,
       context.riskContext,
       intent,
       context.instrumentRules,
     );
+    if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
     if (!risk.allowed) {
       order = transitionOrder(order, {
         type: "risk-rejected",
@@ -135,72 +228,92 @@ export class ExecutionCoordinator {
         at: context.now,
       });
       order = await this.#dependencies.repository.save(order, order.version - 1);
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       return { status: "risk-rejected", order };
     }
 
     if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-    const conflicts = await this.#dependencies.repository.listActive(
-      context.deploymentId,
-      intent.symbol,
-    );
-    if (conflicts.length > 0) {
-      return { status: "blocked", reason: "active-order-conflict" };
-    }
-    if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
-
     const acquisition = this.#dependencies.circuitBreaker.tryAcquire(context.now);
     if (!acquisition.allowed) return { status: "blocked", reason: "circuit-breaker" };
+    const settlement = new BreakerSettlement(
+      this.#dependencies,
+      acquisition.token,
+      context.now,
+    );
 
-    order = transitionOrder(order, { type: "submit-start", at: context.now });
-    order = await this.#dependencies.repository.save(order, order.version - 1);
-    if (this.#stopped) {
-      order = transitionOrder(order, { type: "submit-timeout", at: context.now });
-      await this.#dependencies.repository.save(order, order.version - 1);
-      this.#dependencies.circuitBreaker.recordFailure(
-        acquisition.token,
-        "unknown",
-        context.now,
-      );
-      return { status: "blocked", reason: "emergency-stop" };
+    try {
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+      order = transitionOrder(order, { type: "submit-start", at: context.now });
+      order = await this.#dependencies.repository.save(order, order.version - 1);
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
+    } catch (failure) {
+      settlement.failure("unknown");
+      throw failure;
+    } finally {
+      if (this.#stopped && !settlement.settled) settlement.failure("unknown");
     }
 
-    let submitResult: unknown;
     try {
-      submitResult = await this.#dependencies.exchange.submit(order.approvedIntent);
+      const submitResult = await this.#dependencies.exchange.submit(order.approvedIntent);
+      if (this.#stopped) throw new Error("emergency stop after submit");
       if (!isSubmitOutcome(submitResult)) throw new TypeError("malformed submit outcome");
 
-      if (submitResult.status === "acknowledged") {
-        order = transitionOrder(order, {
-          type: "submit-acknowledged",
-          exchangeOrderId: submitResult.exchangeOrderId,
-          at: context.now,
-        });
-        this.#dependencies.circuitBreaker.recordSuccess(acquisition.token, context.now);
-      } else if (submitResult.status === "rejected") {
-        order = transitionOrder(order, {
-          type: "submit-rejected",
-          reason: submitResult.reason,
-          at: context.now,
-        });
-        this.#dependencies.circuitBreaker.recordSuccess(acquisition.token, context.now);
-      } else {
-        order = transitionOrder(order, { type: "submit-timeout", at: context.now });
-        this.#dependencies.circuitBreaker.recordFailure(
-          acquisition.token,
-          this.#dependencies.failureClassifier(submitResult),
-          context.now,
-        );
-      }
-    } catch (failure) {
-      order = transitionOrder(order, { type: "submit-timeout", at: context.now });
-      this.#dependencies.circuitBreaker.recordFailure(
-        acquisition.token,
-        this.#dependencies.failureClassifier(failure),
-        context.now,
-      );
-    }
+      const failureCategory = submitResult.status === "unknown"
+        ? this.#classifyFailure(submitResult)
+        : null;
+      order = submitResult.status === "acknowledged"
+        ? transitionOrder(order, {
+            type: "submit-acknowledged",
+            exchangeOrderId: submitResult.exchangeOrderId,
+            at: context.now,
+          })
+        : submitResult.status === "rejected"
+          ? transitionOrder(order, {
+              type: "submit-rejected",
+              reason: submitResult.reason,
+              at: context.now,
+            })
+          : transitionOrder(order, { type: "submit-timeout", at: context.now });
 
-    order = await this.#dependencies.repository.save(order, order.version - 1);
-    return { status: "submitted", order };
+      order = await this.#dependencies.repository.save(order, order.version - 1);
+      if (this.#stopped) throw new Error("emergency stop after terminal save");
+      const settled = failureCategory === null
+        ? settlement.success()
+        : settlement.failure(failureCategory);
+      if (!settled) order = await this.#persistUnknown(order, context.now);
+      return { status: "submitted", order };
+    } catch (failure) {
+      order = await this.#persistUnknown(order, context.now);
+      settlement.failure(this.#classifyFailure(failure));
+      return { status: "submitted", order };
+    } finally {
+      if (!settlement.settled) settlement.failure("unknown");
+    }
+  }
+
+  #classifyFailure(failure: unknown): CircuitBreakerFailureCategory {
+    try {
+      return this.#dependencies.failureClassifier(failure);
+    } catch {
+      return "unknown";
+    }
+  }
+
+  async #persistUnknown(order: TrackedOrder, at: number): Promise<TrackedOrder> {
+    let base = order;
+    try {
+      const persisted = await this.#dependencies.repository.getByClientOrderId(order.clientOrderId);
+      if (persisted !== null) base = persisted;
+    } catch {
+      // Continue with the last known version for a best-effort fail-closed write.
+    }
+    const uncertain = base.status === "submitting"
+      ? transitionOrder(base, { type: "submit-timeout", at })
+      : unknownOrder(base, at);
+    try {
+      return await this.#dependencies.repository.save(uncertain, base.version);
+    } catch {
+      return uncertain;
+    }
   }
 }

@@ -36,7 +36,7 @@ export type RiskEvaluator = (
   context: RiskContext,
   intent: OrderIntent,
   instrument: InstrumentRules,
-) => RiskDecision;
+) => RiskDecision | Promise<RiskDecision>;
 
 export interface OrderRepository {
   getByClientOrderId(clientOrderId: string): Promise<TrackedOrder | null>;
@@ -73,5 +73,6 @@ export type ExecutionOutcome =
         | "emergency-stop"
         | "queue-full"
         | "active-order-conflict"
+        | "client-order-id-collision"
         | "circuit-breaker";
     };
