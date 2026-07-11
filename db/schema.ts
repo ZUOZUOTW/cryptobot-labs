@@ -56,7 +56,35 @@ export const pairingCodes = sqliteTable("pairing_codes", {
   createdAt: timestamp("created_at").notNull(),
 }, (table) => [
   uniqueIndex("pairing_codes_hash_uidx").on(table.codeHash),
+  uniqueIndex("pairing_codes_id_user_uidx").on(table.id, table.userId),
   index("pairing_codes_user_expiry_idx").on(table.userId, table.expiresAt),
+]);
+
+export const deviceBootstraps = sqliteTable("device_bootstraps", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  deviceId: text("device_id").notNull(),
+  pairingCodeId: text("pairing_code_id").notNull(),
+  bootstrapHash: text("bootstrap_hash").notNull(),
+  challengeHash: text("challenge_hash").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  createdAt: timestamp("created_at").notNull(),
+}, (table) => [
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "device_bootstraps_device_user_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.pairingCodeId, table.userId],
+    foreignColumns: [pairingCodes.id, pairingCodes.userId],
+    name: "device_bootstraps_pairing_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("device_bootstraps_device_uidx").on(table.deviceId),
+  uniqueIndex("device_bootstraps_pairing_code_uidx").on(table.pairingCodeId),
+  uniqueIndex("device_bootstraps_hash_uidx").on(table.bootstrapHash),
+  index("device_bootstraps_expiry_idx").on(table.expiresAt),
 ]);
 
 export const deviceNonces = sqliteTable("device_nonces", {

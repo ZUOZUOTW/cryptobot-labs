@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as schema from "../db/schema";
 
 const expectedTables = [
-  "users", "devices", "deviceCredentials", "pairingCodes", "deviceNonces",
+  "users", "devices", "deviceCredentials", "pairingCodes", "deviceBootstraps", "deviceNonces",
   "strategies", "strategyVersions", "backtestJobs", "backtestDatasets", "backtestResults",
   "deployments", "riskPolicies", "runHeartbeats", "positionSnapshots", "orders", "fills",
   "commands", "commandAcknowledgements", "auditEvents",

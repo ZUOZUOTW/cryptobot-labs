@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8f1ec689-55d6-49d6-bd9d-951390a13c5b",
+  "id": "d4337d4d-8251-49ed-a594-c9f961a90b92",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_events": {
@@ -1115,6 +1115,152 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "device_bootstraps": {
+      "name": "device_bootstraps",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "pairing_code_id": {
+          "name": "pairing_code_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bootstrap_hash": {
+          "name": "bootstrap_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "challenge_hash": {
+          "name": "challenge_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "device_bootstraps_device_uidx": {
+          "name": "device_bootstraps_device_uidx",
+          "columns": [
+            "device_id"
+          ],
+          "isUnique": true
+        },
+        "device_bootstraps_pairing_code_uidx": {
+          "name": "device_bootstraps_pairing_code_uidx",
+          "columns": [
+            "pairing_code_id"
+          ],
+          "isUnique": true
+        },
+        "device_bootstraps_hash_uidx": {
+          "name": "device_bootstraps_hash_uidx",
+          "columns": [
+            "bootstrap_hash"
+          ],
+          "isUnique": true
+        },
+        "device_bootstraps_expiry_idx": {
+          "name": "device_bootstraps_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "device_bootstraps_user_id_users_id_fk": {
+          "name": "device_bootstraps_user_id_users_id_fk",
+          "tableFrom": "device_bootstraps",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "device_bootstraps_device_user_fk": {
+          "name": "device_bootstraps_device_user_fk",
+          "tableFrom": "device_bootstraps",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "device_bootstraps_pairing_user_fk": {
+          "name": "device_bootstraps_pairing_user_fk",
+          "tableFrom": "device_bootstraps",
+          "tableTo": "pairing_codes",
+          "columnsFrom": [
+            "pairing_code_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "device_credentials": {
       "name": "device_credentials",
       "columns": {
@@ -1873,6 +2019,14 @@
           "name": "pairing_codes_hash_uidx",
           "columns": [
             "code_hash"
+          ],
+          "isUnique": true
+        },
+        "pairing_codes_id_user_uidx": {
+          "name": "pairing_codes_id_user_uidx",
+          "columns": [
+            "id",
+            "user_id"
           ],
           "isUnique": true
         },

@@ -42,6 +42,7 @@ describe("D1 tenant integrity migrations", () => {
     expect(sql).not.toMatch(/PRAGMA\s+foreign_keys\s*=\s*OFF/i);
     expect(sql).toMatch(/FOREIGN KEY \(`device_id`,`user_id`\) REFERENCES `devices`\(`id`,`user_id`\)/i);
     expect(sql).toMatch(/FOREIGN KEY \(`strategy_version_id`,`user_id`\) REFERENCES `strategy_versions`\(`id`,`user_id`\)/i);
+    expect(sql).toMatch(/FOREIGN KEY \(`pairing_code_id`,`user_id`\) REFERENCES `pairing_codes`\(`id`,`user_id`\)/i);
     database.exec(sql.replaceAll("--> statement-breakpoint", ""));
 
     addUser(database, "user_a");
@@ -71,6 +72,8 @@ describe("D1 tenant integrity migrations", () => {
     addDevice(database, "device_a", "user_a");
     addStrategy(database, "strategy_a", "user_a");
     addVersion(database, "version_a2", "user_a", "strategy_a");
+    database.exec("INSERT INTO pairing_codes VALUES ('pair_b', 'user_b', 'pair-hash-b', 100, NULL, 1)");
+    rejectsForeignKey(database, "INSERT INTO device_bootstraps VALUES ('boot_bad', 'user_a', 'device_a', 'pair_b', 'boot-hash', 'challenge-hash', 100, NULL, 1)");
     rejectsForeignKey(database, "INSERT INTO strategy_versions VALUES ('bad_version', 'user_a', 'strategy_b', 2, 'x', NULL, '{}', NULL, 1)");
     rejectsForeignKey(database, "INSERT INTO device_credentials VALUES ('device_b', 'user_a', 'bad', 100, NULL, 1)");
     rejectsForeignKey(database, "INSERT INTO device_nonces VALUES ('bad_nonce', 'device_b', 'user_a', 'bad', 1, 100)");

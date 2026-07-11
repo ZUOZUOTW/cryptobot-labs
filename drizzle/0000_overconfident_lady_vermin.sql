@@ -147,6 +147,25 @@ CREATE TABLE `deployments` (
 CREATE UNIQUE INDEX `deployments_id_user_uidx` ON `deployments` (`id`,`user_id`);--> statement-breakpoint
 CREATE INDEX `deployments_user_state_idx` ON `deployments` (`user_id`,`state`);--> statement-breakpoint
 CREATE INDEX `deployments_device_state_idx` ON `deployments` (`device_id`,`state`);--> statement-breakpoint
+CREATE TABLE `device_bootstraps` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`device_id` text NOT NULL,
+	`pairing_code_id` text NOT NULL,
+	`bootstrap_hash` text NOT NULL,
+	`challenge_hash` text NOT NULL,
+	`expires_at` integer NOT NULL,
+	`consumed_at` integer,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`device_id`,`user_id`) REFERENCES `devices`(`id`,`user_id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`pairing_code_id`,`user_id`) REFERENCES `pairing_codes`(`id`,`user_id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `device_bootstraps_device_uidx` ON `device_bootstraps` (`device_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `device_bootstraps_pairing_code_uidx` ON `device_bootstraps` (`pairing_code_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `device_bootstraps_hash_uidx` ON `device_bootstraps` (`bootstrap_hash`);--> statement-breakpoint
+CREATE INDEX `device_bootstraps_expiry_idx` ON `device_bootstraps` (`expires_at`);--> statement-breakpoint
 CREATE TABLE `device_credentials` (
 	`device_id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
@@ -254,6 +273,7 @@ CREATE TABLE `pairing_codes` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `pairing_codes_hash_uidx` ON `pairing_codes` (`code_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `pairing_codes_id_user_uidx` ON `pairing_codes` (`id`,`user_id`);--> statement-breakpoint
 CREATE INDEX `pairing_codes_user_expiry_idx` ON `pairing_codes` (`user_id`,`expires_at`);--> statement-breakpoint
 CREATE TABLE `position_snapshots` (
 	`id` text PRIMARY KEY NOT NULL,
