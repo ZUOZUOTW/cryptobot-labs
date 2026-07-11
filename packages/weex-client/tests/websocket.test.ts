@@ -76,7 +76,7 @@ function push(version = 1, overrides: Record<string, unknown> = {}): string {
       cumFillSize: "1",
       cumFillFee: "1",
       latestFillPrice: "50000",
-      updatedTime: 1_700_000_000_000,
+      updatedTime: "1700000000000",
       ...overrides,
     }],
   });
@@ -102,12 +102,13 @@ async function connect(stream: WeexPrivateStream, sockets: MockSocket[]): Promis
   const promise = stream.connect();
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
   sockets[0].emit("open", {});
+  acknowledge(sockets[0]);
   await promise;
   return sockets[0];
 }
 
 function acknowledge(socket: MockSocket): void {
-  socket.emit("message", { data: JSON.stringify({ id: 1, result: null }) });
+  socket.emit("message", { data: JSON.stringify({ id: 1, result: true }) });
 }
 
 describe("WEEX V3 private stream", () => {
@@ -149,6 +150,7 @@ describe("WEEX V3 private stream", () => {
     expect(first).toBe(second);
     await vi.waitFor(() => expect(sockets).toHaveLength(1));
     sockets[0].emit("open", {});
+    acknowledge(sockets[0]);
     await first;
     expect(sockets[0].sent).toEqual([JSON.stringify({ method: "SUBSCRIBE", params: ["orders"], id: 1 })]);
     sockets[0].emit("message", { data: JSON.stringify({ type: "ping", time: "1700000000000" }) });
@@ -161,7 +163,6 @@ describe("WEEX V3 private stream", () => {
     const listener = vi.fn();
     stream.subscribeOrders(listener);
     const socket = await connect(stream, sockets);
-    acknowledge(socket);
     socket.emit("message", { data: push() });
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     expect(lookup.findByClientOrderId).toHaveBeenCalledWith({
@@ -182,11 +183,15 @@ describe("WEEX V3 private stream", () => {
   it("requires a strict subscription acknowledgement before processing pushes", async () => {
     const { stream, sockets, lookup } = setup();
     stream.subscribeOrders(vi.fn());
-    const socket = await connect(stream, sockets);
+    const connection = stream.connect();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0];
+    socket.emit("open", {});
     socket.emit("message", { data: push() });
     await Promise.resolve();
     expect(lookup.findByClientOrderId).not.toHaveBeenCalled();
     socket.emit("message", { data: JSON.stringify({ id: 1, result: "ok" }) });
+    await expect(connection).rejects.toMatchObject({ category: "schema" });
     expect(stream.state).toBe("error");
     expect(socket.closeCalls).toHaveLength(1);
   });
@@ -196,7 +201,6 @@ describe("WEEX V3 private stream", () => {
     const listener = vi.fn();
     stream.subscribeOrders(listener);
     const socket = await connect(stream, sockets);
-    acknowledge(socket);
     lookup.findByClientOrderId.mockResolvedValueOnce(snapshot({ exchangeOrderId: "other" }));
     socket.emit("message", { data: push() });
     await vi.waitFor(() => expect(stream.state).toBe("error"));
@@ -209,7 +213,6 @@ describe("WEEX V3 private stream", () => {
     const listener = vi.fn();
     stream.subscribeOrders(listener);
     const socket = await connect(stream, sockets);
-    acknowledge(socket);
     socket.emit("message", { data: push(2) });
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     socket.emit("message", { data: push(2) });
@@ -227,7 +230,6 @@ describe("WEEX V3 private stream", () => {
       .mockResolvedValueOnce(snapshot({ cumulativeFilledQuantity: "1" }));
     stream.subscribeOrders(listener);
     const socket = await connect(stream, sockets);
-    acknowledge(socket);
     socket.emit("message", { data: push(1) });
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     socket.emit("message", { data: push(2) });
@@ -242,12 +244,35 @@ describe("WEEX V3 private stream", () => {
     lookup.findByClientOrderId.mockReturnValue(blocked);
     stream.subscribeOrders(vi.fn());
     const socket = await connect(stream, sockets);
-    acknowledge(socket);
     socket.emit("message", { data: push(1) });
     socket.emit("message", { data: push(2) });
     expect(stream.state).toBe("error");
     expect(socket.closeCalls).toHaveLength(1);
     release();
+  });
+
+  it("accepts documented string timestamps and a zero-sized spot market hint", async () => {
+    const { stream, sockets, lookup } = setup();
+    const listener = vi.fn();
+    stream.subscribeOrders(listener);
+    const socket = await connect(stream, sockets);
+    socket.emit("message", { data: push(1, { size: "0", updatedTime: "1700000000000" }) });
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+    expect(lookup.findByClientOrderId).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when the official subscription acknowledgement times out", async () => {
+    let releaseTimeout!: () => void;
+    const acknowledgementScheduler = vi.fn(() => new Promise<void>((resolve) => { releaseTimeout = resolve; }));
+    const { stream, sockets } = setup(spot, { acknowledgementScheduler, acknowledgementTimeoutMs: 100 });
+    const connection = stream.connect();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].emit("open", {});
+    expect(stream.state).toBe("subscribing");
+    releaseTimeout();
+    await expect(connection).rejects.toMatchObject({ category: "network" });
+    expect(stream.state).toBe("error");
+    expect(sockets[0].closeCalls).toHaveLength(1);
   });
 
   it("bounds reconnects, resubscribes, and never reconnects after explicit close", async () => {

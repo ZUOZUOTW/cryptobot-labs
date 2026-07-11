@@ -6,7 +6,7 @@ import type {
 import { isExecutionTarget } from "@cryptobot-labs/trading-core";
 
 import { WeexApiError } from "./errors";
-import { isBoundedIdentifier, isCanonicalNonnegativeDecimal, isCanonicalPositiveDecimal, isPrivateSymbol } from "./orders";
+import { isBoundedIdentifier, isCanonicalNonnegativeDecimal, isPrivateSymbol } from "./orders";
 import { WeexCredentials } from "./private-client";
 import { signWeexRequest } from "./signing";
 
@@ -14,6 +14,7 @@ const PRIVATE_PATH = "/v3/ws/private";
 const DEFAULT_USER_AGENT = "CryptoBot-Labs-Agent/0.1";
 const DEFAULT_MAX_QUEUE_SIZE = 256;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
+const DEFAULT_ACKNOWLEDGEMENT_TIMEOUT_MS = 10_000;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_PUSH_ENTRIES = 100;
 
@@ -62,7 +63,7 @@ export interface PrivateOrderEvent {
 }
 
 export type PrivateOrderListener = (event: PrivateOrderEvent) => void;
-export type PrivateStreamState = "idle" | "connecting" | "open" | "reconnecting" | "error" | "closed";
+export type PrivateStreamState = "idle" | "connecting" | "subscribing" | "open" | "reconnecting" | "error" | "closed";
 
 export interface WeexPrivateStreamOptions {
   readonly target: ExecutionTarget;
@@ -73,6 +74,8 @@ export interface WeexPrivateStreamOptions {
   readonly scheduler?: (delayMs: number) => Promise<void>;
   readonly maximumQueueSize?: number;
   readonly maximumReconnectAttempts?: number;
+  readonly acknowledgementTimeoutMs?: number;
+  readonly acknowledgementScheduler?: (delayMs: number) => Promise<void>;
   readonly userAgent?: string;
 }
 
@@ -142,16 +145,16 @@ function parseHint(value: unknown): OrderHint {
   const quantity = source.size;
   if (!isBoundedIdentifier(exchangeOrderId) || !isBoundedIdentifier(clientOrderId) ||
       !isPrivateSymbol(symbol) || (side !== "BUY" && side !== "SELL") ||
-      !isCanonicalPositiveDecimal(quantity)) {
+      !isCanonicalNonnegativeDecimal(quantity)) {
     throw schema("Invalid private order identity");
   }
   if (typeof source.status !== "string" || source.status.length < 1 || source.status.length > 32 ||
       !isCanonicalNonnegativeDecimal(source.cumFillSize) ||
       !isCanonicalNonnegativeDecimal(source.cumFillFee) ||
-      !isCanonicalNonnegativeDecimal(source.latestFillPrice) ||
-      !Number.isSafeInteger(source.updatedTime) || (source.updatedTime as number) < 0) {
+      !isCanonicalNonnegativeDecimal(source.latestFillPrice)) {
     throw schema("Invalid private order state");
   }
+  safeTimestamp(source.updatedTime, "private order update time");
   return {
     exchangeOrderId,
     clientOrderId,
@@ -189,6 +192,8 @@ export class WeexPrivateStream {
   readonly #scheduler: (delayMs: number) => Promise<void>;
   readonly #maximumQueueSize: number;
   readonly #maximumReconnectAttempts: number;
+  readonly #acknowledgementTimeoutMs: number;
+  readonly #acknowledgementScheduler: (delayMs: number) => Promise<void>;
   readonly #userAgent: string;
   readonly #listeners = new Set<PrivateOrderListener>();
   readonly #lastFills = new Map<string, string>();
@@ -212,8 +217,10 @@ export class WeexPrivateStream {
     }
     const maximumQueueSize = options.maximumQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
     const maximumReconnectAttempts = options.maximumReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
+    const acknowledgementTimeoutMs = options.acknowledgementTimeoutMs ?? DEFAULT_ACKNOWLEDGEMENT_TIMEOUT_MS;
     if (!Number.isSafeInteger(maximumQueueSize) || maximumQueueSize < 1 || maximumQueueSize > 4096 ||
-        !Number.isSafeInteger(maximumReconnectAttempts) || maximumReconnectAttempts < 0 || maximumReconnectAttempts > 10) {
+        !Number.isSafeInteger(maximumReconnectAttempts) || maximumReconnectAttempts < 0 || maximumReconnectAttempts > 10 ||
+        !Number.isSafeInteger(acknowledgementTimeoutMs) || acknowledgementTimeoutMs < 100 || acknowledgementTimeoutMs > 30_000) {
       throw validation("Invalid WEEX private stream limits");
     }
     const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
@@ -228,6 +235,11 @@ export class WeexPrivateStream {
     this.#scheduler = options.scheduler ?? ((delay) => new Promise((resolve) => setTimeout(resolve, delay)));
     this.#maximumQueueSize = maximumQueueSize;
     this.#maximumReconnectAttempts = maximumReconnectAttempts;
+    this.#acknowledgementTimeoutMs = acknowledgementTimeoutMs;
+    this.#acknowledgementScheduler = options.acknowledgementScheduler ?? ((delay) => new Promise((resolve) => {
+      const timer = setTimeout(resolve, delay);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    }));
     this.#userAgent = userAgent;
   }
 
@@ -280,16 +292,23 @@ export class WeexPrivateStream {
     if (this.#explicitlyClosed) throw validation("Private stream is closed");
 
     return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settleResolve = (): void => {
+        if (!settled) { settled = true; resolve(); }
+      };
+      const settleReject = (failure: unknown): void => {
+        if (!settled) { settled = true; reject(failure); }
+      };
       let socket: PrivateSocket;
       try {
         socket = this.#factory({ url, headers });
       } catch (cause) {
-        reject(new WeexApiError("WEEX websocket factory failed", { category: "network", retryable: true, cause }));
+        settleReject(new WeexApiError("WEEX websocket factory failed", { category: "network", retryable: true, cause }));
         return;
       }
       if (!socket || typeof socket.addEventListener !== "function" || typeof socket.send !== "function" ||
           typeof socket.close !== "function") {
-        reject(validation("Invalid private websocket"));
+        settleReject(validation("Invalid private websocket"));
         return;
       }
       this.#socket = socket;
@@ -299,24 +318,34 @@ export class WeexPrivateStream {
         open: () => {
           if (opened || this.#explicitlyClosed || this.#socket !== socket) return;
           opened = true;
-          this.#state = "open";
+          this.#state = "subscribing";
           try {
             socket.send(JSON.stringify({ method: "SUBSCRIBE", params: ["orders"], id: 1 }));
-            resolve();
+            void this.#acknowledgementScheduler(this.#acknowledgementTimeoutMs).then(() => {
+              if (this.#socket === socket && !this.#subscribed && !this.#explicitlyClosed) {
+                settleReject(new WeexApiError("WEEX websocket subscription acknowledgement timed out", {
+                  category: "network", retryable: true,
+                }));
+                this.#fatal("subscription-timeout");
+              }
+            });
           } catch (cause) {
-            reject(new WeexApiError("WEEX websocket subscribe failed", { category: "network", retryable: true, cause }));
+            settleReject(new WeexApiError("WEEX websocket subscribe failed", { category: "network", retryable: true, cause }));
             this.#fatal("subscribe-failed");
           }
         },
-        message: (event) => { this.#onMessage(event.data); },
-        close: (event) => {
-          if (!opened) reject(new WeexApiError("WEEX websocket closed before open", {
+        message: (event) => {
+          if (this.#onMessage(event.data)) settleResolve();
+          else if (this.#state === "error") settleReject(schema("Invalid websocket subscription acknowledgement"));
+        },
+        close: () => {
+          if (!this.#subscribed) settleReject(new WeexApiError("WEEX websocket closed before subscription", {
             category: "network", retryable: true,
           }));
-          this.#onClose(socket, event);
+          this.#onClose(socket);
         },
         error: () => {
-          if (!opened) reject(new WeexApiError("WEEX websocket connection failed", {
+          if (!opened) settleReject(new WeexApiError("WEEX websocket connection failed", {
             category: "network", retryable: true,
           }));
         },
@@ -328,10 +357,11 @@ export class WeexPrivateStream {
     });
   }
 
-  #onMessage(data: string): void {
-    if (this.#state !== "open" || typeof data !== "string" || data.length < 2 || data.length > MAX_MESSAGE_BYTES) {
-      if (this.#state === "open") this.#fatal("invalid-message");
-      return;
+  #onMessage(data: string): boolean {
+    if ((this.#state !== "open" && this.#state !== "subscribing") ||
+        typeof data !== "string" || data.length < 2 || data.length > MAX_MESSAGE_BYTES) {
+      if (this.#state === "open" || this.#state === "subscribing") this.#fatal("invalid-message");
+      return false;
     }
     let parsed: unknown;
     try {
@@ -340,23 +370,26 @@ export class WeexPrivateStream {
       if (source.type === "ping") {
         safeTimestamp(source.time, "private ping time");
         this.#socket?.send('{"method":"PONG","id":1}');
-        return;
+        return false;
       }
       if (source.id === 1 && Object.hasOwn(source, "result")) {
-        if (this.#subscribed || (source.result !== null && source.result !== true)) {
+        if (this.#subscribed || source.result !== true) {
           this.#fatal("invalid-subscription-ack");
-          return;
+          return false;
         }
         this.#subscribed = true;
+        this.#state = "open";
         this.#reconnectAttempts = 0;
-        return;
+        return true;
       }
       const push = parsePush(source);
-      if (push === null || !this.#subscribed || push.accountVersion <= this.#lastAccountVersion) return;
+      if (push === null || !this.#subscribed || push.accountVersion <= this.#lastAccountVersion) return false;
       this.#lastAccountVersion = push.accountVersion;
       this.#enqueue(push);
+      return false;
     } catch {
       this.#fatal("invalid-message");
+      return false;
     }
   }
 
@@ -383,7 +416,8 @@ export class WeexPrivateStream {
       });
       if (this.#state !== "open" || snapshot === null) continue;
       if (snapshot.clientOrderId !== hint.clientOrderId || snapshot.exchangeOrderId !== hint.exchangeOrderId ||
-          snapshot.symbol !== hint.symbol || snapshot.side !== hint.side || snapshot.quantity !== hint.quantity ||
+          snapshot.symbol !== hint.symbol || snapshot.side !== hint.side ||
+          (hint.quantity !== "0" && snapshot.quantity !== hint.quantity) ||
           !isCanonicalNonnegativeDecimal(snapshot.cumulativeFilledQuantity)) {
         throw schema("REST order identity mismatch");
       }
@@ -415,7 +449,13 @@ export class WeexPrivateStream {
     void this.#scheduler(250 * 2 ** attempt)
       .then(async () => {
         if (this.#explicitlyClosed || this.#state !== "reconnecting") return;
-        await this.#openSocket();
+        const generation = this.#reconnectAttempts;
+        try {
+          await this.#openSocket();
+        } catch {
+          if (!this.#explicitlyClosed && this.#state === "reconnecting" &&
+              this.#reconnectAttempts === generation) this.#state = "error";
+        }
       })
       .catch(() => { if (!this.#explicitlyClosed) this.#state = "error"; });
   }
