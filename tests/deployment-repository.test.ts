@@ -142,7 +142,9 @@ describe("deployment, risk, and command repositories", () => {
     expect((await commands.pollForDevice("dev_a", { now: 251, limit: 10 })).items).toEqual([]);
   });
 
-  it.each(["throw", "zero"] as const)("authoritatively resolves an ack race after batch %s", async (outcome) => {
+  it.each([
+    ["throw", false], ["throw", true], ["zero", false], ["zero", true],
+  ] as const)("authoritatively resolves an ack race after batch %s (different=%s)", async (outcome, different) => {
     await create();
     await commands.enqueue({ id: "cmd_a", userId: "usr_a", deploymentId: "dep_a", type: "pause", version: 1,
       correlationId: "corr_a", expectedDeploymentVersion: 1, payload: {}, now: 200, expiresAt: 400 });
@@ -157,12 +159,19 @@ describe("deployment, risk, and command repositories", () => {
           interleaved = true;
           await winner.ack(winnerInput);
         }
-        if (outcome === "zero") return statements.map(() => ({ success: true, meta: { changes: 0 } }));
-        return database.batch(statements);
+        if (outcome === "throw") throw new Error("injected losing ack batch");
+        return statements.map(() => ({ success: true, meta: { changes: 0 } }));
       },
     };
     const loser = createCommandRepository(racingDatabase);
-    await expect(loser.ack({ ...winnerInput, id: "ack_loser", now: 275 })).resolves.toMatchObject({
+    const attempt = loser.ack({
+      ...winnerInput,
+      id: "ack_loser",
+      now: 275,
+      payload: different ? { applied: false } : winnerInput.payload,
+    });
+    if (different) await expect(attempt).rejects.toThrow(/conflict/i);
+    else await expect(attempt).resolves.toMatchObject({
       idempotent: true, acknowledgement: { id: "ack_winner", acknowledgedAt: 250 },
     });
   });
