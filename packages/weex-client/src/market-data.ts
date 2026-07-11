@@ -1,6 +1,7 @@
 import type {
   Candle,
   DatasetValidation,
+  FundingEvent,
   HistoricalCandleRequest,
   HistoricalDataset,
   InstrumentRules,
@@ -26,6 +27,137 @@ const ENDPOINTS = {
 export const MAX_FUTURES_HISTORY_PAGES = 100;
 export const MAX_FUTURES_HISTORY_CANDLES = 10_000;
 export const MAX_FUTURES_HISTORY_RANGE_MS = 90 * 24 * 60 * 60 * 1_000;
+
+const FUNDING_ENDPOINT = "/capi/v2/market/getHistoryFundRate";
+const MARK_ENDPOINT = "/capi/v3/market/historyKlines";
+const FUTURES_ORIGIN = "https://api-contract.weex.com";
+const FUNDING_LIMIT = 100;
+const MARK_INTERVAL = "4h";
+const MARK_INTERVAL_MS = 4 * 60 * 60 * 1_000;
+export const DEFAULT_FUNDING_MARK_MAX_AGE_MS = MARK_INTERVAL_MS;
+export const MAX_FUNDING_MARK_PAGES = 10;
+export const MAX_FUNDING_MARK_CANDLES = MAX_FUNDING_MARK_PAGES * 100;
+export const MAX_FUNDING_HISTORY_RANGE_MS = MAX_FUNDING_MARK_CANDLES * MARK_INTERVAL_MS;
+
+export interface HistoricalFundingRequest {
+  market: Market;
+  symbol: string;
+  startTime: number;
+  endTime: number;
+  strict?: boolean;
+  maxMarkAgeMs?: number;
+}
+
+export interface HistoricalFundingCoverage {
+  requestedStartTime: number;
+  requestedEndTime: number;
+  returnedFundingStartTime?: number;
+  returnedFundingEndTime?: number;
+  fundingRangeCovered: boolean;
+  requestedEvents: number;
+  matchedEvents: number;
+  missingMarkTimestamps: readonly number[];
+}
+
+export interface HistoricalFundingDataset {
+  request: Readonly<HistoricalFundingRequest>;
+  funding: readonly FundingEvent[];
+  complete: boolean;
+  coverage: HistoricalFundingCoverage;
+  provenance: {
+    provider: "WEEX";
+    sourceKind: "public-api";
+    fundingEndpoint: typeof FUNDING_ENDPOINT;
+    markEndpoint: typeof MARK_ENDPOINT;
+    priceType: "MARK";
+    collectedAt: number;
+    fundingLimit: typeof FUNDING_LIMIT;
+    markMaxAgeMs: number;
+    markPages: number;
+    markCandles: number;
+    truncated: boolean;
+    terminationReason?: "mark-page-limit" | "mark-candle-limit";
+  };
+}
+
+interface RawFundingEvent {
+  timestamp: number;
+  rate: string;
+}
+
+const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+function validationError(message: string): WeexApiError {
+  return new WeexApiError(message, { category: "validation", retryable: false });
+}
+
+function schemaError(message: string): WeexApiError {
+  return new WeexApiError(message, { category: "schema", retryable: false });
+}
+
+function normalizeFuturesSymbol(symbol: string): string {
+  if (typeof symbol !== "string") throw validationError("Invalid futures symbol");
+  const normalized = symbol.toLowerCase();
+  const core = normalized.startsWith("cmt_") ? normalized.slice(4) : normalized;
+  if (!/^[a-z0-9]{4,30}$/.test(core)) throw validationError("Invalid futures symbol");
+  return `cmt_${core}`;
+}
+
+function validateFundingRequest(request: HistoricalFundingRequest): { symbol: string; maxMarkAgeMs: number } {
+  if (request.market !== "futures") throw validationError("Funding history is available only for futures");
+  const symbol = normalizeFuturesSymbol(request.symbol);
+  if (!Number.isSafeInteger(request.startTime) || request.startTime < 0 ||
+      !Number.isSafeInteger(request.endTime) || request.endTime <= request.startTime) {
+    throw validationError("Invalid funding history range");
+  }
+  if (request.endTime - request.startTime > MAX_FUNDING_HISTORY_RANGE_MS) {
+    throw validationError("Funding history range exceeds the safe collection limit");
+  }
+  const maxMarkAgeMs = request.maxMarkAgeMs ?? DEFAULT_FUNDING_MARK_MAX_AGE_MS;
+  if (!Number.isSafeInteger(maxMarkAgeMs) || maxMarkAgeMs <= 0 || maxMarkAgeMs > MAX_FUNDING_HISTORY_RANGE_MS) {
+    throw validationError("Invalid funding MARK maximum age");
+  }
+  if (request.endTime > Number.MAX_SAFE_INTEGER - maxMarkAgeMs) throw validationError("Unsafe funding history range");
+  return { symbol, maxMarkAgeMs };
+}
+
+function parseFundingRows(body: unknown): RawFundingEvent[] {
+  if (!Array.isArray(body)) throw schemaError("Invalid funding history collection");
+  const byTime = new Map<number, RawFundingEvent>();
+  for (const [index, value] of body.entries()) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw schemaError(`Invalid funding history row at ${index}`);
+    }
+    const row = value as Record<string, unknown>;
+    const keys = Object.keys(row).sort();
+    if (keys.length !== 2 || keys[0] !== "fundingRate" || keys[1] !== "fundingTime") {
+      throw schemaError(`Invalid funding history fields at ${index}`);
+    }
+    if (typeof row.fundingRate !== "string" || !SIGNED_DECIMAL.test(row.fundingRate)) {
+      throw schemaError(`Invalid funding rate at ${index}`);
+    }
+    const timestamp = typeof row.fundingTime === "number"
+      ? row.fundingTime
+      : typeof row.fundingTime === "string" && /^\d+$/.test(row.fundingTime) ? Number(row.fundingTime) : NaN;
+    if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw schemaError(`Invalid funding time at ${index}`);
+    const current = byTime.get(timestamp);
+    if (current && current.rate !== row.fundingRate) throw schemaError(`Conflicting funding rows at ${timestamp}`);
+    byTime.set(timestamp, { timestamp, rate: row.fundingRate });
+  }
+  return [...byTime.values()].sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function mergeMarkCandles(candles: readonly Candle[]): Candle[] {
+  const byOpenTime = new Map<number, Candle>();
+  for (const candle of candles) {
+    const current = byOpenTime.get(candle.openTime);
+    if (current && (current.closeTime !== candle.closeTime || current.close !== candle.close)) {
+      throw schemaError(`Conflicting MARK candles at ${candle.openTime}`);
+    }
+    byOpenTime.set(candle.openTime, candle);
+  }
+  return [...byOpenTime.values()].sort((left, right) => left.closeTime - right.closeTime);
+}
 
 function validateRequest(request: HistoricalCandleRequest): void {
   if (!request.symbol || !request.interval) {
@@ -180,6 +312,116 @@ export class WeexPublicClient {
         ...(last === undefined ? {} : { returnedEndTime: last + intervalMs }),
       },
     };
+  }
+
+  async collectHistoricalFunding(request: HistoricalFundingRequest): Promise<HistoricalFundingDataset> {
+    const { symbol, maxMarkAgeMs } = validateFundingRequest(request);
+    const fundingUrl = new URL(FUNDING_ENDPOINT, FUTURES_ORIGIN);
+    fundingUrl.searchParams.set("symbol", symbol);
+    fundingUrl.searchParams.set("limit", String(FUNDING_LIMIT));
+    const fundingResponse = await this.transport.send({
+      method: "GET",
+      url: fundingUrl.toString(),
+      headers: { Accept: "application/json" },
+    });
+    const allFunding = parseFundingRows(fundingResponse.body);
+    if (allFunding.length > FUNDING_LIMIT) throw schemaError("Funding history exceeds the documented limit");
+    const returnedFundingStartTime = allFunding[0]?.timestamp;
+    const returnedFundingEndTime = allFunding.at(-1)?.timestamp;
+    // A full latest-100 response whose first event is newer than the requested
+    // boundary cannot prove the omitted older portion. A shorter response is
+    // treated as the complete exchange history available from this endpoint.
+    const fundingRangeCovered = request.endTime <= this.now() &&
+      (allFunding.length < FUNDING_LIMIT ||
+        (returnedFundingStartTime !== undefined && returnedFundingStartTime <= request.startTime));
+    const requestedFunding = allFunding.filter(({ timestamp }) =>
+      timestamp >= request.startTime && timestamp < request.endTime);
+
+    const markCandles: Candle[] = [];
+    let markPages = 0;
+    let cursor = Math.max(0, request.startTime - maxMarkAgeMs);
+    let terminationReason: "mark-page-limit" | "mark-candle-limit" | undefined;
+    while (requestedFunding.length > 0 && cursor < request.endTime) {
+      if (markPages >= MAX_FUNDING_MARK_PAGES) {
+        terminationReason = "mark-page-limit";
+        break;
+      }
+      const markUrl = new URL(MARK_ENDPOINT, FUTURES_ORIGIN);
+      markUrl.searchParams.set("symbol", symbol);
+      markUrl.searchParams.set("interval", MARK_INTERVAL);
+      markUrl.searchParams.set("startTime", String(cursor));
+      markUrl.searchParams.set("endTime", String(request.endTime));
+      markUrl.searchParams.set("limit", "100");
+      markUrl.searchParams.set("priceType", "MARK");
+      const response = await this.transport.send({
+        method: "GET",
+        url: markUrl.toString(),
+        headers: { Accept: "application/json" },
+      });
+      const page = parseFuturesCandleRows(response.body, this.now());
+      markPages += 1;
+      const capacity = MAX_FUNDING_MARK_CANDLES - markCandles.length;
+      markCandles.push(...page.slice(0, capacity));
+      if (page.length > capacity || markCandles.length >= MAX_FUNDING_MARK_CANDLES) {
+        terminationReason = "mark-candle-limit";
+        break;
+      }
+      if (page.length < 100) break;
+      const maximumOpenTime = Math.max(...page.map(({ openTime }) => openTime));
+      const nextCursor = maximumOpenTime + MARK_INTERVAL_MS;
+      if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) break;
+      cursor = nextCursor;
+    }
+
+    const marks = mergeMarkCandles(markCandles);
+    const missingMarkTimestamps: number[] = [];
+    const funding: FundingEvent[] = [];
+    for (const event of requestedFunding) {
+      let candidate: Candle | undefined;
+      for (const candle of marks) {
+        if (candle.closeTime > event.timestamp) break;
+        candidate = candle;
+      }
+      if (!candidate || event.timestamp - candidate.closeTime > maxMarkAgeMs) {
+        missingMarkTimestamps.push(event.timestamp);
+        continue;
+      }
+      funding.push({ timestamp: event.timestamp, rate: event.rate, markPrice: candidate.close });
+    }
+
+    const complete = fundingRangeCovered && terminationReason === undefined &&
+      missingMarkTimestamps.length === 0 && funding.length === requestedFunding.length;
+    const result: HistoricalFundingDataset = {
+      request: { ...request },
+      funding,
+      complete,
+      coverage: {
+        requestedStartTime: request.startTime,
+        requestedEndTime: request.endTime,
+        ...(returnedFundingStartTime === undefined ? {} : { returnedFundingStartTime }),
+        ...(returnedFundingEndTime === undefined ? {} : { returnedFundingEndTime }),
+        fundingRangeCovered,
+        requestedEvents: requestedFunding.length,
+        matchedEvents: funding.length,
+        missingMarkTimestamps,
+      },
+      provenance: {
+        provider: "WEEX",
+        sourceKind: "public-api",
+        fundingEndpoint: FUNDING_ENDPOINT,
+        markEndpoint: MARK_ENDPOINT,
+        priceType: "MARK",
+        collectedAt: this.now(),
+        fundingLimit: FUNDING_LIMIT,
+        markMaxAgeMs: maxMarkAgeMs,
+        markPages,
+        markCandles: marks.length,
+        truncated: terminationReason !== undefined,
+        ...(terminationReason === undefined ? {} : { terminationReason }),
+      },
+    };
+    if (request.strict && !complete) throw validationError("Incomplete WEEX funding history coverage");
+    return result;
   }
 
   getInstrumentRules(market: Market, symbol: string): Promise<InstrumentRules> {
