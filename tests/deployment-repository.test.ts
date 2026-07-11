@@ -63,6 +63,9 @@ describe("deployment, risk, and command repositories", () => {
   } as never);
 
   it("atomically creates an owned deployment and strict risk policy", async () => {
+    await expect(create({ mode: "futures-demo" })).rejects.toThrow(/paper/i);
+    await expect(create({ mode: "live" })).rejects.toThrow(/paper/i);
+    expect(database.raw.prepare("SELECT count(*) AS count FROM deployments").get()).toEqual({ count: 0 });
     await expect(create({ deviceId: "dev_b" })).rejects.toThrow(/owned/i);
     expect(database.raw.prepare("SELECT count(*) AS count FROM deployments").get()).toEqual({ count: 0 });
     await expect(create({ risk: { ...risk(), maxOrderNotional: "1e3" } })).rejects.toThrow(/decimal/i);
@@ -108,7 +111,8 @@ describe("deployment, risk, and command repositories", () => {
       correlationId: "corr_a", expectedDeploymentVersion: 1, payload: { reason: "user" }, now: 200, expiresAt: 300 };
     await expect(commands.enqueue({ ...input, userId: "usr_b" })).rejects.toThrow(/owned|version/i);
     expect((await commands.enqueue(input)).idempotent).toBe(false);
-    expect((await commands.enqueue(input)).idempotent).toBe(true);
+    const retry = await commands.enqueue({ ...input, id: "cmd_retry", now: 220, expiresAt: 400 });
+    expect(retry).toMatchObject({ idempotent: true, command: { id: "cmd_a", createdAt: 200, expiresAt: 300 } });
     await expect(commands.enqueue({ ...input, id: "cmd_b", type: "close-positions" })).rejects.toThrow(/conflict/i);
     await expect(commands.enqueue({ ...input, id: "cmd_c", correlationId: "corr_stale", expectedDeploymentVersion: 2 })).rejects.toThrow(/version/i);
   });
@@ -132,8 +136,34 @@ describe("deployment, risk, and command repositories", () => {
       expectedDeploymentVersion: 1, status: "ok" as const, payload: { applied: true }, now: 250 };
     expect(await commands.ack({ ...ack, deviceId: "dev_b" })).toBeNull();
     expect((await commands.ack(ack))?.idempotent).toBe(false);
-    expect((await commands.ack(ack))?.idempotent).toBe(true);
-    await expect(commands.ack({ ...ack, id: "ack_other", status: "failed" })).rejects.toThrow(/conflict/i);
+    expect(await commands.ack({ ...ack, id: "ack_retry", now: 270 }))
+      .toMatchObject({ idempotent: true, acknowledgement: { id: "ack_a", acknowledgedAt: 250 } });
+    await expect(commands.ack({ ...ack, id: "ack_other", now: 270, status: "failed" })).rejects.toThrow(/conflict/i);
     expect((await commands.pollForDevice("dev_a", { now: 251, limit: 10 })).items).toEqual([]);
+  });
+
+  it.each(["throw", "zero"] as const)("authoritatively resolves an ack race after batch %s", async (outcome) => {
+    await create();
+    await commands.enqueue({ id: "cmd_a", userId: "usr_a", deploymentId: "dep_a", type: "pause", version: 1,
+      correlationId: "corr_a", expectedDeploymentVersion: 1, payload: {}, now: 200, expiresAt: 400 });
+    const winnerInput = { id: "ack_winner", deviceId: "dev_a", commandId: "cmd_a", deploymentId: "dep_a",
+      expectedDeploymentVersion: 1, status: "ok" as const, payload: { applied: true }, now: 250 };
+    const winner = createCommandRepository(database);
+    let interleaved = false;
+    const racingDatabase: ControlPlaneDatabase = {
+      prepare: (sql) => database.prepare(sql),
+      batch: async (statements) => {
+        if (!interleaved) {
+          interleaved = true;
+          await winner.ack(winnerInput);
+        }
+        if (outcome === "zero") return statements.map(() => ({ success: true, meta: { changes: 0 } }));
+        return database.batch(statements);
+      },
+    };
+    const loser = createCommandRepository(racingDatabase);
+    await expect(loser.ack({ ...winnerInput, id: "ack_loser", now: 275 })).resolves.toMatchObject({
+      idempotent: true, acknowledgement: { id: "ack_winner", acknowledgedAt: 250 },
+    });
   });
 });

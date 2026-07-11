@@ -127,6 +127,7 @@ export function createDeploymentRepository(database: ControlPlaneDatabase) {
     async create(input: { id: string; userId: string; deviceId: string; strategyVersionId: string; name: string;
       mode: string; configurationHash: string; risk: RiskPolicyInput; now: number }): Promise<{ deployment: DeploymentRecord; risk: RiskPolicyRecord }> {
       exactInput(input, ["id", "userId", "deviceId", "strategyVersionId", "name", "mode", "configurationHash", "risk", "now"]);
+      if (input.mode !== "paper") throw new Error("new deployments must start in paper mode");
       const owner = id(input.userId, "userId");
       const deploymentId = id(input.id, "deploymentId");
       const deviceId = id(input.deviceId, "deviceId");
@@ -228,11 +229,11 @@ export function createDeploymentRepository(database: ControlPlaneDatabase) {
   };
 }
 
-const sameCommand = (row: CommandRecord, input: { id: string; deploymentId: string; type: CommandType; version: number;
-  correlationId: string; expectedDeploymentVersion: number; payloadJson: string; now: number; expiresAt: number }): boolean =>
-  row.id === input.id && row.deploymentId === input.deploymentId && row.type === input.type && row.version === input.version
+const sameCommand = (row: CommandRecord, input: { deploymentId: string; type: CommandType; version: number;
+  correlationId: string; expectedDeploymentVersion: number; payloadJson: string }): boolean =>
+  row.deploymentId === input.deploymentId && row.type === input.type && row.version === input.version
   && row.correlationId === input.correlationId && row.expectedDeploymentVersion === input.expectedDeploymentVersion
-  && row.payloadJson === input.payloadJson && row.createdAt === input.now && row.expiresAt === input.expiresAt;
+  && row.payloadJson === input.payloadJson;
 
 export function createCommandRepository(database: ControlPlaneDatabase) {
   const getByCorrelation = (userId: string, correlationId: string): Promise<CommandRecord | null> => database.prepare(`
@@ -326,9 +327,9 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
       const expected = positiveVersion(input.expectedDeploymentVersion, "expectedDeploymentVersion");
       const payloadJson = safeCanonicalJsonStringify(input.payload, "ack payload", 16_384);
       const now = time(input.now, "now");
-      const identical = (row: ScopedAck) => row.id === ackId && row.deviceId === deviceId
+      const identical = (row: ScopedAck) => row.deviceId === deviceId
         && row.deploymentId === deploymentId && row.expectedDeploymentVersion === expected
-        && row.status === input.status && row.payloadJson === payloadJson && row.acknowledgedAt === now;
+        && row.status === input.status && row.payloadJson === payloadJson;
       const existing = await getAck(commandId, deviceId);
       if (existing) {
         if (!identical(existing)) throw new Error("command acknowledgement conflict");
@@ -354,7 +355,12 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
         if (raced) throw new Error("command acknowledgement conflict");
         throw error;
       }
-      if (!results.every((result) => result.success && result.meta.changes === 1)) return null;
+      if (!results.every((result) => result.success && result.meta.changes === 1)) {
+        const authoritative = await getAck(commandId, deviceId);
+        if (authoritative && identical(authoritative)) return { acknowledgement: authoritative, idempotent: true };
+        if (authoritative) throw new Error("command acknowledgement conflict");
+        return null;
+      }
       const acknowledgement = await getAck(commandId, deviceId);
       return acknowledgement ? { acknowledgement, idempotent: false } : null;
     },
