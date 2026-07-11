@@ -289,7 +289,7 @@ describe("ExecutionCoordinator", () => {
     expect(exchange.submit).toHaveBeenCalledTimes(1);
   });
 
-  it("persists unknown when breaker success settlement fails after submission", async () => {
+  it("preserves a persisted acknowledgement when breaker success settlement fails", async () => {
     const circuitBreaker = {
       tryAcquire: vi.fn(() => ({ allowed: true as const, token: "token" })),
       recordSuccess: vi.fn(() => false),
@@ -299,8 +299,8 @@ describe("ExecutionCoordinator", () => {
     const outcome = await coordinator.propose(signal, executionContext);
     expect(outcome.status).toBe("submitted");
     if (outcome.status !== "submitted") throw new Error("unexpected outcome");
-    expect(outcome.order.status).toBe("unknown");
-    expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("unknown");
+    expect(outcome.order.status).toBe("acknowledged");
+    expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("acknowledged");
     expect(circuitBreaker.recordSuccess).toHaveBeenCalledOnce();
     expect(circuitBreaker.recordFailure).not.toHaveBeenCalled();
   });
@@ -353,5 +353,103 @@ describe("ExecutionCoordinator", () => {
     expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("unknown");
     expect(circuitBreaker.recordFailure).toHaveBeenCalledOnce();
     expect(circuitBreaker.recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("does not reload after a create failure when emergency stop latched", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const repository = new MemoryOrderRepository();
+    const get = vi.spyOn(repository, "getByClientOrderId");
+    const createSave = vi.fn();
+    vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
+      if (expectedVersion === null) {
+        createSave();
+        await gate;
+        throw new Error("create failed");
+      }
+      return order;
+    });
+    const { coordinator } = setup({ repository });
+    const pending = coordinator.propose(signal, executionContext);
+    await vi.waitFor(() => expect(createSave).toHaveBeenCalledOnce());
+    coordinator.emergencyStop();
+    release();
+    await expect(pending).resolves.toEqual({ status: "blocked", reason: "emergency-stop" });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed and latches stop when unknown cannot be persisted", async () => {
+    const repository = new MemoryOrderRepository();
+    vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
+      if (order.status === "unknown") throw new Error("unknown save rejected");
+      const current = repository.orders.get(order.clientOrderId);
+      if ((current?.version ?? null) !== expectedVersion) throw new Error("optimistic conflict");
+      repository.orders.set(order.clientOrderId, order);
+      return order;
+    });
+    const exchange = {
+      submit: vi.fn(async () => { throw new Error("network"); }),
+      cancel: vi.fn(), findByClientOrderId: vi.fn(),
+    };
+    const circuitBreaker = {
+      tryAcquire: vi.fn(() => ({ allowed: true as const, token: "token" })),
+      recordSuccess: vi.fn(() => true),
+      recordFailure: vi.fn(() => true),
+    };
+    const { coordinator } = setup({ repository, exchange, circuitBreaker });
+    await expect(coordinator.propose(signal, executionContext)).resolves.toEqual({
+      status: "persistence-failed",
+      reason: "unknown-order-not-persisted",
+    });
+    expect(coordinator.stopped).toBe(true);
+    expect(circuitBreaker.recordFailure).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [{ status: "acknowledged" as const, exchangeOrderId: "exchange-1" }, "acknowledged"],
+    [{ status: "rejected" as const, reason: "exchange-denied" }, "rejected"],
+  ])("preserves exchange result %s when stop latches during submit", async (result, status) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const exchange = {
+      submit: vi.fn(async () => { await gate; return result; }),
+      cancel: vi.fn(), findByClientOrderId: vi.fn(),
+    };
+    const { coordinator } = setup({ exchange });
+    const pending = coordinator.propose(signal, executionContext);
+    await vi.waitFor(() => expect(exchange.submit).toHaveBeenCalledOnce());
+    coordinator.emergencyStop();
+    release();
+    const outcome = await pending;
+    expect(outcome.status).toBe("submitted");
+    if (outcome.status !== "submitted") throw new Error("unexpected outcome");
+    expect(outcome.order.status).toBe(status);
+  });
+
+  it("preserves an acknowledgement when stop latches during terminal save", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const repository = new MemoryOrderRepository();
+    const terminalSave = vi.fn();
+    vi.spyOn(repository, "save").mockImplementation(async (order, expectedVersion) => {
+      if (order.status === "acknowledged") {
+        terminalSave();
+        await gate;
+      }
+      const current = repository.orders.get(order.clientOrderId);
+      if ((current?.version ?? null) !== expectedVersion) throw new Error("optimistic conflict");
+      repository.orders.set(order.clientOrderId, order);
+      return order;
+    });
+    const { coordinator } = setup({ repository });
+    const pending = coordinator.propose(signal, executionContext);
+    await vi.waitFor(() => expect(terminalSave).toHaveBeenCalledOnce());
+    coordinator.emergencyStop();
+    release();
+    const outcome = await pending;
+    expect(outcome.status).toBe("submitted");
+    if (outcome.status !== "submitted") throw new Error("unexpected outcome");
+    expect(outcome.order.status).toBe("acknowledged");
+    expect(repository.orders.get(outcome.order.clientOrderId)?.status).toBe("acknowledged");
   });
 });

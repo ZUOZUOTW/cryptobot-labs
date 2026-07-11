@@ -45,17 +45,6 @@ function sameIntent(left: ApprovedOrderIntent, right: ApprovedOrderIntent): bool
     left.reduceOnly === right.reduceOnly;
 }
 
-function unknownOrder(order: TrackedOrder, at: number): TrackedOrder {
-  return Object.freeze({
-    ...order,
-    status: "unknown",
-    exchangeOrderId: undefined,
-    reason: "submit-outcome-uncertain",
-    updatedAt: at,
-    version: order.version + 1,
-  });
-}
-
 class BreakerSettlement {
   #settled = false;
   readonly #dependencies: ExecutionCoordinatorDependencies;
@@ -205,6 +194,7 @@ export class ExecutionCoordinator {
     try {
       order = await this.#dependencies.repository.save(order, null);
     } catch (createFailure) {
+      if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       const raced = await this.#dependencies.repository.getByClientOrderId(clientOrderId);
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
       if (raced === null) throw createFailure;
@@ -255,7 +245,6 @@ export class ExecutionCoordinator {
 
     try {
       const submitResult = await this.#dependencies.exchange.submit(order.approvedIntent);
-      if (this.#stopped) throw new Error("emergency stop after submit");
       if (!isSubmitOutcome(submitResult)) throw new TypeError("malformed submit outcome");
 
       const failureCategory = submitResult.status === "unknown"
@@ -276,15 +265,20 @@ export class ExecutionCoordinator {
           : transitionOrder(order, { type: "submit-timeout", at: context.now });
 
       order = await this.#dependencies.repository.save(order, order.version - 1);
-      if (this.#stopped) throw new Error("emergency stop after terminal save");
       const settled = failureCategory === null
         ? settlement.success()
         : settlement.failure(failureCategory);
-      if (!settled) order = await this.#persistUnknown(order, context.now);
+      if (!settled) {
+        const persisted = await this.#persistUnknown(order, context.now);
+        if (persisted === null) return this.#persistenceFailed();
+        order = persisted;
+      }
       return { status: "submitted", order };
     } catch (failure) {
-      order = await this.#persistUnknown(order, context.now);
+      const persisted = await this.#persistUnknown(order, context.now);
       settlement.failure(this.#classifyFailure(failure));
+      if (persisted === null) return this.#persistenceFailed();
+      order = persisted;
       return { status: "submitted", order };
     } finally {
       if (!settlement.settled) settlement.failure("unknown");
@@ -299,21 +293,37 @@ export class ExecutionCoordinator {
     }
   }
 
-  async #persistUnknown(order: TrackedOrder, at: number): Promise<TrackedOrder> {
-    let base = order;
+  #persistenceFailed(): ExecutionOutcome {
+    this.emergencyStop();
+    return { status: "persistence-failed", reason: "unknown-order-not-persisted" };
+  }
+
+  async #persistUnknown(order: TrackedOrder, at: number): Promise<TrackedOrder | null> {
+    let base: TrackedOrder | null;
     try {
-      const persisted = await this.#dependencies.repository.getByClientOrderId(order.clientOrderId);
-      if (persisted !== null) base = persisted;
+      base = await this.#dependencies.repository.getByClientOrderId(order.clientOrderId);
     } catch {
-      // Continue with the last known version for a best-effort fail-closed write.
+      return null;
     }
-    const uncertain = base.status === "submitting"
-      ? transitionOrder(base, { type: "submit-timeout", at })
-      : unknownOrder(base, at);
-    try {
-      return await this.#dependencies.repository.save(uncertain, base.version);
-    } catch {
-      return uncertain;
+    if (base === null || !sameIntent(base.approvedIntent, order.approvedIntent)) return null;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (base.status === "unknown" || base.status !== "submitting") {
+        return base.status === "proposed" ? null : base;
+      }
+      const uncertain = transitionOrder(base, { type: "submit-timeout", at });
+      try {
+        return await this.#dependencies.repository.save(uncertain, base.version);
+      } catch {
+        if (attempt === 1) return null;
+        try {
+          base = await this.#dependencies.repository.getByClientOrderId(order.clientOrderId);
+        } catch {
+          return null;
+        }
+        if (base === null || !sameIntent(base.approvedIntent, order.approvedIntent)) return null;
+      }
     }
+    return null;
   }
 }

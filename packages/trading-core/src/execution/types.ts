@@ -68,6 +68,10 @@ export type ExecutionOutcome =
   | { readonly status: "idempotent"; readonly order: TrackedOrder }
   | { readonly status: "risk-rejected"; readonly order: TrackedOrder }
   | {
+      readonly status: "persistence-failed";
+      readonly reason: "unknown-order-not-persisted";
+    }
+  | {
       readonly status: "blocked";
       readonly reason:
         | "emergency-stop"
