@@ -337,6 +337,7 @@ describe("WEEX V3 private stream", () => {
     await Promise.resolve();
     expect(factory).toHaveBeenCalledTimes(3);
     expect(stream.state).toBe("error");
+    await expect(stream.connect()).rejects.toMatchObject({ category: "network" });
     stream.close();
     expect(stream.state).toBe("closed");
     expect(sockets[2].listeners.size).toBe(0);
@@ -350,6 +351,21 @@ describe("WEEX V3 private stream", () => {
     expect(stream.state).toBe("error");
     expect(scheduler).not.toHaveBeenCalled();
     expect(factory).toHaveBeenCalledTimes(1);
+    await expect(stream.connect()).rejects.toMatchObject({ category: "network" });
+  });
+
+  it("propagates reconnect factory failures instead of reporting success", async () => {
+    const scheduled: Array<() => void> = [];
+    const scheduler = vi.fn(() => new Promise<void>((resolve) => scheduled.push(resolve)));
+    const { stream, sockets, factory } = setup(spot, { scheduler, maximumReconnectAttempts: 1 });
+    const socket = await connect(stream, sockets);
+    factory.mockImplementationOnce(() => { throw new Error("factory unavailable"); });
+    socket.emit("close", { code: 1006, reason: "network", wasClean: false });
+    const reconnect = stream.connect();
+    scheduled.shift()?.();
+    await expect(reconnect).rejects.toMatchObject({ category: "network" });
+    expect(stream.state).toBe("error");
+    await expect(stream.connect()).rejects.toMatchObject({ category: "network" });
   });
 
   it("rejects and closes an errored socket before acknowledgement, then reconnects boundedly", async () => {

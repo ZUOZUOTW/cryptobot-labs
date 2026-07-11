@@ -308,8 +308,11 @@ export class WeexPrivateStream {
   }
 
   connect(): Promise<void> {
-    if (this.#connectPromise !== null) return this.#connectPromise;
     if (this.#state === "closed") return Promise.reject(validation("Private stream is closed"));
+    if (this.#state === "error") return Promise.reject(new WeexApiError("Private stream is in a failed state", {
+      category: "network", retryable: false,
+    }));
+    if (this.#connectPromise !== null) return this.#connectPromise;
     if (this.#state === "open") {
       const connected = Promise.resolve();
       this.#connectPromise = connected;
@@ -523,10 +526,12 @@ export class WeexPrivateStream {
     if (this.#explicitlyClosed || this.#state === "error" || this.#state === "closed") return;
     if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) {
       this.#state = "error";
+      this.#connectPromise = null;
       return;
     }
     if (this.#reconnectAttempts >= this.#maximumReconnectAttempts) {
       this.#state = "error";
+      this.#connectPromise = null;
       return;
     }
     const attempt = this.#reconnectAttempts;
@@ -535,16 +540,10 @@ export class WeexPrivateStream {
     const reconnectPromise = this.#scheduler(250 * 2 ** attempt)
       .then(async () => {
         if (this.#explicitlyClosed || this.#state !== "reconnecting") return;
-        const generation = this.#reconnectAttempts;
-        try {
-          await this.#openSocket();
-        } catch {
-          if (!this.#explicitlyClosed && this.#state === "reconnecting" &&
-              this.#reconnectAttempts === generation) this.#state = "error";
-        }
+        await this.#openSocket();
       })
       .catch((failure: unknown) => {
-        if (!this.#explicitlyClosed) this.#state = "error";
+        if (!this.#explicitlyClosed && this.#connectPromise === reconnectPromise) this.#state = "error";
         throw failure;
       });
     this.#connectPromise = reconnectPromise;
