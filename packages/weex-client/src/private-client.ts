@@ -180,6 +180,12 @@ function orderRoute(target: ExecutionTarget): Route {
   };
 }
 
+function tradeRoute(target: ExecutionTarget): Route {
+  if (target.market === "spot") return { origin: ORIGIN.spot, path: "/api/v3/myTrades" };
+  if (target.mode !== "live") throw validation("Demo trade-fee reconciliation is unsupported");
+  return { origin: ORIGIN.futures, path: "/capi/v3/userTrades" };
+}
+
 function futuresSearchRoutes(target: ExecutionTarget): readonly Route[] {
   if (target.market !== "futures") throw validation("Futures search requires a futures target");
   return target.mode === "live"
@@ -277,6 +283,21 @@ function parsePositions(value: unknown): readonly WeexAccountPosition[] {
       unrealizedPnl: position.unrealizePnl, updatedAt: updatedAt as number });
   }).filter((position) => /[1-9]/.test(position.size));
   return Object.freeze(positions);
+}
+
+function parseTradeFees(body: unknown, target: ExecutionTarget, symbol: string): string {
+  const data = unwrapGet(body);
+  if (!Array.isArray(data) || data.length < 1 || data.length >= 100) throw schema("Invalid or truncated account trade collection");
+  let fees = "0";
+  for (const item of data) {
+    const trade = record(item, "account trade");
+    if (trade.symbol !== symbol || typeof trade.commission !== "string" || !UNSIGNED_AMOUNT.test(trade.commission)
+      || (target.market === "futures" && trade.commissionAsset !== "USDT")) {
+      throw schema("Invalid account trade fee");
+    }
+    fees = canonicalSum(fees, trade.commission);
+  }
+  return fees;
 }
 
 function parseAccount(
@@ -715,6 +736,14 @@ export class WeexPrivateClient {
     return snapshot;
   }
 
+  async #attachTradeFees(target: ExecutionTarget, snapshot: ExchangeOrderSnapshot): Promise<ExchangeOrderSnapshot> {
+    if (snapshot.cumulativeFilledQuantity === "0") return snapshot;
+    const response = await this.#safeGet(tradeRoute(target), [
+      ["symbol", snapshot.symbol], ["orderId", snapshot.exchangeOrderId], ["limit", "100"],
+    ]);
+    return Object.freeze({ ...snapshot, fees: parseTradeFees(response.body, target, snapshot.symbol) });
+  }
+
   async findOrderByClientOrderId(query: ExchangeOrderQuery): Promise<ExchangeOrderSnapshot | null> {
     assertTarget(query?.target);
     if (!isPrivateSymbol(query.symbol) || !(query.target.market === "futures"
@@ -736,7 +765,7 @@ export class WeexPrivateClient {
           ? ["orderId", query.exchangeOrderId]
           : ["origClientOrderId", query.clientOrderId]]);
         const data = unwrapGet(response.body);
-        return this.#acceptAuthoritativeSnapshot(key, parseOrderSnapshot(data, expected));
+        return this.#acceptAuthoritativeSnapshot(key, await this.#attachTradeFees(query.target, parseOrderSnapshot(data, expected)));
       } catch (error) {
         if (error instanceof WeexApiError && error.category === "not-found") return null;
         throw error;
@@ -745,7 +774,8 @@ export class WeexPrivateClient {
     if (query.exchangeOrderId && query.target.mode === "live") {
       try {
         const response = await this.#safeGet(orderRoute(query.target), [["orderId", query.exchangeOrderId]]);
-        return this.#acceptAuthoritativeSnapshot(key, parseOrderSnapshot(unwrapGet(response.body), expected));
+        return this.#acceptAuthoritativeSnapshot(key,
+          await this.#attachTradeFees(query.target, parseOrderSnapshot(unwrapGet(response.body), expected)));
       } catch (error) {
         if (error instanceof WeexApiError && error.category === "not-found") return null;
         throw error;
@@ -774,7 +804,8 @@ export class WeexPrivateClient {
     }
     return matches.length === 0
       ? null
-      : this.#acceptAuthoritativeSnapshot(key, parseOrderSnapshot(matches[0], expected));
+      : this.#acceptAuthoritativeSnapshot(key,
+        await this.#attachTradeFees(query.target, parseOrderSnapshot(matches[0], expected)));
   }
 
   async cancelOrder(query: ExchangeOrderQuery): Promise<CancelOutcome> {

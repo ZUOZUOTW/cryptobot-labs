@@ -136,6 +136,7 @@ describe("WeexPrivateClient", () => {
         orderId: "42", clientOrderId: "cbl-1", symbol: "BTCUSDT", side: "BUY",
         origQty: "0.001", executedQty: "0.0005", avgPrice: "30000.1", status: "PARTIALLY_FILLED",
       }),
+      ok([{ symbol: "BTCUSDT", commission: "0.01" }]),
     ]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
@@ -146,6 +147,7 @@ describe("WeexPrivateClient", () => {
     expect(transport.requests[2]?.url).toBe(
       "https://api-spot.weex.com/api/v3/order?origClientOrderId=cbl-1",
     );
+    expect(transport.requests[3]?.url).toBe("https://api-spot.weex.com/api/v3/myTrades?limit=100&orderId=42&symbol=BTCUSDT");
   });
 
   it("searches bounded futures open orders and then history by exact client id", async () => {
@@ -153,6 +155,7 @@ describe("WeexPrivateClient", () => {
     const transport = new ScriptedTransport([
       ok([]),
       ok([{ orderId: 9, clientOrderId: "target", symbol: "BTCUSDT", side: "SELL", origQty: "1", executedQty: "1", status: "FILLED" }]),
+      ok([{ symbol: "BTCUSDT", commission: "0.2", commissionAsset: "USDT" }]),
     ]);
     const client = new WeexPrivateClient({
       transport, credentials, clock,
@@ -164,6 +167,7 @@ describe("WeexPrivateClient", () => {
     expect(transport.requests.map(({ url }) => url)).toEqual([
       "https://api-contract.weex.com/capi/v3/openOrders?limit=100&page=0&symbol=BTCUSDT",
       "https://api-contract.weex.com/capi/v3/order/history?limit=100&page=0&symbol=BTCUSDT",
+      "https://api-contract.weex.com/capi/v3/userTrades?limit=100&orderId=9&symbol=BTCUSDT",
     ]);
   });
 
@@ -592,6 +596,7 @@ describe("WeexPrivateClient", () => {
           orderId: String(index + 1), clientOrderId, symbol: "BTCUSDT", side: "BUY",
           origQty: "0.001", executedQty: "0.001", status: "FILLED",
         }),
+        ok([{ symbol: "BTCUSDT", commission: "0.000001" }]),
       );
     }
     const transport = new ScriptedTransport(steps);
@@ -627,7 +632,9 @@ describe("WeexPrivateClient", () => {
     const transport = new ScriptedTransport([
       ok({ orderId: "81", clientOrderId: "pending-1", symbol: "BTCUSDT", side: "BUY", origQty: "1", executedQty: "0", status: "PENDING" }),
       ok({ orderId: "82", clientOrderId: "canceling-1", symbol: "BTCUSDT", side: "SELL", origQty: "1", executedQty: "0.5", status: "CANCELING" }),
+      ok([{ symbol: "BTCUSDT", commission: "0.01" }]),
       ok({ orderId: "83", clientOrderId: "pending-full", symbol: "BTCUSDT", side: "BUY", origQty: "1", executedQty: "1", status: "PENDING" }),
+      ok([{ symbol: "BTCUSDT", commission: "0.02" }]),
     ]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
