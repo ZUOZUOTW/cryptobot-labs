@@ -7,6 +7,7 @@ export interface DeploymentInstallerDependencies {
   readonly store: DurableRunStore;
   readonly runner?: {
     resume(bundle: DeploymentBundle): Promise<void>;
+    activate?(): Promise<void>;
     pause(): Promise<void>;
   };
   readonly now?: () => number;
@@ -121,8 +122,13 @@ export class DeploymentInstaller {
     try {
       this.#record = await this.#dependencies.store.save({ definition: record.definition, status: "running",
         pausedReason: null, ambiguousOrder: null, updatedAt: this.#timestamp() }, record.recordVersion);
+      await runner.activate?.();
     } catch (error) {
       await runner.pause().catch(() => undefined);
+      if (this.#record?.status === "running") {
+        this.#record = await this.#dependencies.store.save({ definition: this.#record.definition, status: "paused",
+          pausedReason: "runtime-start-failed", ambiguousOrder: null, updatedAt: this.#timestamp() }, this.#record.recordVersion);
+      }
       throw error;
     }
     return { status: "ok", code: "paper_resumed" };

@@ -54,12 +54,13 @@ describe("deployment installer", () => {
   });
 
   it("resumes and pauses only after the runner lifecycle succeeds", async () => {
-    const store = memoryStore(); const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined) };
+    const store = memoryStore(); const runner = { resume: vi.fn(async () => undefined), activate: vi.fn(async () => undefined), pause: vi.fn(async () => undefined) };
     const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => bundle() }, store, runner, now: () => 600 });
     await installer.execute(command());
     await expect(installer.execute(command({ id: "cmd_resume", type: "resume-paper", payload: { reason: "operator" } })))
       .resolves.toEqual({ status: "ok", code: "paper_resumed" });
     expect(runner.resume).toHaveBeenCalledOnce();
+    expect(runner.activate).toHaveBeenCalledOnce();
     expect(store.saved.at(-1)).toMatchObject({ status: "running", pausedReason: null, updatedAt: 600 });
     await expect(installer.execute(command({ id: "cmd_pause", type: "pause", payload: { reason: "operator" } })))
       .resolves.toEqual({ status: "ok", code: "paused" });
