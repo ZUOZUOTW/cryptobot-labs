@@ -387,6 +387,19 @@ CREATE UNIQUE INDEX `strategy_versions_id_user_uidx` ON `strategy_versions` (`id
 CREATE UNIQUE INDEX `strategy_versions_strategy_version_uidx` ON `strategy_versions` (`strategy_id`,`version`);--> statement-breakpoint
 CREATE INDEX `strategy_versions_config_hash_idx` ON `strategy_versions` (`config_hash`);--> statement-breakpoint
 CREATE INDEX `strategy_versions_source_hash_idx` ON `strategy_versions` (`source_hash`);--> statement-breakpoint
+CREATE TABLE `strategy_save_keys` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`key` text NOT NULL,
+	`request_hash` text NOT NULL,
+	`strategy_version_id` text NOT NULL,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`strategy_version_id`,`user_id`) REFERENCES `strategy_versions`(`id`,`user_id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `strategy_save_keys_user_key_uidx` ON `strategy_save_keys` (`user_id`,`key`);--> statement-breakpoint
+CREATE UNIQUE INDEX `strategy_save_keys_version_uidx` ON `strategy_save_keys` (`strategy_version_id`);--> statement-breakpoint
 CREATE TABLE `users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`normalized_email` text NOT NULL,

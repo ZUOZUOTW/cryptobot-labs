@@ -33,7 +33,8 @@ export const MAX_SPOT_HISTORY_CANDLES = 1_000;
 const FUNDING_ENDPOINT = "/capi/v2/market/getHistoryFundRate";
 const MARK_ENDPOINT = "/capi/v3/market/historyKlines";
 const FUTURES_ORIGIN = "https://api-contract.weex.com";
-const FUNDING_LIMIT = 100;
+export const FUNDING_HISTORY_LIMIT = 100;
+export const FUNDING_MARK_PAGE_SIZE = 100;
 const MARK_INTERVAL = "4h";
 const MARK_INTERVAL_MS = 4 * 60 * 60 * 1_000;
 export const DEFAULT_FUNDING_MARK_MAX_AGE_MS = MARK_INTERVAL_MS;
@@ -73,7 +74,7 @@ export interface HistoricalFundingDataset {
     markEndpoint: typeof MARK_ENDPOINT;
     priceType: "MARK";
     collectedAt: number;
-    fundingLimit: typeof FUNDING_LIMIT;
+    fundingLimit: typeof FUNDING_HISTORY_LIMIT;
     markMaxAgeMs: number;
     markPages: number;
     markCandles: number;
@@ -131,7 +132,7 @@ function validateFundingRequest(
 
 function parseFundingRows(body: unknown, expectedSymbol: string): RawFundingEvent[] {
   if (!Array.isArray(body)) throw schemaError("Invalid funding history collection");
-  if (body.length > FUNDING_LIMIT) throw schemaError("Funding history exceeds the documented limit");
+  if (body.length > FUNDING_HISTORY_LIMIT) throw schemaError("Funding history exceeds the documented limit");
   const byTime = new Map<number, RawFundingEvent>();
   for (const [index, value] of body.entries()) {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -220,8 +221,7 @@ function validateRequest(request: HistoricalCandleRequest): void {
   if (request.market === "spot" && request.startTime !== undefined && request.endTime !== undefined) {
     const intervalMs = parseIntervalMs(request.interval);
     const expected = (request.endTime - request.startTime) / intervalMs;
-    if (request.startTime % intervalMs !== 0 || request.endTime % intervalMs !== 0
-      || !Number.isSafeInteger(expected) || expected < 1 || expected > MAX_SPOT_HISTORY_CANDLES) {
+    if (!Number.isSafeInteger(expected) || expected < 1 || expected > MAX_SPOT_HISTORY_CANDLES) {
       throw new WeexApiError("Spot history range exceeds the latest-response coverage limit", {
         category: "validation", retryable: false,
       });
@@ -280,18 +280,21 @@ export class WeexPublicClient {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async fetchCandles(request: HistoricalCandleRequest): Promise<readonly Candle[]> {
+  async fetchCandles(request: HistoricalCandleRequest, signal?: AbortSignal): Promise<readonly Candle[]> {
+    signal?.throwIfAborted();
     const response = await this.transport.send({
       method: "GET",
       url: candleUrl(request),
       headers: { Accept: "application/json" },
+      ...(signal ? { signal } : {}),
     });
     return request.market === "spot"
       ? parseSpotCandleRows(response.body, this.now())
       : parseFuturesCandleRows(response.body, this.now());
   }
 
-  async collectHistoricalCandles(request: HistoricalCandleRequest): Promise<HistoricalDataset> {
+  async collectHistoricalCandles(request: HistoricalCandleRequest, signal?: AbortSignal): Promise<HistoricalDataset> {
+    signal?.throwIfAborted();
     validateRequest(request);
     const intervalMs = parseIntervalMs(request.interval);
     const collected: Candle[] = [];
@@ -299,16 +302,17 @@ export class WeexPublicClient {
     let terminationReason: "page-limit" | "candle-limit" | undefined;
 
     if (request.market === "spot") {
-      collected.push(...await this.fetchCandles(request));
+      collected.push(...await this.fetchCandles(request, signal));
     } else {
       let cursor = request.startTime;
       let pageCount = 0;
       do {
+        signal?.throwIfAborted();
         if (pageCount >= MAX_FUTURES_HISTORY_PAGES) {
           terminationReason = "page-limit";
           break;
         }
-        const page = await this.fetchCandles({ ...request, startTime: cursor });
+        const page = await this.fetchCandles({ ...request, startTime: cursor }, signal);
         pageCount += 1;
         const remainingCapacity = MAX_FUTURES_HISTORY_CANDLES - collected.length;
         collected.push(...page.slice(0, remainingCapacity));
@@ -368,16 +372,18 @@ export class WeexPublicClient {
     };
   }
 
-  async collectHistoricalFunding(request: HistoricalFundingRequest): Promise<HistoricalFundingDataset> {
+  async collectHistoricalFunding(request: HistoricalFundingRequest, signal?: AbortSignal): Promise<HistoricalFundingDataset> {
+    signal?.throwIfAborted();
     const nowMs = this.now();
     const { symbols, maxMarkAgeMs } = validateFundingRequest(request, nowMs);
     const fundingUrl = new URL(FUNDING_ENDPOINT, FUTURES_ORIGIN);
     fundingUrl.searchParams.set("symbol", symbols.v2);
-    fundingUrl.searchParams.set("limit", String(FUNDING_LIMIT));
+    fundingUrl.searchParams.set("limit", String(FUNDING_HISTORY_LIMIT));
     const fundingResponse = await this.transport.send({
       method: "GET",
       url: fundingUrl.toString(),
       headers: { Accept: "application/json" },
+      ...(signal ? { signal } : {}),
     });
     const allFunding = parseFundingRows(fundingResponse.body, symbols.v2);
     const returnedFundingStartTime = allFunding[0]?.timestamp;
@@ -385,7 +391,7 @@ export class WeexPublicClient {
     // A full latest-100 response whose first event is newer than the requested
     // boundary cannot prove the omitted older portion. A shorter response is
     // treated as the complete exchange history available from this endpoint.
-    const fundingRangeCovered = allFunding.length < FUNDING_LIMIT ||
+    const fundingRangeCovered = allFunding.length < FUNDING_HISTORY_LIMIT ||
       (returnedFundingStartTime !== undefined && returnedFundingStartTime <= request.startTime);
     const requestedFunding = allFunding.filter(({ timestamp }) =>
       timestamp >= request.startTime && timestamp < request.endTime);
@@ -395,6 +401,7 @@ export class WeexPublicClient {
     let cursor = Math.max(0, request.startTime - maxMarkAgeMs);
     let terminationReason: "mark-page-limit" | "mark-candle-limit" | undefined;
     while (requestedFunding.length > 0 && cursor < request.endTime) {
+      signal?.throwIfAborted();
       if (markPages >= MAX_FUNDING_MARK_PAGES) {
         terminationReason = "mark-page-limit";
         break;
@@ -404,12 +411,13 @@ export class WeexPublicClient {
       markUrl.searchParams.set("interval", MARK_INTERVAL);
       markUrl.searchParams.set("startTime", String(cursor));
       markUrl.searchParams.set("endTime", String(request.endTime));
-      markUrl.searchParams.set("limit", "100");
+      markUrl.searchParams.set("limit", String(FUNDING_MARK_PAGE_SIZE));
       markUrl.searchParams.set("priceType", "MARK");
       const response = await this.transport.send({
         method: "GET",
         url: markUrl.toString(),
         headers: { Accept: "application/json" },
+        ...(signal ? { signal } : {}),
       });
       const page = parseFuturesCandleRows(preflightMarkRows(response.body), nowMs);
       markPages += 1;
@@ -419,7 +427,7 @@ export class WeexPublicClient {
         terminationReason = "mark-candle-limit";
         break;
       }
-      if (page.length < 100) break;
+      if (page.length < FUNDING_MARK_PAGE_SIZE) break;
       const maximumOpenTime = Math.max(...page.map(({ openTime }) => openTime));
       const nextCursor = maximumOpenTime + MARK_INTERVAL_MS;
       if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) break;
@@ -465,7 +473,7 @@ export class WeexPublicClient {
         markEndpoint: MARK_ENDPOINT,
         priceType: "MARK",
         collectedAt: nowMs,
-        fundingLimit: FUNDING_LIMIT,
+        fundingLimit: FUNDING_HISTORY_LIMIT,
         markMaxAgeMs: maxMarkAgeMs,
         markPages,
         markCandles: marks.length,

@@ -139,6 +139,23 @@ export const strategyVersions = sqliteTable("strategy_versions", {
   index("strategy_versions_source_hash_idx").on(table.sourceHash),
 ]);
 
+export const strategySaveKeys = sqliteTable("strategy_save_keys", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  strategyVersionId: text("strategy_version_id").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (table) => [
+  foreignKey({
+    columns: [table.strategyVersionId, table.userId],
+    foreignColumns: [strategyVersions.id, strategyVersions.userId],
+    name: "strategy_save_keys_version_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("strategy_save_keys_user_key_uidx").on(table.userId, table.key),
+  uniqueIndex("strategy_save_keys_version_uidx").on(table.strategyVersionId),
+]);
+
 export const backtestJobs = sqliteTable("backtest_jobs", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

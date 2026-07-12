@@ -16,7 +16,8 @@ export {
   type BacktestCursor,
   type BacktestCompletionInput,
 } from "./backtests";
-export { createStrategyVersionRepository, type OwnedStrategyVersionRecord } from "./strategies";
+export { createStrategyVersionRepository, type OwnedStrategyVersionRecord,
+  type SavedStrategyVersionRecord } from "./strategies";
 export {
   createDeploymentRepository,
   createCommandRepository,

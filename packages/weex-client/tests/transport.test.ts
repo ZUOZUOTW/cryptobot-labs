@@ -74,6 +74,32 @@ describe("createFetchTransport", () => {
       .rejects.toMatchObject({ category: "schema", retryable: false });
   });
 
+  it("enforces a bounded public response before parsing", async () => {
+    const transport = createFetchTransport({ maximumResponseBytes: 1_024,
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ value: "x".repeat(2_000) }), {
+        headers: { "content-length": "2012" },
+      })) });
+    await expect(transport.send({ method: "GET", url: "https://api-spot.weex.com/x", headers: {} }))
+      .rejects.toMatchObject({ category: "schema", retryable: false });
+  });
+
+  it("merges an external abort signal and cleans its timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const external = new AbortController();
+      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      }));
+      const pending = createFetchTransport({ fetchImpl, timeoutMs: 10_000 }).send({
+        method: "GET", url: "https://api-spot.weex.com/x", headers: {}, signal: external.signal,
+      });
+      external.abort();
+      await expect(pending).rejects.toMatchObject({ category: "network" });
+      expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each([
     [503, "upstream unavailable", "server", true],
     [429, "", "rate-limit", true],

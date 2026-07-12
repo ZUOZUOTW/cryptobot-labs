@@ -13,7 +13,10 @@ import {
 } from "../lib/server/backtests";
 import type { BotConfig } from "../lib/types";
 import type { Candle, HistoricalDataset } from "../packages/trading-core/src";
-import type { HistoricalFundingDataset } from "../packages/weex-client/src";
+import {
+  DEFAULT_FUNDING_MARK_MAX_AGE_MS, FUNDING_HISTORY_LIMIT, MAX_FUNDING_MARK_PAGES,
+  WeexPublicClient, type HistoricalFundingDataset, type HttpTransport,
+} from "../packages/weex-client/src";
 
 class SqliteStatement implements ControlPlaneStatement {
   constructor(private readonly statement: StatementSync, private readonly values: unknown[] = []) {}
@@ -104,6 +107,7 @@ describe("historical backtest API", () => {
   let collectCandles: ReturnType<typeof vi.fn>;
   let collectFunding: ReturnType<typeof vi.fn>;
   let ids: number;
+  let clock: number;
 
   beforeEach(async () => {
     database = new SqliteDatabase();
@@ -118,10 +122,11 @@ describe("historical backtest API", () => {
     collectCandles = vi.fn(async () => dataset());
     collectFunding = vi.fn(async () => funding());
     ids = 0;
+    clock = 10_800_000;
     service = createHistoricalBacktestService({
       backtests: createBacktestRepository(database), strategies: createStrategyVersionRepository(database),
       marketData: { collectHistoricalCandles: collectCandles, collectHistoricalFunding: collectFunding },
-      now: () => 10_800_000, newId: (prefix) => `${prefix}_${++ids}`,
+      now: () => clock, newId: (prefix) => `${prefix}_${++ids}`,
     });
   });
 
@@ -164,11 +169,37 @@ describe("historical backtest API", () => {
     expect(JSON.stringify(row)).not.toContain("API_KEY");
   });
 
+  it("aborts between pagination pages, persists failed, and performs no later transport", async () => {
+    const controller = new AbortController();
+    const endTime = 101 * 3_600_000;
+    clock = endTime;
+    let calls = 0;
+    const transport: HttpTransport = { async send() {
+      calls += 1;
+      if (calls > 1) throw new Error("transport called after abort");
+      const body = Array.from({ length: 100 }, (_, index) => {
+        const openTime = index * 3_600_000;
+        return [openTime, "100", "101", "99", "100", "1", openTime + 3_600_000 - 1, "1", 1, "1", "1"];
+      });
+      controller.abort(new Error("workflow deadline"));
+      return { status: 200, headers: {}, body };
+    } };
+    let abortId = 0;
+    const aborting = createHistoricalBacktestService({ backtests: createBacktestRepository(database),
+      strategies: createStrategyVersionRepository(database), marketData: new WeexPublicClient(transport, () => clock),
+      now: () => clock, newId: (prefix) => `${prefix}_abort_${++abortId}` });
+    await expect(aborting.create("usr_a", "abort-pagination", request({ endTime }), controller.signal))
+      .rejects.toMatchObject({ code: "data_fetch_failed" });
+    expect(calls).toBe(1);
+    expect(database.raw.prepare("SELECT status,error_code FROM backtest_jobs").get())
+      .toEqual({ status: "failed", error_code: "data_fetch_failed" });
+  });
+
   it("requires strict complete futures funding and never substitutes zero", async () => {
     collectFunding.mockResolvedValueOnce(funding(false));
     await expect(service.create("usr_a", "funding-incomplete", request({ fundingMode: "historical" })))
       .rejects.toMatchObject({ status: 422, code: "historical_funding_incomplete" });
-    expect(collectFunding).toHaveBeenCalledWith(expect.objectContaining({ market: "futures", strict: true }));
+    expect(collectFunding).toHaveBeenCalledWith(expect.objectContaining({ market: "futures", strict: true }), undefined);
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_results").get()).toEqual({ count: 0 });
   });
 
@@ -190,7 +221,7 @@ describe("historical backtest API", () => {
       ["huge-capital", { initialCapital: "100000001" }],
       ["fee-cap", { feeRate: "0.051" }],
       ["slippage-cap", { slippageRate: "0.101" }],
-      ["leverage-cap", { leverage: "11" }],
+      ["leverage-cap", { leverage: "21" }],
       ["long-decimal", { feeRate: `0.${"0".repeat(40)}1` }],
     ] as const) {
       await expect(service.create("usr_a", key, request(overrides)))
@@ -198,6 +229,70 @@ describe("historical backtest API", () => {
     }
     expect(collectCandles).not.toHaveBeenCalled();
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_jobs").get()).toEqual({ count: 0 });
+  });
+
+  it("accepts the product 20x ceiling and rejects only values above it before fetch", async () => {
+    const value = config({ leverage: 20 });
+    database.raw.prepare("UPDATE strategy_versions SET config_hash=?,config_json=? WHERE id='version_a'")
+      .run(await digest(value), JSON.stringify(value));
+    await expect(service.create("usr_a", "twenty-x", request({ leverage: "20" })))
+      .resolves.toMatchObject({ job: { status: "succeeded" } });
+    expect(collectCandles).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps synchronous POST work at 2000 expected candles before transport", async () => {
+    const endTime = 2_001 * 3_600_000;
+    clock = endTime;
+    await expect(service.create("usr_a", "too-many-candles", request({ endTime })))
+      .rejects.toMatchObject({ status: 422, code: "invalid_historical_range" });
+    expect(collectCandles).not.toHaveBeenCalled();
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_jobs").get()).toEqual({ count: 0 });
+  });
+
+  it("supports a non-epoch weekly anchor while retaining exact exclusive boundaries", async () => {
+    const interval = 604_800_000;
+    const startTime = 123_456_789;
+    const endTime = startTime + interval * 2;
+    const value = config({ timeframe: "1w" });
+    database.raw.prepare("UPDATE strategy_versions SET config_hash=?,config_json=? WHERE id='version_a'")
+      .run(await digest(value), JSON.stringify(value));
+    clock = endTime;
+    collectCandles.mockResolvedValueOnce(dataset({
+      request: { market: "futures", symbol: "BTCUSDT", interval: "1w", startTime, endTime },
+      intervalMs: interval,
+      candles: [100, 101].map((price, index) => ({
+        openTime: startTime + index * interval, closeTime: startTime + (index + 1) * interval - 1,
+        open: String(price), high: String(price + 1), low: String(price - 1), close: String(price),
+        volume: "10", complete: true,
+      })),
+      provenance: { ...dataset().provenance, collectedAt: endTime, requestedStartTime: startTime,
+        requestedEndTime: endTime, returnedStartTime: startTime, returnedEndTime: endTime },
+    }));
+    await expect(service.create("usr_a", "weekly-anchor", request({ interval: "1w", startTime, endTime })))
+      .resolves.toMatchObject({ job: { status: "succeeded", actualStartAt: startTime, actualEndAt: endTime - 1 } });
+  });
+
+  it("rejects funding metadata outside exact collector constants", async () => {
+    const manyEvents = Array.from({ length: FUNDING_HISTORY_LIMIT + 1 }, (_, index) => ({
+      timestamp: index * 1_000, rate: "0.0001", markPrice: "100",
+    }));
+    const cases: HistoricalFundingDataset[] = [
+      { ...funding(), funding: manyEvents,
+        coverage: { ...funding().coverage, requestedEvents: manyEvents.length, matchedEvents: manyEvents.length },
+        provenance: { ...funding().provenance, markPages: 2, markCandles: manyEvents.length } },
+      { ...funding(), provenance: { ...funding().provenance, fundingLimit: 99 as 100 } },
+      { ...funding(), provenance: { ...funding().provenance, markPages: MAX_FUNDING_MARK_PAGES + 1, markCandles: 3 } },
+      { ...funding(), provenance: { ...funding().provenance, markPages: 1, markCandles: 101 } },
+      { ...funding(), provenance: { ...funding().provenance, markMaxAgeMs: DEFAULT_FUNDING_MARK_MAX_AGE_MS + 1 } },
+      { ...funding(), funding: [], coverage: { ...funding().coverage, requestedEvents: 0, matchedEvents: 0 },
+        provenance: { ...funding().provenance, markPages: 1, markCandles: 1 } },
+    ];
+    for (const [index, forged] of cases.entries()) {
+      collectFunding.mockResolvedValueOnce(forged);
+      await expect(service.create("usr_a", `funding-constants-${index}`,
+        request({ fundingMode: "historical" }))).rejects.toMatchObject({ code: "historical_funding_incomplete" });
+    }
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_results").get()).toEqual({ count: 0 });
   });
 
   it("honors fail/disclose gaps and persists disclosed gaps", async () => {
@@ -240,5 +335,45 @@ describe("historical backtest API", () => {
     }));
     expect(response.status).toBe(403);
     expect(collectCandles).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit public list summary without tenant or raw persistence fields", async () => {
+    await service.create("usr_a", "list-item", request());
+    const handlers = createHistoricalBacktestHandlers({
+      auth: { identityProvider: { getIdentity: async () => ({ email: "a@example.com", displayName: "A" }) },
+        userRepository: { upsertIdentity: async () => ({ id: "usr_a", normalizedEmail: "a@example.com",
+          displayName: "A", createdAt: 1, updatedAt: 1 }) }, deriveUserId: async () => "usr_a", now: () => 1 },
+      originPolicy: { publicOrigin: "https://labs.example" }, service,
+    });
+    const response = await handlers.list(new Request("https://labs.example/api/backtests?limit=10"));
+    const body = await response.json() as { items: Array<Record<string, unknown>>; nextCursor: string | null };
+    expect(response.status).toBe(200);
+    expect(body.items[0]).toMatchObject({ id: "job_1", status: "succeeded",
+      request: { strategyVersionId: "version_a" } });
+    expect(body.items[0]).not.toHaveProperty("userId");
+    expect(body.items[0]).not.toHaveProperty("requestJson");
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("cleans the workflow deadline timer after a synchronous POST completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = createHistoricalBacktestHandlers({
+        auth: { identityProvider: { getIdentity: async () => ({ email: "a@example.com", displayName: "A" }) },
+          userRepository: { upsertIdentity: async () => ({ id: "usr_a", normalizedEmail: "a@example.com",
+            displayName: "A", createdAt: 1, updatedAt: 1 }) }, deriveUserId: async () => "usr_a", now: () => 1 },
+        originPolicy: { publicOrigin: "https://labs.example" },
+        service: { create: async () => ({ idempotent: true, job: { id: "job_x", userId: "usr_a",
+          strategyVersionId: "version_a", status: "queued", evidenceLevel: "historical", requestJson: "{}",
+          errorCode: null, errorMessage: null, createdAt: 1, startedAt: null, completedAt: null } }),
+          get: async () => null, list: async () => ({ items: [], nextCursor: null }) },
+      });
+      const response = await handlers.post(new Request("https://labs.example/api/backtests", {
+        method: "POST", headers: { host: "labs.example", origin: "https://labs.example",
+          "content-type": "application/json", "idempotency-key": "timer" }, body: JSON.stringify(request()),
+      }));
+      expect(response.status).toBe(200);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });
