@@ -102,6 +102,9 @@ importers:
       '@cryptobot-labs/weex-client':
         specifier: workspace:*
         version: link:../../packages/weex-client
+      decimal.js:
+        specifier: 10.6.0
+        version: 10.6.0
       react:
         specifier: 19.2.6
         version: 19.2.6
