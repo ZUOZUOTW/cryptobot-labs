@@ -18,6 +18,7 @@ import { createPairingClient } from "./pairing-client";
 import { createPairingExpiryGuard } from "./pairing-expiry";
 import { ClockFreshnessGuard, MarketStreamState } from "./market-stream";
 import { createDurableOrderRepository } from "./order-store";
+import { createOrderStateTelemetry } from "./order-telemetry";
 import { DurablePaperAccount } from "./paper-account";
 import { PaperRunRunner } from "./paper-run-runner";
 import { PaperScheduler } from "./paper-scheduler";
@@ -145,6 +146,17 @@ export async function bootstrapAgent(): Promise<void> {
     state: (deploymentId) => new DurableLiveState(osStorage,
       createNodeVaultFileStore(join(vaultDirectory, "live-states", `${deploymentId}.bin`))),
     runner: liveRunner,
+    onActivated: async (bundle) => {
+      const occurredAt = Date.now();
+      const id = `live-start-${createHash("sha256").update(`${bundle.deployment.id}:${bundle.deployment.version}:${occurredAt}`).digest("hex").slice(0, 40)}`;
+      await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: bundle.deployment.id,
+        expectedDeploymentVersion: bundle.deployment.version, correlationId: id, occurredAt,
+        payload: { state: "running", reason: "live-scheduler-activated" } }, "high");
+    },
+    onOrder: async (order, bundle) => {
+      await enqueueTelemetrySafely(createOrderStateTelemetry({ order,
+        expectedDeploymentVersion: bundle.deployment.version, deploymentState: "running" }));
+    },
     onFault: async (reason, bundle) => {
       const occurredAt = Date.now();
       const id = `live-fault-${createHash("sha256").update(`${bundle.deployment.id}:${reason}:${occurredAt}`).digest("hex").slice(0, 40)}`;

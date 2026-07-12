@@ -37,6 +37,7 @@ describe("live scheduler", () => {
         openPositions: 0, positionSide: "flat" as const, currentPositionQuantity: "0", currentPositionNotional: "0",
         totalExposure: "0", realizedDailyPnl: "0", unrealizedDailyPnl: "0", consecutiveFailures: 0, leverage: "1" } })) };
     const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined),
+      stopNewOrders: vi.fn(), cancelOpenOrders: vi.fn(async () => ({ cancelled: 0, rejected: 0, unresolved: 0, skipped: 0 })),
       reconcileActiveOrders: vi.fn(async () => ({ ready: true as const })),
       evaluate: vi.fn(async () => ({ status: "discarded" as const, reason: "hold" as const })) };
     let scheduled: (() => void) | null = null;
@@ -51,6 +52,9 @@ describe("live scheduler", () => {
     expect(connection.refresh).toHaveBeenCalledWith(NOW);
     (scheduled as (() => void) | null)?.(); await vi.waitFor(() => expect(collector.collect).toHaveBeenCalledTimes(2));
     expect(runner.evaluate).toHaveBeenCalledOnce();
+    scheduler.stopNewOrders("dep-1"); expect(runner.stopNewOrders).toHaveBeenCalledOnce();
+    await expect(scheduler.cancelOpenOrders("dep-1")).resolves.toMatchObject({ cancelled: 0, unresolved: 0 });
+    expect(runner.cancelOpenOrders).toHaveBeenCalledWith("dep-1");
     await scheduler.pause(); expect(runner.pause).toHaveBeenCalledOnce();
   });
 
@@ -58,6 +62,7 @@ describe("live scheduler", () => {
     const market = new MarketStreamState(); market.record({ market: "spot", symbol: "BTCUSDT", bid: "100", ask: "100", last: "100",
       exchangeTimestamp: NOW - 1, receivedAt: NOW });
     const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined), evaluate: vi.fn(),
+      stopNewOrders: vi.fn(), cancelOpenOrders: vi.fn(async () => ({ cancelled: 0, rejected: 0, unresolved: 0, skipped: 0 })),
       reconcileActiveOrders: vi.fn(async () => ({ ready: false as const, reason: "live-order-unresolved" })) };
     const onFault = vi.fn();
     const scheduler = new LiveScheduler({ market, runner, onFault, connection: { refresh: vi.fn() },

@@ -1,4 +1,5 @@
 import {
+  type CancelOpenOrdersResult,
   reconcileOrder,
   type InstrumentRules,
   type OrderRepository,
@@ -102,9 +103,15 @@ export class LiveRunRunner {
     return { ready: true };
   }
 
-  async cancelOpenOrders(deploymentId: string): Promise<unknown> {
+  async cancelOpenOrders(deploymentId: string): Promise<CancelOpenOrdersResult> {
     if (!this.#session) throw new Error("Live runner is inactive");
     return this.#session.coordinator.cancelOpenOrders(deploymentId, this.#timestamp());
+  }
+
+  stopNewOrders(): void {
+    const session = this.#session;
+    if (!session) throw new Error("Live runner is inactive");
+    session.coordinator.emergencyStop();
   }
 
   #createSession(bundle: DeploymentBundle): LiveSession {

@@ -14,6 +14,8 @@ export interface DeploymentInstallerDependencies {
     resume(bundle: DeploymentBundle): Promise<void>;
     activate?(): Promise<void>;
     pause(): Promise<void>;
+    stopNewOrders?(deploymentId: string): void | Promise<void>;
+    cancelOpenOrders?(deploymentId: string): Promise<{ rejected: number; unresolved: number }>;
   };
   readonly liveUnlock?: {
     prepare(command: ControlCommand & { type: "request-live-unlock" }): Promise<DurableRunRecord["definition"]>;
@@ -64,6 +66,9 @@ export class DeploymentInstaller {
     if (command.type === "request-live-unlock") {
       return this.#unlock(command as ControlCommand & { type: "request-live-unlock" });
     }
+    if (command.type === "stop-new-orders") return this.#stopNewOrders(command);
+    if (command.type === "cancel-open-orders") return this.#cancelOpenOrders(command);
+    if (command.type === "close-positions") return { status: "rejected", code: "close_positions_not_ready" };
     if (command.type !== "deploy") return { status: "rejected", code: "command_not_ready" };
     const payload = command.payload;
     if (payload.mode !== "paper" || typeof payload.configurationHash !== "string") {
@@ -219,6 +224,26 @@ export class DeploymentInstaller {
       updatedAt: this.#timestamp(),
     }, record.recordVersion);
     return { status: "ok", code: "live_unlock_staged" };
+  }
+
+  async #stopNewOrders(command: ControlCommand): Promise<CommandExecutionResult> {
+    const record = this.#record; const runner = this.#dependencies.liveRunner;
+    if (!record || storedVersion(record, command.deploymentId) !== command.expectedDeploymentVersion
+      || record.definition.mode !== "live" || record.status !== "running" || !runner?.stopNewOrders) {
+      return { status: "rejected", code: "deployment_fence" };
+    }
+    await runner.stopNewOrders(command.deploymentId);
+    return { status: "ok", code: "new_orders_stopped" };
+  }
+
+  async #cancelOpenOrders(command: ControlCommand): Promise<CommandExecutionResult> {
+    const record = this.#record; const runner = this.#dependencies.liveRunner;
+    if (!record || storedVersion(record, command.deploymentId) !== command.expectedDeploymentVersion
+      || record.definition.mode !== "live" || record.status !== "running" || !runner?.cancelOpenOrders
+      || command.payload.scope !== "deployment") return { status: "rejected", code: "deployment_fence" };
+    const result = await runner.cancelOpenOrders(command.deploymentId);
+    if (result.rejected > 0 || result.unresolved > 0) throw new Error("Live order cancellation is unresolved");
+    return { status: "ok", code: "open_orders_cancelled" };
   }
 
   #timestamp(): number {

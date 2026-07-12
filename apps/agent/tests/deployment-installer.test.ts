@@ -118,4 +118,26 @@ describe("deployment installer", () => {
       .resolves.toEqual({ status: "ok", code: "paused" });
     expect(liveRunner.pause).toHaveBeenCalledOnce();
   });
+
+  it("routes independent live stop and cancel commands without treating them as position close", async () => {
+    const store = memoryStore();
+    const liveRunner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined),
+      stopNewOrders: vi.fn(), cancelOpenOrders: vi.fn(async () => ({ cancelled: 2, rejected: 0, unresolved: 0 })) };
+    const prepare = vi.fn(async () => ({ deploymentId: "dep_1", configurationVersion: "v2",
+      scriptHash: "b".repeat(64), mode: "live" as const, market: "spot" as const, symbol: "BTCUSDT" }));
+    let current = bundle();
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => current }, store,
+      liveRunner, liveUnlock: { prepare } });
+    await installer.execute(command()); await installer.execute(command({ type: "request-live-unlock", payload: { revalidate: {} } }));
+    current = bundle({ mode: "live", state: "paused" });
+    await installer.execute(command({ type: "resume-live", payload: { reason: "operator" } }));
+
+    await expect(installer.execute(command({ type: "stop-new-orders", payload: { reason: "emergency" } })))
+      .resolves.toEqual({ status: "ok", code: "new_orders_stopped" });
+    await expect(installer.execute(command({ type: "cancel-open-orders", payload: { scope: "deployment", reason: "emergency" } })))
+      .resolves.toEqual({ status: "ok", code: "open_orders_cancelled" });
+    await expect(installer.execute(command({ type: "close-positions", payload: { scope: "all", symbol: null } })))
+      .resolves.toEqual({ status: "rejected", code: "close_positions_not_ready" });
+    expect(liveRunner.stopNewOrders).toHaveBeenCalledOnce(); expect(liveRunner.cancelOpenOrders).toHaveBeenCalledOnce();
+  });
 });

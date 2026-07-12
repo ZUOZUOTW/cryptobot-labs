@@ -20,7 +20,10 @@ export interface LiveSchedulerOptions {
   readonly connection: Pick<ConnectionRegistry, "refresh">;
   readonly state: (deploymentId: string) => LiveStatePort;
   readonly orders: { listForDeployment(deploymentId: string, symbol?: string): Promise<readonly TrackedOrder[]> };
-  readonly runner: Pick<LiveRunRunner, "resume" | "pause" | "evaluate" | "reconcileActiveOrders">;
+  readonly runner: Pick<LiveRunRunner,
+    "resume" | "pause" | "evaluate" | "reconcileActiveOrders" | "stopNewOrders" | "cancelOpenOrders">;
+  readonly onActivated?: (bundle: DeploymentBundle) => void | Promise<void>;
+  readonly onOrder?: (order: TrackedOrder, bundle: DeploymentBundle) => void | Promise<void>;
   readonly onFault: (reason: string, bundle: DeploymentBundle) => void | Promise<void>;
   readonly schedule?: (work: () => void, delayMs: number) => unknown;
   readonly cancel?: (handle: unknown) => void;
@@ -47,6 +50,7 @@ export class LiveScheduler {
   #bundle: DeploymentBundle | null = null;
   #state: LiveStatePort | null = null;
   #active = false;
+  #newOrdersStopped = false;
   #busy = false;
   #timer: unknown = null;
 
@@ -58,19 +62,30 @@ export class LiveScheduler {
       throw new Error("Live scheduler cannot prepare this deployment");
     }
     await this.#options.runner.resume(bundle);
-    this.#bundle = bundle; this.#state = this.#options.state(bundle.deployment.id);
+    this.#bundle = bundle; this.#state = this.#options.state(bundle.deployment.id); this.#newOrdersStopped = false;
   }
 
   async activate(): Promise<void> {
     if (!this.#bundle || !this.#state || this.#active) throw new Error("Live scheduler is not prepared");
     this.#active = true;
-    try { await this.#tick(); this.#scheduleNext(); }
+    try { await this.#options.onActivated?.(this.#bundle); await this.#tick(); this.#scheduleNext(); }
     catch (error) { await this.#fault("live-evaluation-failed"); throw error; }
   }
 
   async pause(): Promise<void> {
     this.#active = false; this.#cancelTimer();
     await this.#options.runner.pause(); this.#bundle = null; this.#state = null;
+  }
+
+  stopNewOrders(deploymentId: string): void {
+    if (!this.#bundle || this.#bundle.deployment.id !== deploymentId || !this.#active) throw new Error("Live scheduler is inactive");
+    this.#newOrdersStopped = true;
+    this.#options.runner.stopNewOrders();
+  }
+
+  async cancelOpenOrders(deploymentId: string) {
+    this.stopNewOrders(deploymentId);
+    return this.#options.runner.cancelOpenOrders(deploymentId);
   }
 
   async #tick(): Promise<void> {
@@ -90,6 +105,7 @@ export class LiveScheduler {
       if (!reconciliation.ready) throw new Error(reconciliation.reason);
       const orders = (await this.#options.orders.listForDeployment(bundle.deployment.id, bundle.strategy.symbol))
         .filter((order) => order.executionTarget.mode === "live" && order.executionTarget.market === bundle.strategy.market);
+      for (const order of orders) await this.#options.onOrder?.(order, bundle);
       let local = await state.snapshot(); let account: LiveAccountEvidence | null = null; let baselineAt = 0;
       if (!local) {
         if (orders.length) throw new Error("Live state is missing for existing orders");
@@ -110,6 +126,7 @@ export class LiveScheduler {
         }
       }
       if (orders.some((order) => PENDING_ORDER.has(order.status))) return;
+      if (this.#newOrdersStopped) return;
       local = await state.snapshot(); if (!local) throw new Error("Live state is unavailable");
       if (local.lastEvaluatedCloseTime !== null && latest.closeTime <= local.lastEvaluatedCloseTime) return;
       account ??= await this.#options.account.collect({ target: { market: bundle.strategy.market, mode: "live" },
@@ -120,10 +137,14 @@ export class LiveScheduler {
         await state.rollDay(account.portfolio.equity, account.observedAt);
         account = withDayStart(account, account.portfolio.equity);
       }
+      if (this.#newOrdersStopped) return;
       const request = buildLiveEvaluationRequest({ bundle, market, quote, account,
         signalSequence: local.nextSignalSequence });
       const result = await this.#options.runner.evaluate(request);
       const signaled = result.status === "proposed";
+      if (result.status === "proposed" && (result.outcome.status === "submitted" || result.outcome.status === "idempotent")) {
+        await this.#options.onOrder?.(result.outcome.order, bundle);
+      }
       if (result.status === "proposed" && (result.outcome.status === "submitted" || result.outcome.status === "idempotent")
         && (result.outcome.order.status === "filled" || (result.outcome.order.status === "cancelled"
           && result.outcome.order.cumulativeFilledQuantity !== "0"))) {
@@ -148,7 +169,7 @@ export class LiveScheduler {
   async #fault(reason: string): Promise<void> {
     const bundle = this.#bundle; this.#active = false; this.#cancelTimer();
     await this.#options.runner.pause().catch(() => undefined);
-    this.#bundle = null; this.#state = null;
+    this.#bundle = null; this.#state = null; this.#newOrdersStopped = true;
     if (bundle) await this.#options.onFault(reason, bundle);
   }
 
