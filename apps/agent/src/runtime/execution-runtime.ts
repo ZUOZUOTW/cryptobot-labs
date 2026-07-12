@@ -35,7 +35,7 @@ export type RuntimeAuditEvent = Readonly<{
 
 export type RuntimeEvaluationOutcome =
   | { readonly status: "proposed"; readonly outcome: ExecutionOutcome }
-  | { readonly status: "discarded"; readonly reason: "inactive" | "stale" }
+  | { readonly status: "discarded"; readonly reason: "inactive" | "stale" | "hold" }
   | { readonly status: "paused"; readonly reason: string };
 
 export interface ExecutionRuntimeDependencies {

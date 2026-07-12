@@ -41,6 +41,7 @@ const context = {
   signalSequence: 1,
   market: "spot",
   mode: "paper",
+  referencePrice: "100",
   instrumentRules: rules,
   now: NOW,
   riskPolicy: {},
