@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cryptobot-labs/trading-core": "workspace:*",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "scheduler": "0.27.0"

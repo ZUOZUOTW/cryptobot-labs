@@ -14,6 +14,7 @@ const config: ForgeConfig = {
         { entry: "src/main/index.ts", config: "vite.main.config.ts", target: "main" },
         { entry: "src/preload/index.ts", config: "vite.preload.config.ts", target: "preload" },
         { entry: "src/runtime/index.ts", config: "vite.runtime.config.ts", target: "main" },
+        { entry: "src/runtime/strategy-thread.ts", config: "vite.strategy-thread.config.ts", target: "main" },
       ],
       renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
     }),
