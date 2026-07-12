@@ -732,7 +732,10 @@ export function createControlClient(options: ControlClientOptions) {
     let outcome = recovered === null ? null : parseStoredCommandOutcome(recovered.outcome);
     if (!outcome) {
       const currentVersion = await options.deploymentVersion(command.deploymentId);
-      if (!Number.isSafeInteger(currentVersion) || currentVersion !== command.expectedDeploymentVersion) {
+      const versionMatches = command.type === "deploy"
+        ? currentVersion === null || (Number.isSafeInteger(currentVersion) && currentVersion <= command.expectedDeploymentVersion)
+        : Number.isSafeInteger(currentVersion) && currentVersion === command.expectedDeploymentVersion;
+      if (!versionMatches) {
         outcome = { status: "rejected", code: "deployment_fence", message: "Deployment version does not match", applied: false };
       } else if (!hasFreshExecutionWindow(command, now(), minimumAcknowledgementWindowMs)) {
         outcome = { status: "rejected", code: "expired_command", message: "Command expired before execution", applied: false };

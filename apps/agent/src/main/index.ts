@@ -3,12 +3,15 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createControlClient, createEncryptedCommandOutcomeStore, ControlClientRevokedError } from "./control-client";
+import { DeploymentInstaller } from "./deployment-installer";
+import { createDeploymentClient } from "./deployment-client";
 import { registerAgentIpc, type AgentShellServices } from "./ipc";
 import { createDeviceIdentityVault } from "./device-identity";
 import { createStartAtLoginController } from "./login-item";
 import { createPairingClient } from "./pairing-client";
 import { createPairingExpiryGuard } from "./pairing-expiry";
 import { createRuntimeSupervisor } from "./runtime-supervisor";
+import { createDurableRunStore, createNodeRunFileStore } from "./run-store";
 import { createNodeTelemetryFileStore, createTelemetryBuffer } from "./telemetry-buffer";
 import { createCredentialVault, createNodeVaultFileStore, type AsyncSafeStorage } from "./vault";
 import { createWeexConnectionVerifier } from "./weex-connection-verifier";
@@ -64,6 +67,10 @@ export async function bootstrapAgent(): Promise<void> {
     osStorage,
     createNodeVaultFileStore(join(vaultDirectory, "command-outcomes.bin")),
   );
+  const runStore = createDurableRunStore(
+    osStorage,
+    createNodeRunFileStore(join(vaultDirectory, "active-run.bin")),
+  );
   const telemetry = createTelemetryBuffer(
     osStorage,
     createNodeTelemetryFileStore(join(app.getPath("userData"), "telemetry", "events.bin")),
@@ -86,6 +93,7 @@ export async function bootstrapAgent(): Promise<void> {
   const login = createStartAtLoginController(app);
   const controlPlaneOrigin = process.env.CBL_CONTROL_PLANE_ORIGIN;
   let pairingClient: ReturnType<typeof createPairingClient> | null = null;
+  let deploymentInstaller: DeploymentInstaller | null = null;
   if (controlPlaneOrigin) {
     try { pairingClient = createPairingClient({ baseUrl: controlPlaneOrigin, identityVault }); }
     catch { pairingClient = null; }
@@ -134,6 +142,20 @@ export async function bootstrapAgent(): Promise<void> {
     if (!controlPlaneOrigin) return;
     const controller = new AbortController();
     controlAbort = controller;
+    if (!deploymentInstaller) {
+      const deployments = createDeploymentClient({
+        baseUrl: controlPlaneOrigin,
+        identity: async () => {
+          const current = await identityVault.load();
+          if (!current) throw new Error("Device identity is unavailable");
+          return current;
+        },
+        onRevoked: () => stopForInvalidPairing("revoked"),
+      });
+      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore });
+      await deploymentInstaller.initialize();
+    }
+    const installer = deploymentInstaller;
     const client = createControlClient({
       baseUrl: controlPlaneOrigin,
       identity: async () => {
@@ -141,10 +163,8 @@ export async function bootstrapAgent(): Promise<void> {
         if (!current) throw new Error("Device identity is unavailable");
         return current;
       },
-      // Task 15 supplies the durable local deployment registry. Until then,
-      // every remote action is acknowledged as fenced and cannot execute.
-      deploymentVersion: async () => null,
-      execute: async () => ({ status: "rejected", code: "runtime_unavailable" }),
+      deploymentVersion: (deploymentId) => installer.deploymentVersion(deploymentId),
+      execute: (command) => installer.execute(command),
       outcomeStore,
       onExpiredOutcome: async (pending) => {
         const eventId = `outcome-expired-${createHash("sha256").update(pending.commandId).digest("hex").slice(0, 32)}`;

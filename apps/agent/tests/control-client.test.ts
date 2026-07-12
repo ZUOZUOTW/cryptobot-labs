@@ -149,6 +149,18 @@ describe("signed control client", () => {
     expect(JSON.stringify(fetcher.mock.calls)).not.toMatch(/passphrase|secretkey/i);
   });
 
+  it("allows a first or upgraded deploy to establish the local version fence", async () => {
+    const deploy = command({ type: "deploy", payload: { configurationHash: "a".repeat(64), mode: "paper" } });
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/agent/commands") return json({ commands: [deploy], nextCursor: null });
+      return json({ commandId: "cmd_1", status: "acknowledged", idempotent: false });
+    });
+    const execute = vi.fn(async () => ({ status: "ok" as const, code: "installed" }));
+    await expect(client({ fetch: fetcher as typeof fetch, deploymentVersion: () => null, execute }).pollOnce()).resolves.toBe(1);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it("rejects unsupported, expired, and deployment-fenced commands before execution and acknowledges them", async () => {
     const commands = [
       command({ id: "cmd_version", version: 2 }),
