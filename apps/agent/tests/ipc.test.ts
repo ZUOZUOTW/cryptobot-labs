@@ -25,7 +25,7 @@ function createIpcHarness() {
 
 function services(): AgentShellServices {
   return {
-    getStatus: vi.fn(async (): Promise<AgentStatus> => ({ state: "ready", credential: { apiKeySuffix: "1234", configured: true }, paired: true, startAtLogin: false })),
+    getStatus: vi.fn(async (): Promise<AgentStatus> => ({ state: "ready", credential: { apiKeySuffix: "1234", configured: true }, paired: true, pairingState: "paired", startAtLogin: false })),
     saveCredentials: vi.fn(async () => ({ apiKeySuffix: "1234", configured: true })),
     verifyCredentials: vi.fn(async (): Promise<VerifiedConnection> => ({
       provider: "WEEX",
@@ -54,9 +54,12 @@ describe("secure IPC allowlist", () => {
     const api = createAgentRendererApi(harness.invoke);
 
     await expect(api.saveCredentials({ apiKey: "key-1234", secretKey: "secret-key", passphrase: "phrase" })).resolves.toEqual({ apiKeySuffix: "1234", configured: true });
+    await expect(api.pair({ code: `CBL-${"_".repeat(22)}`, deviceName: "交易電腦" }))
+      .resolves.toEqual({ paired: true, deviceId: "device-1" });
     await expect(harness.invoke(IPC_CHANNELS.saveCredentials, { apiKey: "key", secretKey: "secret-key", passphrase: "phrase", injected: true })).rejects.toThrow("Invalid credential input");
     await expect(harness.invoke(IPC_CHANNELS.emergencyStop, "unexpected")).rejects.toThrow("no arguments");
     expect(shellServices.saveCredentials).toHaveBeenCalledTimes(1);
+    expect(shellServices.pair).toHaveBeenCalledTimes(1);
     expect(shellServices.emergencyStop).not.toHaveBeenCalled();
   });
 
@@ -64,7 +67,7 @@ describe("secure IPC allowlist", () => {
     const harness = createIpcHarness();
     const shellServices = services();
     shellServices.getStatus = vi.fn(async () => ({
-      state: "ready", credential: { apiKeySuffix: "1234", configured: true }, paired: true, startAtLogin: false, secretKey: "leak",
+      state: "ready", credential: { apiKeySuffix: "1234", configured: true }, paired: true, pairingState: "paired", startAtLogin: false, secretKey: "leak",
     } as never));
     registerAgentIpc(harness.ipcMain, shellServices, harness.trustedRenderer);
     await expect(harness.invoke(IPC_CHANNELS.getStatus)).rejects.toThrow("Invalid agent status");

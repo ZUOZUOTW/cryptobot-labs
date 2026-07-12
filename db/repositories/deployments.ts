@@ -242,6 +242,9 @@ const sameCommand = (row: CommandRecord, input: { deploymentId: string; type: Co
   && row.correlationId === input.correlationId && row.expectedDeploymentVersion === input.expectedDeploymentVersion
   && row.payloadJson === input.payloadJson;
 
+/** Allows an offline agent to report a durable outcome after command expiry without permitting indefinite history mutation. */
+export const COMMAND_ACK_GRACE_MS = 7 * 24 * 60 * 60 * 1_000;
+
 export function createCommandRepository(database: ControlPlaneDatabase) {
   const getByCorrelation = (userId: string, correlationId: string): Promise<CommandRecord | null> => database.prepare(`
     SELECT ${commandColumns} FROM commands WHERE user_id = ? AND correlation_id = ?
@@ -334,6 +337,7 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
       const expected = positiveVersion(input.expectedDeploymentVersion, "expectedDeploymentVersion");
       const payloadJson = safeCanonicalJsonStringify(input.payload, "ack payload", 16_384);
       const now = time(input.now, "now");
+      const lateCutoff = Math.max(0, now - COMMAND_ACK_GRACE_MS);
       const identical = (row: ScopedAck) => row.deviceId === deviceId
         && row.deploymentId === deploymentId && row.expectedDeploymentVersion === expected
         && row.status === input.status && row.payloadJson === payloadJson;
@@ -348,10 +352,9 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
           database.prepare(`INSERT INTO command_acknowledgements
             (id,command_id,user_id,device_id,status,payload_json,acknowledged_at)
             SELECT ?,c.id,c.user_id,c.device_id,?,?,? FROM commands c
-            JOIN deployments d ON d.id=c.deployment_id AND d.user_id=c.user_id AND d.device_id=c.device_id
             WHERE c.id=? AND c.device_id=? AND c.deployment_id=? AND c.expected_deployment_version=?
-              AND d.version=? AND c.status='pending' AND c.expires_at>?`)
-            .bind(ackId, input.status, payloadJson, now, commandId, deviceId, deploymentId, expected, expected, now),
+              AND c.status='pending' AND c.expires_at>?`)
+            .bind(ackId, input.status, payloadJson, now, commandId, deviceId, deploymentId, expected, lateCutoff),
           database.prepare(`UPDATE commands SET status='acknowledged' WHERE id=? AND device_id=?
             AND EXISTS (SELECT 1 FROM command_acknowledgements WHERE command_id=?)`)
             .bind(commandId, deviceId, commandId),

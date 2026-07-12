@@ -3,7 +3,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
-import { createCommandRepository, createDeploymentRepository } from "../db/repositories";
+import { COMMAND_ACK_GRACE_MS, createCommandRepository, createDeploymentRepository } from "../db/repositories";
 
 class SqliteStatement implements ControlPlaneStatement {
   constructor(private readonly statement: StatementSync, private readonly values: unknown[] = []) {}
@@ -143,6 +143,25 @@ describe("deployment, risk, and command repositories", () => {
       .toMatchObject({ idempotent: true, acknowledgement: { id: "ack_a", acknowledgedAt: 250 } });
     await expect(commands.ack({ ...ack, id: "ack_other", now: 270, status: "failed" })).rejects.toThrow(/conflict/i);
     expect((await commands.pollForDevice("dev_a", { now: 251, limit: 10 })).items).toEqual([]);
+  });
+
+  it("accepts a bounded late durable outcome against the original command fence", async () => {
+    await create();
+    const base = { userId: "usr_a", deploymentId: "dep_a", type: "pause" as const, version: 1,
+      expectedDeploymentVersion: 1, payload: {}, now: 200, expiresAt: 300 };
+    await commands.enqueue({ ...base, id: "cmd_late_ok", correlationId: "corr_late_ok" });
+    await commands.enqueue({ ...base, id: "cmd_too_late", correlationId: "corr_too_late" });
+    await deployments.updateRisk("usr_a", "dep_a", 1, risk(), 260);
+
+    const acknowledgement = { id: "ack_late_ok", deviceId: "dev_a", commandId: "cmd_late_ok", deploymentId: "dep_a",
+      expectedDeploymentVersion: 1, status: "ok" as const, payload: { applied: true }, now: 400 };
+    await expect(commands.ack(acknowledgement)).resolves.toMatchObject({
+      idempotent: false, acknowledgement: { commandId: "cmd_late_ok", acknowledgedAt: 400 },
+    });
+    await expect(commands.ack({ ...acknowledgement, id: "ack_wrong_fence", commandId: "cmd_too_late",
+      expectedDeploymentVersion: 2 })).resolves.toBeNull();
+    await expect(commands.ack({ ...acknowledgement, id: "ack_too_late", commandId: "cmd_too_late",
+      now: 300 + COMMAND_ACK_GRACE_MS })).resolves.toBeNull();
   });
 
   it.each([

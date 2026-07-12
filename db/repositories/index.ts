@@ -28,6 +28,7 @@ export { createStrategyVersionRepository, type OwnedStrategyVersionRecord,
 export {
   createDeploymentRepository,
   createCommandRepository,
+  COMMAND_ACK_GRACE_MS,
   SUPPORTED_COMMAND_TYPES,
   type DeploymentRecord,
   type DeploymentState,

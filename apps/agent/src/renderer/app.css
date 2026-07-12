@@ -18,6 +18,11 @@ input:focus { border-color: #4cf3cc; box-shadow: 0 0 0 3px rgb(76 243 204 / 12%)
 button { border: 0; border-radius: 9px; background: #52e4c5; color: #04100d; font-weight: 750; padding: 11px 15px; cursor: pointer; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.secondary { margin-left: 9px; background: #173a36; color: #cffff4; }
+.button-row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.button-row button.secondary { margin-left: 0; }
+.text-button { background: transparent; color: #ff97a0; border: 1px solid #74383f; }
+.step-tag { width: fit-content; margin-bottom: 9px; border: 1px solid #28665d; border-radius: 999px; color: #75f5d8; padding: 4px 8px; font-size: 11px; letter-spacing: .08em; }
+.inline-notice { border-left: 3px solid #f5c46b; background: rgb(245 196 107 / 8%); color: #f7d999; padding: 9px 11px; border-radius: 6px; }
 .toggle { grid-template-columns: auto 1fr; align-items: center; }
 .toggle input { width: auto; }
 .danger-zone { margin-top: 14px; display: flex; align-items: center; justify-content: space-between; border-color: #74383f; }

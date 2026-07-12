@@ -45,6 +45,7 @@ export interface AgentStatus {
   state: "unconfigured" | "ready" | "verifying" | "offline" | "error";
   credential: CredentialMetadata;
   paired: boolean;
+  pairingState: "unpaired" | "paired" | "expired" | "revoked";
   startAtLogin: boolean;
 }
 
@@ -83,7 +84,7 @@ export function parseCredentialInput(value: unknown): CredentialInput {
 
 export function parsePairingInput(value: unknown): PairingInput {
   if (!isRecord(value) || !hasExactKeys(value, ["code", "deviceName"])) throw new TypeError("Invalid pairing input");
-  if (!boundedString(value.code, 6, 32) || !/^[A-Z0-9-]+$/i.test(value.code) || !boundedString(value.deviceName, 1, 80)) {
+  if (typeof value.code !== "string" || !/^CBL-[A-Za-z0-9_-]{22}$/.test(value.code) || !boundedString(value.deviceName, 1, 80)) {
     throw new TypeError("Invalid pairing input");
   }
   return { code: value.code, deviceName: value.deviceName };
@@ -132,9 +133,13 @@ export function parseVerifiedConnection(value: unknown): VerifiedConnection {
 }
 
 export function parseAgentStatus(value: unknown): AgentStatus {
-  if (!isRecord(value) || !hasExactKeys(value, ["state", "credential", "paired", "startAtLogin"])) throw new TypeError("Invalid agent status");
-  if (!["unconfigured", "ready", "verifying", "offline", "error"].includes(String(value.state)) || typeof value.paired !== "boolean" || typeof value.startAtLogin !== "boolean") {
+  if (!isRecord(value) || !hasExactKeys(value, ["state", "credential", "paired", "pairingState", "startAtLogin"])) throw new TypeError("Invalid agent status");
+  if (!["unconfigured", "ready", "verifying", "offline", "error"].includes(String(value.state))
+    || !["unpaired", "paired", "expired", "revoked"].includes(String(value.pairingState))
+    || typeof value.paired !== "boolean" || value.paired !== (value.pairingState === "paired")
+    || typeof value.startAtLogin !== "boolean") {
     throw new TypeError("Invalid agent status");
   }
-  return { state: value.state as AgentStatus["state"], credential: parseCredentialMetadata(value.credential), paired: value.paired, startAtLogin: value.startAtLogin };
+  return { state: value.state as AgentStatus["state"], credential: parseCredentialMetadata(value.credential), paired: value.paired,
+    pairingState: value.pairingState as AgentStatus["pairingState"], startAtLogin: value.startAtLogin };
 }
