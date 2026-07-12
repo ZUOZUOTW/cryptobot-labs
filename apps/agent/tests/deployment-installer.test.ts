@@ -17,9 +17,9 @@ const bundle = (overrides: Partial<DeploymentBundle["deployment"]> = {}): Deploy
     operationMode: "approval-required", updatedAt: 100 },
 });
 
-const command = (): ControlCommand => ({ id: "cmd_1", deploymentId: "dep_1", type: "deploy", version: 1,
+const command = (overrides: Partial<ControlCommand> = {}): ControlCommand => ({ id: "cmd_1", deploymentId: "dep_1", type: "deploy", version: 1,
   correlationId: "corr_1", expectedDeploymentVersion: 2,
-  payload: { configurationHash: "a".repeat(64), mode: "paper" }, createdAt: 100, expiresAt: 1_000 });
+  payload: { configurationHash: "a".repeat(64), mode: "paper" }, createdAt: 100, expiresAt: 1_000, ...overrides });
 
 function memoryStore(initial: DurableRunRecord | null = null): DurableRunStore & { saved: DurableRunState[] } {
   let record = initial;
@@ -51,5 +51,19 @@ describe("deployment installer", () => {
     const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => bundle({ configurationHash: "c".repeat(64) }) }, store });
     await expect(installer.execute(command())).resolves.toEqual({ status: "rejected", code: "invalid_deployment" });
     expect(store.saved).toHaveLength(0);
+  });
+
+  it("resumes and pauses only after the runner lifecycle succeeds", async () => {
+    const store = memoryStore(); const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined) };
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => bundle() }, store, runner, now: () => 600 });
+    await installer.execute(command());
+    await expect(installer.execute(command({ id: "cmd_resume", type: "resume-paper", payload: { reason: "operator" } })))
+      .resolves.toEqual({ status: "ok", code: "paper_resumed" });
+    expect(runner.resume).toHaveBeenCalledOnce();
+    expect(store.saved.at(-1)).toMatchObject({ status: "running", pausedReason: null, updatedAt: 600 });
+    await expect(installer.execute(command({ id: "cmd_pause", type: "pause", payload: { reason: "operator" } })))
+      .resolves.toEqual({ status: "ok", code: "paused" });
+    expect(runner.pause).toHaveBeenCalledOnce();
+    expect(store.saved.at(-1)).toMatchObject({ status: "paused", pausedReason: "operator-paused" });
   });
 });
