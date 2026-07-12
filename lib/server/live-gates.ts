@@ -147,15 +147,20 @@ export async function createLiveRevalidationEnvelope(context: LiveGateContext, i
   };
 }
 
-export type EmergencyCommand = {
-  type: "stop-new-orders" | "cancel-open-orders" | "close-positions";
+export type RunCommand = {
+  type: "resume-paper" | "pause" | "stop-new-orders" | "cancel-open-orders" | "close-positions";
   expectedVersion: number;
   payload: JsonObject;
   confirmedAt?: number;
 };
 
-export function parseEmergencyCommand(value: unknown, now: number): EmergencyCommand {
+export function parseRunCommand(value: unknown, now: number): RunCommand {
   const record = plainRecord(value, "command");
+  if (record.type === "resume-paper" || record.type === "pause") {
+    exact(record, ["type", "expectedVersion", "reason"], "lifecycle command");
+    return { type: record.type, expectedVersion: positiveVersion(record.expectedVersion),
+      payload: { reason: boundedText(record.reason, "reason") } };
+  }
   if (record.type === "stop-new-orders") {
     exact(record, ["type", "expectedVersion", "reason"], "stop command");
     return { type: "stop-new-orders", expectedVersion: positiveVersion(record.expectedVersion),
@@ -182,3 +187,5 @@ export function parseEmergencyCommand(value: unknown, now: number): EmergencyCom
   }
   throw new HttpProblem(400, "invalid_request", "command type is invalid");
 }
+
+export const parseEmergencyCommand = parseRunCommand;

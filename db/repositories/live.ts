@@ -7,6 +7,7 @@ export interface LiveConnectionRecord {
   version: number; verifiedAt: number | null; permissions: ConnectionPermissions;
 }
 export interface RunEvidence {
+  state: "running" | "paused" | "stopped" | "error" | null;
   health: "healthy" | "degraded" | "paused" | null;
   positions: Array<{symbol:string;side:"long"|"short";quantity:string;entryPrice:string;markPrice:string;unrealizedPnl:string;leverage:string}>;
   openOrders: Array<{id:string;symbol:string;side:"buy"|"sell";state:string;quantity:string;price:string|null}>;
@@ -19,7 +20,7 @@ export interface RunEvidence {
 
 interface ConnectionRow { status: string; hasLocalCredential: number | boolean; withdrawalAccessAbsent: number | boolean;
   version: number; verifiedAt: number | null; permissionsJson: string }
-interface HeartbeatRow { health: "healthy" | "degraded" | "paused"; summaryJson: string; occurredAt: number; payloadJson: string }
+interface HeartbeatRow { state: "running" | "paused" | "stopped" | "error"; health: "healthy" | "degraded" | "paused"; summaryJson: string; occurredAt: number; payloadJson: string }
 interface AuditRow { type: string; payloadJson: string; occurredAt: number }
 
 const permissions = (value: string): ConnectionPermissions => {
@@ -64,7 +65,7 @@ export function createLiveDataRepository(database: ControlPlaneDatabase) {
     async getEvidenceForUser(userId: string, deploymentId: string, expectedDeploymentVersion: number): Promise<RunEvidence> {
       const owner=id(userId,"userId"), target=id(deploymentId,"deploymentId");
       if(!Number.isSafeInteger(expectedDeploymentVersion)||expectedDeploymentVersion<1)throw new Error("expected deployment version is invalid");
-      const heartbeat=await database.prepare(`SELECT h.health,h.summary_json AS summaryJson,h.occurred_at AS occurredAt,a.payload_json AS payloadJson
+      const heartbeat=await database.prepare(`SELECT h.state,h.health,h.summary_json AS summaryJson,h.occurred_at AS occurredAt,a.payload_json AS payloadJson
         FROM run_heartbeats h JOIN deployments d ON d.id=h.deployment_id AND d.user_id=h.user_id
         JOIN audit_events a ON a.id=h.id AND a.user_id=h.user_id AND a.actor_type='device' AND a.actor_id=h.device_id
           AND a.device_id=h.device_id AND a.deployment_id=h.deployment_id AND a.type='heartbeat'
@@ -72,8 +73,11 @@ export function createLiveDataRepository(database: ControlPlaneDatabase) {
           AND CAST(json_extract(a.payload_json,'$.expectedDeploymentVersion') AS INTEGER)=d.version
         ORDER BY h.sequence DESC LIMIT 1`).bind(owner,target,expectedDeploymentVersion).first<HeartbeatRow>();
       let positions: RunEvidence["positions"]=[];
+      let heartbeatState:RunEvidence["state"]=null;
       if (heartbeat) {
         ledger(heartbeat.payloadJson,expectedDeploymentVersion);
+        if(!["running","paused","stopped","error"].includes(heartbeat.state))throw new Error("stored heartbeat state is invalid");
+        heartbeatState=heartbeat.state;
         const parsed=JSON.parse(heartbeat.summaryJson) as unknown;
         if (!parsed || typeof parsed!=="object" || Array.isArray(parsed)
           || !Array.isArray((parsed as {positions?:unknown}).positions)) throw new Error("stored heartbeat summary is invalid");
@@ -99,7 +103,7 @@ export function createLiveDataRepository(database: ControlPlaneDatabase) {
           AND CAST(json_extract(a.payload_json,'$.expectedDeploymentVersion') AS INTEGER)=d.version
         ORDER BY a.occurred_at DESC,a.id DESC LIMIT 20`).bind(owner,target,expectedDeploymentVersion).all<AuditRow>();
       if(!riskRows.success)throw new Error("run risk evidence query failed");
-      return { health: heartbeat?.health ?? null, positions, openOrders: orders.results.map(order),
+      return { state:heartbeatState, health: heartbeat?.health ?? null, positions, openOrders: orders.results.map(order),
         pnl:heartbeat?addSignedDecimals(positions.map(item=>item.unrealizedPnl)):null,
         heartbeatOccurredAt:heartbeat?.occurredAt??null,
         heartbeatExpectedDeploymentVersion:heartbeat?expectedDeploymentVersion:null,

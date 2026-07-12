@@ -24,6 +24,7 @@ export function RunDetailPanel({ runId }: { runId: string }) {
   const [state, setState] = useState<"loading" | "ready" | "error" | "unauthorized">("loading");
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [lifecyclePending, setLifecyclePending] = useState(false);
   const load = useCallback(async () => {
     setState("loading"); setFeedback("");
     try {
@@ -43,10 +44,14 @@ export function RunDetailPanel({ runId }: { runId: string }) {
   }, [runId]);
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
 
-  const command = async (input: EmergencyCommand) => {
+  const command = async (input: EmergencyCommand | { type: "resume-paper" | "pause"; reason: string }) => {
     if (!run) return;
     const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}/commands`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key() }, body: JSON.stringify({ ...input, expectedVersion: run.version }) });
-    if (!response.ok) { setFeedback("控制命令未被接受，請重新整理運行證據後再試。"); return; }
+    if (!response.ok) { setLifecyclePending(false); setFeedback("控制命令未被接受，請重新整理運行證據後再試。"); return; }
+    if (input.type === "resume-paper" || input.type === "pause") {
+      setFeedback(input.type === "resume-paper" ? "Paper 開始命令已排隊，等待本機代理回報運行證據。" : "Paper 暫停命令已排隊，等待本機代理回報暫停證據。");
+      return;
+    }
     await load();
     setFeedback(input.type === "stop-new-orders" ? "已送出停止新訂單命令；現有掛單與部位不會被自動更動。" : input.type === "cancel-open-orders" ? "已送出取消掛單命令；現有部位不會被關閉。" : "已送出獨立的高風險平倉命令。");
   };
@@ -60,7 +65,7 @@ export function RunDetailPanel({ runId }: { runId: string }) {
     && safePermissions.read && safePermissions.trade && safePermissions.withdrawal === false;
   return (
     <div className="run-detail">
-      <header className="run-detail__header glass-panel"><div><p className="eyebrow">CONTROLLED RUN / {run.id}</p><h1>{run.botName}</h1><p>{MODE_LABEL[run.mode]} · {run.state === "running" ? "運行中" : run.state === "paused" ? "已暫停" : run.state === "error" ? "需要處理" : "已停止"}</p></div><button className="button button--danger" disabled={run.mode === "live" || !livePermissionReady} onClick={() => setUnlockOpen(true)} type="button">{run.mode === "live" ? "已是實盤" : livePermissionReady ? "申請啟用實盤" : "實盤權限未就緒"}</button></header>
+      <header className="run-detail__header glass-panel"><div><p className="eyebrow">CONTROLLED RUN / {run.id}</p><h1>{run.botName}</h1><p>{MODE_LABEL[run.mode]} · {run.state === "running" ? "運行中" : run.state === "paused" ? "已暫停" : run.state === "error" ? "需要處理" : "已停止"}</p></div><div className="run-detail__actions">{run.mode === "paper" && <button className={`button ${run.state === "running" ? "button--secondary" : "button--primary"}`} disabled={lifecyclePending || run.state === "error"} onClick={() => { setLifecyclePending(true); void command({ type: run.state === "running" ? "pause" : "resume-paper", reason: "user-paper-control" }); }} type="button">{lifecyclePending ? "等待代理回報" : run.state === "running" ? "暫停模擬運行" : "開始模擬運行"}</button>}<button className="button button--danger" disabled={run.mode === "live" || !livePermissionReady} onClick={() => setUnlockOpen(true)} type="button">{run.mode === "live" ? "已是實盤" : livePermissionReady ? "申請啟用實盤" : "實盤權限未就緒"}</button></div></header>
       <section className="run-evidence" aria-labelledby="evidence-title"><div className="section-heading"><p className="eyebrow">AGENT EVIDENCE</p><h2 id="evidence-title">代理證據</h2></div><dl className="run-facts run-facts--detail"><div><dt>市場</dt><dd>{run.market === "spot" ? "現貨" : "合約"}</dd></div><div><dt>代理健康</dt><dd>{run.health ?? "尚無目前版本回報"}</dd></div><div><dt>損益</dt><dd>{run.pnl === null ? "尚無可信證據" : `${run.pnl} USDT（目前心跳部位未實現損益合計）`}</dd></div><div><dt>心跳來源</dt><dd>{run.evidence.heartbeatOccurredAt === null ? "尚無目前部署版本心跳" : `版本 ${run.evidence.heartbeatExpectedDeploymentVersion} · ${evidenceTime(run.evidence.heartbeatOccurredAt)}`}</dd></div><div><dt>持倉數</dt><dd>{run.positions.length}</dd></div><div><dt>掛單數</dt><dd>{run.openOrders.length}</dd></div><div><dt>最後訊號</dt><dd>{run.lastSignal ? `${run.lastSignal.reason} · 版本 ${run.lastSignal.expectedDeploymentVersion} · ${evidenceTime(run.lastSignal.occurredAt)}` : "尚無訊號"}</dd></div><div><dt>風險攔截</dt><dd>{run.riskBlocks.length ? `${run.riskBlocks.length} 筆 · 最近 ${evidenceTime(run.riskBlocks[0]!.occurredAt)}` : "無紀錄"}</dd></div></dl></section>
       <section className="run-positions" aria-labelledby="positions-title"><h2 id="positions-title">部位與掛單</h2>{run.positions.length === 0 && run.openOrders.length === 0 ? <p className="runs-empty">代理尚未回報任何持倉或掛單證據。</p> : <div className="table-shell glass-panel"><table><thead><tr><th>類型</th><th>交易對</th><th>方向</th><th>數量</th><th>狀態 / 未實現損益</th></tr></thead><tbody>{run.positions.map((position) => <tr key={`${position.symbol}-${position.side}`}><td>部位</td><td>{position.symbol}</td><td>{position.side}</td><td>{position.quantity}</td><td>{position.unrealizedPnl}</td></tr>)}{run.openOrders.map((order) => <tr key={order.id}><td>掛單</td><td>{order.symbol}</td><td>{order.side}</td><td>{order.quantity}</td><td>{order.state}</td></tr>)}</tbody></table></div>}</section>
       {feedback && <p className="control-feedback" role="status">{feedback}</p>}

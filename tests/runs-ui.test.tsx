@@ -118,6 +118,21 @@ describe("run control UI", () => {
     expect(await screen.findByRole("button", { name: "實盤權限未就緒" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "申請啟用實盤" })).not.toBeInTheDocument();
   });
+
+  it("queues paper pause with the current version and waits for agent evidence", async () => {
+    const fetchMock=vi.spyOn(globalThis,"fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({run}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({connections:[],nextCursor:null}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({command:{id:"cmd_1"}}),{status:202}));
+    const user=userEvent.setup();
+    render(<RunDetailPanel runId="run_1" />);
+    await user.click(await screen.findByRole("button",{name:"暫停模擬運行"}));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/runs/run_1/commands",expect.objectContaining({
+      method:"POST",body:JSON.stringify({type:"pause",reason:"user-paper-control",expectedVersion:2}),
+    }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Paper 暫停命令已排隊");
+    expect(screen.getByRole("button",{name:"等待代理回報"})).toBeDisabled();
+  });
 });
 
 describe("run response parser", () => {

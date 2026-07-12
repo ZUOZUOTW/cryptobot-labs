@@ -740,6 +740,7 @@
 .run-detail__header { display: flex; align-items: end; justify-content: space-between; gap: 1.5rem; padding: clamp(1.1rem, 3vw, 2rem); border-radius: 1.1rem; }
 .run-detail__header h1 { margin: 0; font-size: clamp(2rem, 5vw, 4.5rem); }
 .run-detail__header p:not(.eyebrow) { margin: 0.7rem 0 0; color: var(--muted); }
+.run-detail__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.6rem; }
 .run-evidence,
 .run-positions,
 .emergency-panel { padding: clamp(1rem, 2.5vw, 1.5rem); border: 1px solid var(--border); border-radius: 1rem; background: rgb(14 17 26 / 66%); }
@@ -791,6 +792,7 @@
   .run-detail__header,
   .control-dialog__card > header { align-items: stretch; flex-direction: column; }
   .run-detail__header .button { width: 100%; }
+  .run-detail__actions { width: 100%; }
   .run-card footer,
   .emergency-panel > header { align-items: stretch; flex-direction: column; }
   .emergency-actions,

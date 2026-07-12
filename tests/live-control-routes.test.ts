@@ -55,6 +55,19 @@ describe("run control service",()=>{
     expect(enqueue).toHaveBeenCalledWith("usr_1",expect.objectContaining({type:"stop-new-orders",payload:{reason:"manual"}}));
   });
 
+  it("queues exact version-fenced paper lifecycle commands",async()=>{
+    const enqueue=vi.fn().mockResolvedValue({command:{id:"cmd_1",deploymentId:"run_1",type:"resume-paper",version:1,correlationId:"request-paper-1",expectedDeploymentVersion:3,status:"pending",createdAt:400_000,expiresAt:700_000},idempotent:false});
+    const service=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue({...deployment,state:"paused"})} as never,liveData:{} as never,commands:{enqueue} as never,now:()=>400_000});
+    await service.command("usr_1","run_1","request-paper-1",{type:"resume-paper",expectedVersion:3,reason:"user-paper-control"});
+    expect(enqueue).toHaveBeenCalledWith("usr_1",expect.objectContaining({type:"resume-paper",expectedDeploymentVersion:3,payload:{reason:"user-paper-control"}}));
+    await expect(service.command("usr_1","run_1","request-paper-2",{type:"pause",expectedVersion:3,reason:"user-paper-control",scope:"all"})).rejects.toMatchObject({status:400});
+  });
+
+  it("rejects paper lifecycle commands for non-paper deployments",async()=>{
+    const service=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue({...deployment,mode:"live"})} as never,liveData:{} as never,commands:{enqueue:vi.fn()} as never,now:()=>400_000});
+    await expect(service.command("usr_1","run_1","request-paper-1",{type:"pause",expectedVersion:3,reason:"user-paper-control"})).rejects.toMatchObject({status:409,code:"conflict"});
+  });
+
   it("maps known command boundary errors but keeps unknown storage failures retryable",async()=>{
     const base={deployments:{getForUser:vi.fn().mockResolvedValue(deployment)} as never,liveData:{} as never,now:()=>400_000};
     const request={type:"stop-new-orders",expectedVersion:3,reason:"manual"};
