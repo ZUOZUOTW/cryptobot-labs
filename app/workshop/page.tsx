@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
+import { BacktestRequestForm } from "../../components/backtests/BacktestRequestForm";
 import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
 import { PackagePanel } from "../../components/workshop/PackagePanel";
@@ -213,13 +214,20 @@ export default function WorkshopPage() {
         <ParameterPanel config={config} onConfigField={updateField} onParameter={updateParameter} />
         <div className="workshop-grid__results">
           <StrategySummary config={config} validation={validation} />
-          <BacktestPanel
-            config={config}
-            onReport={acceptReport}
-            onRun={() => setMobileMessage("正在驗證並執行模擬回測…")}
-            restoredReport={currentReport}
-            validation={validation}
-          />
+          <div className="backtest-track">
+            <p className="backtest-track__label">快速、裝置內、使用固定模擬資料</p>
+            <BacktestPanel
+              config={config}
+              onReport={acceptReport}
+              onRun={() => setMobileMessage("正在驗證並執行模擬回測…")}
+              restoredReport={currentReport}
+              validation={validation}
+            />
+          </div>
+        </div>
+        <div className="workshop-historical">
+          <p className="backtest-track__label">可保存、WEEX 公開歷史行情、需登入</p>
+          <BacktestRequestForm compact config={config} />
         </div>
         <PackagePanel config={config} onImport={acceptImport} report={currentReport} />
       </div>

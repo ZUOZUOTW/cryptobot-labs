@@ -7,6 +7,7 @@ const NAVIGATION_LINKS = [
   { href: "/bots", label: "機器人" },
   { href: "/leaderboard", label: "排行榜" },
   { href: "/workshop", label: "組裝車間" },
+  { href: "/backtests", label: "歷史回測" },
 ] as const;
 
 function NavigationLinks() {
