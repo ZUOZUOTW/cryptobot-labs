@@ -9,6 +9,7 @@ const NAVIGATION_LINKS = [
   { href: "/workshop", label: "組裝車間" },
   { href: "/backtests", label: "歷史回測" },
   { href: "/connections", label: "連線" },
+  { href: "/runs", label: "運行" },
 ] as const;
 
 function NavigationLinks() {

@@ -11,6 +11,7 @@ describe("SiteHeader", () => {
     ["排行榜", "/leaderboard"],
     ["組裝車間", "/workshop"],
     ["連線", "/connections"],
+    ["運行", "/runs"],
   ])("links %s to %s", (name, href) => {
     render(<SiteHeader />);
 

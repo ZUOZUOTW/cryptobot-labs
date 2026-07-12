@@ -38,6 +38,13 @@ export interface CommandAcknowledgementRecord {
   status: "ok" | "rejected" | "failed"; payloadJson: string; acknowledgedAt: number;
 }
 
+export class CommandRepositoryError extends Error {
+  constructor(readonly category: "deployment-fence" | "command-conflict", message: string) {
+    super(message);
+    this.name = "CommandRepositoryError";
+  }
+}
+
 const deploymentColumns = `id, user_id AS userId, device_id AS deviceId, strategy_version_id AS strategyVersionId,
   name, mode, state, version, configuration_hash AS configurationHash, created_at AS createdAt,
   updated_at AS updatedAt, started_at AS startedAt, stopped_at AS stoppedAt`;
@@ -270,13 +277,13 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
         payloadJson, now, expiresAt };
       const existing = await getByCorrelation(owner, correlationId);
       if (existing) {
-        if (!sameCommand(existing, normalized)) throw new Error("command correlation conflict");
+        if (!sameCommand(existing, normalized)) throw new CommandRepositoryError("command-conflict", "command correlation conflict");
         return { command: existing, idempotent: true };
       }
       const deployment = await database.prepare(`SELECT device_id AS deviceId FROM deployments
         WHERE user_id=? AND id=? AND version=?`).bind(owner, normalized.deploymentId,
           positiveVersion(normalized.expectedDeploymentVersion, "expectedDeploymentVersion")).first<{ deviceId: string }>();
-      if (!deployment) throw new Error("owned deployment version not found");
+      if (!deployment) throw new CommandRepositoryError("deployment-fence", "owned deployment version not found");
       try {
         const command = await database.prepare(`INSERT INTO commands
           (id,user_id,deployment_id,device_id,type,version,correlation_id,expected_deployment_version,payload_json,status,created_at,expires_at)
@@ -286,12 +293,12 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
           .bind(commandId, normalized.type, normalized.version, correlationId, normalized.expectedDeploymentVersion,
             payloadJson, now, expiresAt, owner, normalized.deploymentId, deployment.deviceId,
             normalized.expectedDeploymentVersion).first<CommandRecord>();
-        if (!command) throw new Error("owned deployment version not found");
+        if (!command) throw new CommandRepositoryError("deployment-fence", "owned deployment version not found");
         return { command, idempotent: false };
       } catch (error) {
         const raced = await getByCorrelation(owner, correlationId);
         if (raced && sameCommand(raced, normalized)) return { command: raced, idempotent: true };
-        if (raced) throw new Error("command correlation conflict");
+        if (raced) throw new CommandRepositoryError("command-conflict", "command correlation conflict");
         throw error;
       }
     },
@@ -332,7 +339,7 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
         && row.status === input.status && row.payloadJson === payloadJson;
       const existing = await getAck(commandId, deviceId);
       if (existing) {
-        if (!identical(existing)) throw new Error("command acknowledgement conflict");
+        if (!identical(existing)) throw new CommandRepositoryError("command-conflict", "command acknowledgement conflict");
         return { acknowledgement: existing, idempotent: true };
       }
       let results: ControlPlaneRunResult[];
@@ -352,13 +359,13 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
       } catch (error) {
         const raced = await getAck(commandId, deviceId);
         if (raced && identical(raced)) return { acknowledgement: raced, idempotent: true };
-        if (raced) throw new Error("command acknowledgement conflict");
+        if (raced) throw new CommandRepositoryError("command-conflict", "command acknowledgement conflict");
         throw error;
       }
       if (!results.every((result) => result.success && result.meta.changes === 1)) {
         const authoritative = await getAck(commandId, deviceId);
         if (authoritative && identical(authoritative)) return { acknowledgement: authoritative, idempotent: true };
-        if (authoritative) throw new Error("command acknowledgement conflict");
+        if (authoritative) throw new CommandRepositoryError("command-conflict", "command acknowledgement conflict");
         return null;
       }
       const acknowledgement = await getAck(commandId, deviceId);

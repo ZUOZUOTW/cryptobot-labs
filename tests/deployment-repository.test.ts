@@ -113,8 +113,11 @@ describe("deployment, risk, and command repositories", () => {
     expect((await commands.enqueue(input)).idempotent).toBe(false);
     const retry = await commands.enqueue({ ...input, id: "cmd_retry", now: 220, expiresAt: 400 });
     expect(retry).toMatchObject({ idempotent: true, command: { id: "cmd_a", createdAt: 200, expiresAt: 300 } });
+    await deployments.updateRisk("usr_a", "dep_a", 1, risk(), 225);
+    await expect(commands.enqueue({ ...input, id: "cmd_retry_after_fence", now: 230, expiresAt: 450 }))
+      .resolves.toMatchObject({ idempotent: true, command: { id: "cmd_a", expectedDeploymentVersion: 1 } });
     await expect(commands.enqueue({ ...input, id: "cmd_b", type: "close-positions" })).rejects.toThrow(/conflict/i);
-    await expect(commands.enqueue({ ...input, id: "cmd_c", correlationId: "corr_stale", expectedDeploymentVersion: 2 })).rejects.toThrow(/version/i);
+    await expect(commands.enqueue({ ...input, id: "cmd_c", correlationId: "corr_stale", expectedDeploymentVersion: 1 })).rejects.toThrow(/version/i);
   });
 
   it("polls only unexpired unacked commands for the assigned device", async () => {
