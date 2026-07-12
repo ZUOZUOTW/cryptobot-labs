@@ -100,5 +100,11 @@ describe("backtest runtime and strategy save wiring", () => {
     const custom = await handlers.strategy(makeRequest({ config: config({ source: "return {action:'buy'}" }) }, "save-custom"));
     expect(custom.status).toBe(422);
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM strategy_versions").get()).toEqual({ count: 1 });
+
+    const source=`export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"test"});`;
+    const savedCustom=await handlers.strategy(makeRequest({config:config({source})},"save-custom-valid"));
+    expect(savedCustom.status).toBe(201);
+    const row=database.raw.prepare("SELECT source_hash AS sourceHash,source_code AS sourceCode FROM strategy_versions WHERE source_code IS NOT NULL").get() as {sourceHash:string;sourceCode:string};
+    expect(row).toEqual({sourceHash:expect.stringMatching(/^[a-f0-9]{64}$/),sourceCode:source});
   });
 });

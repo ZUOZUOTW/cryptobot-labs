@@ -269,7 +269,7 @@ export interface VisualHistoricalEvaluator extends StrategyEvaluator {
 
 export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHistoricalEvaluator => {
   if (candidate.source !== undefined) {
-    throw new TypeError("Custom JavaScript requires the QuickJS sandbox and is not enabled for historical backtests yet");
+    throw new TypeError("Custom JavaScript must use the QuickJS sandbox evaluator");
   }
   if (!strictCanonicalShape(candidate)) throw new TypeError("BotConfig must use the strict canonical shape");
   const validation = validateConfig(candidate);

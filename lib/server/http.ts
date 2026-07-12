@@ -20,7 +20,6 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   device_authentication_failed: "Device authentication failed.",
   conflict: "The request conflicts with the current resource version or state.",
   not_found: "The requested resource was not found.",
-  custom_strategy_runtime_unavailable: "Custom JavaScript backtests require the unavailable QuickJS sandbox.",
   invalid_strategy_configuration: "The selected strategy configuration is invalid.",
   strategy_request_mismatch: "The backtest request does not match the selected strategy version.",
   invalid_economic_parameters: "The requested capital, fees, slippage, or leverage are outside safe backtest limits.",

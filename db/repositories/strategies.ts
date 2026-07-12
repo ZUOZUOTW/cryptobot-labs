@@ -59,8 +59,15 @@ export function createStrategyVersionRepository(database: ControlPlaneDatabase) 
       symbol: string; configHash: string; configJson: string; now: number }): Promise<{
         strategyVersion: SavedStrategyVersionRecord; idempotent: boolean;
       }> {
+      return this.createIdempotent({ ...input, sourceHash: null, sourceCode: null });
+    },
+
+    async createIdempotent(input: { idempotencyId: string; idempotencyKey: string; requestHash: string;
+      strategyId: string; strategyVersionId: string; userId: string; name: string; market: "spot" | "futures";
+      symbol: string; configHash: string; configJson: string; sourceHash: string | null; sourceCode: string | null;
+      now: number }): Promise<{ strategyVersion: SavedStrategyVersionRecord; idempotent: boolean }> {
       exactInput(input, ["idempotencyId", "idempotencyKey", "requestHash", "strategyId", "strategyVersionId",
-        "userId", "name", "market", "symbol", "configHash", "configJson", "now"]);
+        "userId", "name", "market", "symbol", "configHash", "configJson", "sourceHash", "sourceCode", "now"]);
       const owner = id(input.userId, "userId");
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.idempotencyKey)) throw new Error("idempotency key invalid");
       const digest = hash(input.requestHash);
@@ -68,6 +75,11 @@ export function createStrategyVersionRepository(database: ControlPlaneDatabase) 
       if (replay) return replay;
       const strategyId = id(input.strategyId, "strategyId");
       const versionId = id(input.strategyVersionId, "strategyVersionId");
+      if ((input.sourceHash === null) !== (input.sourceCode === null)) throw new Error("strategy source hash is inconsistent");
+      const sourceHash = input.sourceHash === null ? null : hash(input.sourceHash);
+      if (input.sourceCode !== null && (input.sourceCode.length < 1 || input.sourceCode.length > 262_144)) {
+        throw new Error("strategy source is invalid");
+      }
       const now = time(input.now, "now");
       try {
         const results = await database.batch([
@@ -75,8 +87,8 @@ export function createStrategyVersionRepository(database: ControlPlaneDatabase) 
             VALUES (?,?,?,?,?,?,?)`).bind(strategyId, owner, input.name, input.market, input.symbol, now, now),
           database.prepare(`INSERT INTO strategy_versions
             (id,user_id,strategy_id,version,config_hash,source_hash,config_json,source_code,created_at)
-            SELECT ?,user_id,id,1,?,NULL,?,NULL,? FROM strategies WHERE id=? AND user_id=?`)
-            .bind(versionId, hash(input.configHash), input.configJson, now, strategyId, owner),
+            SELECT ?,user_id,id,1,?,?,?,?,? FROM strategies WHERE id=? AND user_id=?`)
+            .bind(versionId, hash(input.configHash), sourceHash, input.configJson, input.sourceCode, now, strategyId, owner),
           database.prepare(`INSERT INTO strategy_save_keys
             (id,user_id,key,request_hash,strategy_version_id,created_at)
             SELECT ?,user_id,?,?,id,? FROM strategy_versions WHERE id=? AND user_id=?`)

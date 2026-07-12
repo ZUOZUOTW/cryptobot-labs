@@ -123,7 +123,7 @@ describe("historical backtest UI", () => {
     expect(key(5)).not.toBe(key(3));
   });
 
-  it("offers sign-in recovery on 401 and never executes JavaScript source mode", async () => {
+  it("offers sign-in recovery and blocks invalid JavaScript before persistence", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 401 }));
     const user = userEvent.setup();
     const { rerender } = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} />);
@@ -133,9 +133,26 @@ describe("historical backtest UI", () => {
     rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], source: "fetch('https://example.com')" }} />);
     const button = screen.getByRole("button", { name: "執行 WEEX 歷史回測" });
     expect(button).toBeDisabled();
-    expect(screen.getByText(/JavaScript.*暫不支援歷史回測/)).toBeInTheDocument();
+    expect(screen.getByText(/JavaScript.*隔離沙箱/)).toBeInTheDocument();
     fireEvent.click(button);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits a valid JavaScript strategy for immutable save and sandbox backtest",async()=>{
+    const preset=STRATEGY_PRESETS[0];
+    const source=`export const strategy={exchange:"WEEX",market:"spot",symbol:${JSON.stringify(preset.symbol)},timeframe:${JSON.stringify(preset.timeframe)}};\nexport default () => ({action:"hold",reason:"test"});`;
+    const custom={...preset,source};
+    const fetchMock=vi.spyOn(globalThis,"fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({strategyVersion:{id:"version-js",strategyId:"strategy-js",version:1,configHash:"c".repeat(64),createdAt:1_700_000_000_000},idempotent:false}),{status:201}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({backtest:{...succeededBacktest,strategyVersionId:"version-js",result:{...succeededBacktest.result,scriptHash:"d".repeat(64)}}}),{status:201}));
+    const user=userEvent.setup();
+    render(<BacktestRequestForm config={custom}/>);
+    const button=screen.getByRole("button",{name:"執行 WEEX 歷史回測"});
+    expect(button).toBeEnabled();
+    await user.click(button);
+    await waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({config:custom});
+    expect(screen.getByText(/JavaScript.*隔離沙箱/)).toBeInTheDocument();
   });
 
   it("loads an ownership-shaped history response without caching and supports retry", async () => {

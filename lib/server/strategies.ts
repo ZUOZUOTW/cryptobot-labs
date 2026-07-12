@@ -1,6 +1,7 @@
 import type { SavedStrategyVersionRecord } from "../../db/repositories";
 import { STRATEGY_BLOCKS } from "../../data/strategies";
 import type { BotConfig } from "../types";
+import { canonicalizeBotConfig, validateConfig } from "../strategy-validation";
 import { safeCanonicalJsonStringify } from "../control-plane/schemas";
 import { createVisualHistoricalEvaluator } from "../historical-strategy";
 import type { ApiAuthDependencies } from "./auth";
@@ -12,9 +13,10 @@ import { requireSameOrigin } from "./origin";
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-type Repository = { createVisualIdempotent(input: { idempotencyId: string; idempotencyKey: string; requestHash: string;
+type Repository = { createIdempotent(input: { idempotencyId: string; idempotencyKey: string; requestHash: string;
   strategyId: string; strategyVersionId: string; userId: string; name: string; market: "spot" | "futures";
-  symbol: string; configHash: string; configJson: string; now: number }): Promise<{
+  symbol: string; configHash: string; configJson: string; sourceHash: string | null; sourceCode: string | null;
+  now: number }): Promise<{
     strategyVersion: SavedStrategyVersionRecord; idempotent: boolean;
   }> };
 
@@ -29,12 +31,17 @@ const parseBody = (value: unknown): { config: BotConfig } => {
     || !Object.hasOwn(value, "config")) throw new HttpProblem(400, "invalid_request");
   const config = (value as { config: unknown }).config;
   if (config === null || typeof config !== "object" || Array.isArray(config)) throw new HttpProblem(400, "invalid_request");
-  if (Object.hasOwn(config, "source")) throw new HttpProblem(422, "custom_strategy_runtime_unavailable");
   let evaluator: ReturnType<typeof createVisualHistoricalEvaluator>;
-  try { evaluator = createVisualHistoricalEvaluator(config as BotConfig); }
+  const source = Object.hasOwn(config, "source") ? (config as { source?: unknown }).source : undefined;
+  if (source !== undefined && (typeof source !== "string" || source.length < 1 || source.length > 262_144)) {
+    throw new HttpProblem(422, "invalid_strategy_configuration");
+  }
+  try { evaluator = createVisualHistoricalEvaluator({ ...(config as BotConfig), source: undefined }); }
   catch { throw new HttpProblem(422, "invalid_strategy_configuration"); }
   const order = new Map(STRATEGY_BLOCKS.map((block, index) => [block.id, index]));
-  return { config: { ...evaluator.config,
+  const canonical = canonicalizeBotConfig({ ...evaluator.config, ...(source === undefined ? {} : { source }) } as BotConfig);
+  if (!validateConfig(canonical).valid) throw new HttpProblem(422, "invalid_strategy_configuration");
+  return { config: { ...canonical,
     blocks: [...evaluator.config.blocks].sort((left, right) => order.get(left.id)! - order.get(right.id)!),
   } as BotConfig };
 };
@@ -51,12 +58,14 @@ export function createStrategySaveService(dependencies: {
       if (!Number.isSafeInteger(now) || now < 0) throw new Error("clock returned invalid time");
       const configJson = safeCanonicalJsonStringify(config, "strategy configuration", 262_144);
       const configHash = await digest(configJson);
+      const sourceCode = config.source ?? null;
+      const sourceHash = sourceCode === null ? null : await digest(sourceCode);
       const generated = [dependencies.newId("strategy"), dependencies.newId("version"), dependencies.newId("strategy-key")];
       if (generated.some((id) => !ID.test(id))) throw new Error("id generator returned invalid id");
       try {
-        return await dependencies.repository.createVisualIdempotent({ strategyId: generated[0]!, strategyVersionId: generated[1]!,
+        return await dependencies.repository.createIdempotent({ strategyId: generated[0]!, strategyVersionId: generated[1]!,
           idempotencyId: generated[2]!, idempotencyKey, requestHash: configHash, userId, name: config.name,
-          market: config.market, symbol: config.symbol, configHash, configJson, now });
+          market: config.market, symbol: config.symbol, configHash, configJson, sourceHash, sourceCode, now });
       } catch (error) {
         if (error instanceof Error && /idempotency key request conflict/i.test(error.message)) {
           throw new HttpProblem(409, "conflict");

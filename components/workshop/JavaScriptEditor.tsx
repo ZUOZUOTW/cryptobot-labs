@@ -7,7 +7,7 @@ import type { BotConfig } from "../../lib/types";
 export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | "symbol" | "timeframe">) => [
   "/**",
   " * CryptoBot Labs 的 WEEX 模擬策略範例。",
-  " * 原始碼只會被靜態檢查，不會在瀏覽器中執行。",
+  " * 回測與本機代理只會在隔離沙箱中執行此函式。",
   " */",
   "export const strategy = {",
   "  exchange: \"WEEX\",",
@@ -16,6 +16,16 @@ export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | 
   `  timeframe: ${JSON.stringify(config.timeframe)},`,
   "  signal: \"SMA crossover\"",
   "};",
+  "",
+  "export default function evaluate(input) {",
+  "  const candles = input.candles;",
+  "  if (candles.length < 2) return { action: \"hold\", reason: \"waiting-for-candles\" };",
+  "  const previous = Number(candles[candles.length - 2].close);",
+  "  const current = Number(candles[candles.length - 1].close);",
+  "  if (current > previous) return { action: \"buy\", reason: \"close-rising\", allocationRate: 0.1 };",
+  "  if (current < previous) return { action: \"sell\", reason: \"close-falling\", allocationRate: 0.1 };",
+  "  return { action: \"hold\", reason: \"close-unchanged\" };",
+  "}",
   "",
 ].join("\n");
 
@@ -48,7 +58,7 @@ export function JavaScriptEditor({ source, onChange }: JavaScriptEditorProps) {
         </span>
       </div>
 
-      <p className="javascript-editor__lead">原始碼只作文字驗證與套件保存；這個頁面不會執行、載入或連線至任何交易程式。</p>
+      <p className="javascript-editor__lead">此頁不執行程式碼；歷史回測與本機代理只會在無網路、無檔案及無 API Key 權限的隔離沙箱中執行，輸出只能是交易訊號。</p>
       <label className="javascript-editor__field" htmlFor="javascript-strategy-source">
         <span>JavaScript 策略原始碼</span>
         <textarea

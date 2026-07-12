@@ -69,6 +69,8 @@ const digest = async (value: unknown): Promise<string> => {
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(safeCanonicalJsonStringify(normalized)));
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
+const digestText=async(value:string):Promise<string>=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value)))]
+  .map((byte)=>byte.toString(16).padStart(2,"0")).join("");
 
 const request = (overrides: Record<string, unknown> = {}) => ({
   strategyVersionId: "version_a", market: "futures" as const, symbol: "BTCUSDT", interval: "1h",
@@ -311,14 +313,19 @@ describe("historical backtest API", () => {
     expect(JSON.parse(stored.gaps_json)).toEqual([{ from: 3_600_000, to: 7_199_999 }]);
   });
 
-  it("rejects custom source before any fetch because QuickJS is unavailable", async () => {
-    const custom = config({ source: "return { action: 'buy' };" });
+  it("runs custom source in QuickJS and persists its verified script hash", async () => {
+    const source = `export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"test-hold"});`;
+    const custom = config({ source });
     const hash = await digest(custom);
     database.raw.prepare("UPDATE strategy_versions SET config_hash=?,config_json=?,source_hash=?,source_code=? WHERE id='version_a'")
-      .run(hash, JSON.stringify(custom), "a".repeat(64), custom.source!);
-    await expect(service.create("usr_a", "custom", request()))
-      .rejects.toMatchObject({ status: 422, code: "custom_strategy_runtime_unavailable" });
-    expect(collectCandles).not.toHaveBeenCalled();
+      .run(hash, JSON.stringify(custom), await digestText(source), source);
+    await expect(service.create("usr_a", "custom", request())).resolves.toMatchObject({job:{status:"succeeded"}});
+    expect(collectCandles).toHaveBeenCalledTimes(1);
+    const stored=database.raw.prepare("SELECT r.script_hash AS scriptHash FROM backtest_results r JOIN backtest_request_keys k ON k.backtest_job_id=r.backtest_job_id WHERE k.key='custom'").get();
+    expect(stored).toEqual({scriptHash:await digestText(source)});
+    database.raw.prepare("UPDATE strategy_versions SET source_hash=? WHERE id='version_a'").run("a".repeat(64));
+    await expect(service.create("usr_a","custom-tampered",request())).rejects.toMatchObject({status:500,code:"strategy_integrity_failed"});
+    expect(collectCandles).toHaveBeenCalledTimes(1);
   });
 
   it("enforces authenticated same-origin POST and exact JSON at the handler boundary", async () => {

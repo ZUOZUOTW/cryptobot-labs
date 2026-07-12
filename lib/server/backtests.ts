@@ -10,8 +10,9 @@ import { requireSameOrigin } from "./origin";
 import type {
   BacktestCursor, BacktestDetailRecord, BacktestJobRecord, BacktestStatus, OwnedStrategyVersionRecord,
 } from "../../db/repositories";
-import type { HistoricalDataset, HistoricalBacktestResult } from "../../packages/trading-core/src";
-import { runHistoricalBacktest } from "../../packages/trading-core/src";
+import type { HistoricalDataset, HistoricalBacktestResult, StrategyEvaluator, StrategySandbox } from "../../packages/trading-core/src";
+import { BACKTEST_SANDBOX_BUDGET, createQuickJsStrategySandbox, runHistoricalBacktest } from "../../packages/trading-core/src";
+import { validateConfig } from "../strategy-validation";
 import type { HistoricalFundingDataset } from "../../packages/weex-client/src";
 import {
   DEFAULT_FUNDING_MARK_MAX_AGE_MS, FUNDING_HISTORY_LIMIT, FUNDING_MARK_PAGE_SIZE,
@@ -93,12 +94,14 @@ const assertId = (value: string, label: string): string => {
 };
 
 const parseStoredConfig = async (version: OwnedStrategyVersionRecord): Promise<{
-  config: BotConfig; configHash: string; strategyHash: string;
+  config: BotConfig; configHash: string; strategyHash: string; source: string | null; scriptHash: string | null;
 }> => {
   if (typeof version.configJson !== "string" || version.configJson.length > 262_144
     || !HASH.test(version.configHash)) throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
-  if (version.sourceCode !== null || version.sourceHash !== null) {
-    throw new HistoricalBacktestProblem(422, "custom_strategy_runtime_unavailable");
+  if ((version.sourceCode === null) !== (version.sourceHash === null)
+    || (version.sourceHash !== null && !HASH.test(version.sourceHash))
+    || (version.sourceCode !== null && (version.sourceCode.length < 1 || version.sourceCode.length > 262_144))) {
+    throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
   }
   let candidate: unknown;
   try { candidate = JSON.parse(version.configJson); }
@@ -107,16 +110,21 @@ const parseStoredConfig = async (version: OwnedStrategyVersionRecord): Promise<{
     throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
   }
   const config = candidate as BotConfig;
-  if (Object.hasOwn(config as object, "source")) {
-    throw new HistoricalBacktestProblem(422, "custom_strategy_runtime_unavailable");
+  const source = version.sourceCode;
+  if ((source === null && Object.hasOwn(config as object, "source"))
+    || (source !== null && config.source !== source)) throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
+  // The visual clone proves strict canonical config shape; source receives its own validation and digest fence.
+  try {
+    createVisualHistoricalEvaluator({ ...config, source: undefined });
+    if (!validateConfig(config).valid) throw new Error("invalid source");
   }
-  // Creating the evaluator is also the authoritative strict BotConfig validation.
-  try { createVisualHistoricalEvaluator(config); }
   catch { throw new HistoricalBacktestProblem(422, "invalid_strategy_configuration"); }
   const canonical = safeCanonicalJsonStringify(config, "strategy configuration", 262_144);
   const actualHash = await sha256(canonical);
   if (actualHash !== version.configHash) throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
-  return { config, configHash: actualHash, strategyHash: actualHash };
+  const scriptHash = source === null ? null : await sha256(source);
+  if (scriptHash !== version.sourceHash) throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
+  return { config, configHash: actualHash, strategyHash: actualHash, source, scriptHash };
 };
 
 const assertRequestMatches = (request: BacktestJobCreateDto, version: OwnedStrategyVersionRecord, config: BotConfig): void => {
@@ -297,6 +305,7 @@ const publicSummary = (record: BacktestJobRecord): Record<string, unknown> => ({
 export function createHistoricalBacktestService(dependencies: {
   backtests: BacktestRepository; strategies: StrategyRepository; marketData: PublicMarketClient;
   now(): number; newId(prefix: "job" | "idem" | "dataset" | "result"): string;
+  createSandbox?(): Promise<StrategySandbox>;
 }): HistoricalBacktestService {
   return {
     async create(userId, idempotencyKey, candidate, signal) {
@@ -349,12 +358,30 @@ export function createHistoricalBacktestService(dependencies: {
           throw new Error("backtest could not enter running state");
         }
         // Evaluators are stateful by design; every run receives a fresh instance.
-        const evaluator = createVisualHistoricalEvaluator(integrity.config);
-        const result: HistoricalBacktestResult = await runHistoricalBacktest({ dataset, evaluator,
-          initialCapital: request.initialCapital, feeRate: request.feeRate, slippageRate: request.slippageRate,
-          leverage: request.leverage, funding: funding?.funding ?? [], gapPolicy: request.gapPolicy,
-          maintenanceMarginRate: MAINTENANCE_MARGIN_RATE[request.market],
-          engineVersion: HISTORICAL_ENGINE_VERSION, configHash: integrity.configHash, strategyHash: integrity.strategyHash });
+        let sandbox: StrategySandbox | null = null;
+        let evaluator: StrategyEvaluator;
+        if (integrity.source === null) {
+          evaluator = createVisualHistoricalEvaluator(integrity.config);
+        } else {
+          const visualPolicy = createVisualHistoricalEvaluator({ ...integrity.config, source: undefined });
+          sandbox = await (dependencies.createSandbox ?? (() => createQuickJsStrategySandbox(BACKTEST_SANDBOX_BUDGET)))();
+          evaluator = { maximumLookback: 1024, riskPolicy: visualPolicy.riskPolicy, evaluate: async (input) => {
+            const evaluated = await sandbox!.evaluate({ source: integrity.source!, input, now: input.now,
+              randomSeed: `${integrity.scriptHash}:${input.now}` });
+            if (evaluated.scriptHash !== integrity.scriptHash) {
+              throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
+            }
+            return evaluated.signal;
+          } };
+        }
+        let result: HistoricalBacktestResult;
+        try {
+          result = await runHistoricalBacktest({ dataset, evaluator,
+            initialCapital: request.initialCapital, feeRate: request.feeRate, slippageRate: request.slippageRate,
+            leverage: request.leverage, funding: funding?.funding ?? [], gapPolicy: request.gapPolicy,
+            maintenanceMarginRate: MAINTENANCE_MARGIN_RATE[request.market],
+            engineVersion: HISTORICAL_ENGINE_VERSION, configHash: integrity.configHash, strategyHash: integrity.strategyHash });
+        } finally { await sandbox?.dispose(); }
         signal?.throwIfAborted();
         const completedAt = safeTime(dependencies.now);
         await dependencies.backtests.completeSuccess(userId, created.job.id, {
@@ -378,7 +405,7 @@ export function createHistoricalBacktestService(dependencies: {
                 model: "fixed-conservative-not-weex-tier-exact" } },
             equityCurve: result.equityCurve, engineVersion: HISTORICAL_ENGINE_VERSION,
             configurationHash: integrity.configHash, strategyHash: integrity.strategyHash,
-            scriptHash: null, createdAt: completedAt,
+            scriptHash: integrity.scriptHash, createdAt: completedAt,
           },
         });
         const detail = await dependencies.backtests.getDetail(userId, created.job.id);

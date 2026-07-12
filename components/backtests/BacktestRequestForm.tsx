@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { backtestConfigFingerprint } from "../../lib/backtest";
+import { validateConfig } from "../../lib/strategy-validation";
 import type { BotConfig } from "../../lib/types";
 import { BacktestResultCard } from "./BacktestResultCard";
 import type { HistoricalBacktestRecord, HistoricalRequest } from "./BacktestResultCard";
@@ -16,7 +17,7 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   historical_dataset_incomplete: "WEEX 公開行情無法完整覆蓋此區間，請調整區間或資料缺口政策。",
   historical_funding_incomplete: "此區間的歷史資金費率資料不完整。",
   strategy_request_mismatch: "策略版本與目前市場設定不一致，請重新送出。",
-  custom_strategy_runtime_unavailable: "JavaScript 策略暫不支援歷史回測。",
+  invalid_strategy_configuration: "JavaScript 策略格式或輸出不符合安全規範。",
   data_fetch_failed: "目前無法取得 WEEX 公開行情，請稍後重試。",
   backtest_execution_failed: "歷史回測未能完成，請檢查設定後重試。",
 };
@@ -67,6 +68,7 @@ export function BacktestRequestForm({ config, compact = false }: { config: BotCo
 }
 
 function BacktestRequestSession({ config, compact, configFingerprint }: { config: BotConfig; compact: boolean; configFingerprint: string }) {
+  const configurationValid = validateConfig(config).valid;
   const [defaultRange] = useState(() => alignedRecentRange(config));
   const [start, setStart] = useState(toLocalInput(defaultRange.startTime));
   const [end, setEnd] = useState(toLocalInput(defaultRange.endTime));
@@ -80,7 +82,6 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
   const [result, setResult] = useState<HistoricalBacktestRecord | null>(null);
   const strategyAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const backtestAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
-  const sourceUnavailable = config.source !== undefined;
 
   const clearEvidence = () => { setResult(null); setMessage(""); setState("idle"); };
   const change = <Value,>(setter: (value: Value) => void, value: Value) => {
@@ -95,7 +96,7 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
   };
 
   const submit = async () => {
-    if (sourceUnavailable || state === "ensuring" || state === "running") return;
+    if (!configurationValid || state === "ensuring" || state === "running") return;
     const startTime = fromLocalInput(start);
     const endTime = fromLocalInput(end);
     const interval = INTERVAL_MS[config.timeframe];
@@ -152,7 +153,7 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
         <span className="workshop-count">歷史證據</span>
       </div>
       <p className="historical-request__lead">使用 WEEX 公開歷史行情計算；不需要 API Key，也不會建立或送出訂單。</p>
-      {sourceUnavailable && <p className="historical-notice" role="note">JavaScript 模式暫不支援歷史回測，程式碼不會在瀏覽器或伺服器執行。請切回視覺化模式。</p>}
+      {config.source !== undefined && <p className="historical-notice" role="note">JavaScript 會在無網路、無檔案與無憑證權限的隔離沙箱中執行，回測結果會記錄程式碼雜湊。</p>}
       <fieldset className="historical-fields" disabled={state === "ensuring" || state === "running"}>
         <label><span>開始時間</span><input type="datetime-local" value={start} onChange={(event) => change(setStart, event.target.value)} /></label>
         <label><span>結束時間</span><input type="datetime-local" value={end} onChange={(event) => change(setEnd, event.target.value)} /></label>
@@ -163,7 +164,7 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
         <label><span>資料缺口</span><select value={gapPolicy} onChange={(event) => change(setGapPolicy, event.target.value as "fail" | "disclose")}><option value="fail">遇缺口即停止</option><option value="disclose">揭露缺口並繼續</option></select></label>
         <div className="historical-config"><span>市場 / 槓桿</span><strong>{config.symbol} · {config.market === "spot" ? "現貨" : "合約"} · {config.leverage}×</strong></div>
       </fieldset>
-      <button className="button button--primary historical-submit" disabled={sourceUnavailable || state === "ensuring" || state === "running"} onClick={submit} type="button">
+      <button className="button button--primary historical-submit" disabled={!configurationValid || state === "ensuring" || state === "running"} onClick={submit} type="button">
         {state === "ensuring" ? "固定策略版本中…" : state === "running" ? "取得行情並計算中…" : "執行 WEEX 歷史回測"}
       </button>
       <div aria-live="polite">
