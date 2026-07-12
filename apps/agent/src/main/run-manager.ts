@@ -334,6 +334,7 @@ export class RunManager {
       quote.exchangeTimestamp <= quote.receivedAt && quote.receivedAt <= now &&
       now - quote.exchangeTimestamp <= 60_000 &&
       context.riskContext.priceTimestamp === quote.exchangeTimestamp &&
+      context.referencePrice === quote.last &&
       interval !== null && orderedCandles && latestCandle?.complete === true &&
       Number.isSafeInteger(latestCandleClose) && latestCandleClose >= 0 &&
       quote.exchangeTimestamp - latestCandleClose <= interval * 2 &&

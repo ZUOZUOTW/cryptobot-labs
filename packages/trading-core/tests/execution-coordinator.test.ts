@@ -65,6 +65,7 @@ const executionContext: ExecutionContext = {
   signalSequence: 1,
   market: "spot",
   mode: "live",
+  referencePrice: "1000",
   riskPolicy: policy,
   riskContext,
   instrumentRules: instrument,

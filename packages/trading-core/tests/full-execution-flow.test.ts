@@ -61,6 +61,7 @@ describe("full trusted execution flow", () => {
       signalSequence: 1,
       market: "spot",
       mode: "paper",
+      referencePrice: "1000",
       riskPolicy: policy,
       riskContext,
       instrumentRules: instrument,

@@ -18,6 +18,8 @@ export interface ExecutionContext {
   readonly signalSequence: number;
   readonly market: Market;
   readonly mode: ExecutionMode;
+  /** Trusted current price bound to the market snapshot used for this evaluation. */
+  readonly referencePrice: string;
   readonly riskPolicy: RiskPolicy;
   readonly riskContext: RiskContext;
   readonly instrumentRules: InstrumentRules;
