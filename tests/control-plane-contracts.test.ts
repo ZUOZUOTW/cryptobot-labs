@@ -26,6 +26,7 @@ describe("control-plane vocabulary", () => {
       "deploy",
       "pause",
       "resume-paper",
+      "resume-live",
       "request-live-unlock",
       "stop-new-orders",
       "cancel-open-orders",

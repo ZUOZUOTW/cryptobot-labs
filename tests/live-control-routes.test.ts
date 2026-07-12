@@ -63,9 +63,26 @@ describe("run control service",()=>{
     await expect(service.command("usr_1","run_1","request-paper-2",{type:"pause",expectedVersion:3,reason:"user-paper-control",scope:"all"})).rejects.toMatchObject({status:400});
   });
 
-  it("rejects paper lifecycle commands for non-paper deployments",async()=>{
+  it("queues live resume only for an unlocked live deployment",async()=>{
+    const enqueue=vi.fn().mockResolvedValue({command:{id:"cmd_live",deploymentId:"run_1",type:"resume-live",version:1,
+      correlationId:"request-live-resume-1",expectedDeploymentVersion:3,status:"pending",createdAt:400_000,expiresAt:700_000},idempotent:false});
+    const live={...deployment,mode:"live",state:"paused"};
+    const service=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue(live)} as never,
+      liveData:{} as never,commands:{enqueue} as never,now:()=>400_000});
+    await service.command("usr_1","run_1","request-live-resume-1",
+      {type:"resume-live",expectedVersion:3,reason:"user-live-control"});
+    expect(enqueue).toHaveBeenCalledWith("usr_1",expect.objectContaining({type:"resume-live",expectedDeploymentVersion:3,
+      payload:{reason:"user-live-control"}}));
+  });
+
+  it("rejects resume commands for the wrong deployment mode",async()=>{
     const service=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue({...deployment,mode:"live"})} as never,liveData:{} as never,commands:{enqueue:vi.fn()} as never,now:()=>400_000});
-    await expect(service.command("usr_1","run_1","request-paper-1",{type:"pause",expectedVersion:3,reason:"user-paper-control"})).rejects.toMatchObject({status:409,code:"conflict"});
+    await expect(service.command("usr_1","run_1","request-paper-1",{type:"resume-paper",expectedVersion:3,
+      reason:"user-paper-control"})).rejects.toMatchObject({status:409,code:"conflict"});
+    const paper=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue(deployment)} as never,
+      liveData:{} as never,commands:{enqueue:vi.fn()} as never,now:()=>400_000});
+    await expect(paper.command("usr_1","run_1","request-live-1",{type:"resume-live",expectedVersion:3,
+      reason:"user-live-control"})).rejects.toMatchObject({status:409,code:"conflict"});
   });
 
   it("maps known command boundary errors but keeps unknown storage failures retryable",async()=>{

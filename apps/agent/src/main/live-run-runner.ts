@@ -44,6 +44,11 @@ export class LiveRunRunner {
     if (this.#transitioning || this.#session) throw new Error("Live runner is already active");
     if (bundle.deployment.mode !== "live" || bundle.strategy.config === null || bundle.risk === null
       || !bundle.risk.allowedSymbols.includes(bundle.strategy.symbol)) throw new Error("Live runner requires a complete live deployment");
+    const now = this.#timestamp();
+    this.#options.connection.requireFresh({ market: bundle.strategy.market, mode: "live" }, now);
+    this.#options.clock.requireFresh(now);
+    this.#options.market.requireFresh(bundle.strategy.market, bundle.strategy.symbol, now, 60_000);
+    this.#options.instruments.requireFresh(bundle.strategy.market, bundle.strategy.symbol, now);
     const configuredSource = (bundle.strategy.config as { source?: unknown }).source;
     if ((bundle.strategy.source === null && configuredSource !== undefined)
       || (bundle.strategy.source !== null && configuredSource !== bundle.strategy.source)) {

@@ -97,4 +97,25 @@ describe("deployment installer", () => {
     expect(store.saved).toHaveLength(1);
     expect(store.saved[0]).toMatchObject({ definition: { mode: "paper" }, status: "paused" });
   });
+
+  it("starts and pauses the dedicated live runner only after the server bundle is live paused", async () => {
+    const store = memoryStore();
+    const liveRunner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined) };
+    const prepare = vi.fn(async () => ({ deploymentId: "dep_1", configurationVersion: "v2",
+      scriptHash: "b".repeat(64), mode: "live" as const, market: "spot" as const, symbol: "BTCUSDT" }));
+    let current = bundle();
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => current }, store,
+      liveRunner, liveUnlock: { prepare }, now: () => 800 });
+    await installer.execute(command());
+    await installer.execute(command({ type: "request-live-unlock", payload: { revalidate: {} } }));
+    current = bundle({ mode: "live", state: "paused" });
+
+    await expect(installer.execute(command({ id: "cmd_resume_live", type: "resume-live",
+      payload: { reason: "operator" } }))).resolves.toEqual({ status: "ok", code: "live_resumed" });
+    expect(liveRunner.resume).toHaveBeenCalledWith(current);
+    expect(store.saved.at(-1)).toMatchObject({ definition: { mode: "live" }, status: "running", pausedReason: null });
+    await expect(installer.execute(command({ id: "cmd_pause_live", type: "pause", payload: { reason: "operator" } })))
+      .resolves.toEqual({ status: "ok", code: "paused" });
+    expect(liveRunner.pause).toHaveBeenCalledOnce();
+  });
 });

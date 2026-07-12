@@ -15,6 +15,7 @@ export const COMMAND_TYPES = [
   "deploy",
   "pause",
   "resume-paper",
+  "resume-live",
   "request-live-unlock",
   "stop-new-orders",
   "cancel-open-orders",

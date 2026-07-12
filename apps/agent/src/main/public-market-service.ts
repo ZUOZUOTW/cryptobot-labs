@@ -24,11 +24,17 @@ export class InstrumentRuleState {
     this.#values.set(`${rules.market}:${rules.symbol}`, Object.freeze({ rules: Object.freeze({ ...rules }), verifiedAt }));
   }
   requireFresh(market: Market, symbol: string, now: number): Readonly<InstrumentRules> {
+    return this.requireFreshSnapshot(market, symbol, now).rules;
+  }
+  requireFreshSnapshot(market: Market, symbol: string, now: number): Readonly<{
+    rules: Readonly<InstrumentRules>;
+    verifiedAt: number;
+  }> {
     const value = this.#values.get(`${market}:${symbol}`);
     if (!value || !Number.isSafeInteger(now) || now < value.verifiedAt || now - value.verifiedAt > MAX_RULES_AGE_MS) {
       throw new Error("Instrument rules are stale or unavailable");
     }
-    return value.rules;
+    return value;
   }
 }
 

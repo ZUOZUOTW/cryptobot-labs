@@ -10,7 +10,7 @@ const DEVICE_HEADERS = Object.freeze({
 } as const);
 
 const COMMAND_TYPES = new Set([
-  "deploy", "pause", "resume-paper", "request-live-unlock", "stop-new-orders",
+  "deploy", "pause", "resume-paper", "resume-live", "request-live-unlock", "stop-new-orders",
   "cancel-open-orders", "close-positions", "revalidate-connection", "erase-local-credentials",
 ]);
 const DEVICE_EVENT_TYPE_SET = new Set<string>(DEVICE_EVENT_TYPES);
@@ -381,7 +381,7 @@ function validatePayload(type: string, raw: unknown, context: { correlationId: s
       if (typeof payload.configurationHash !== "string" || !HASH.test(payload.configurationHash)
         || !["paper", "futures-demo", "live"].includes(String(payload.mode))) throw new ControlClientError("deploy payload is invalid");
       break;
-    case "pause": case "resume-paper": case "stop-new-orders": case "erase-local-credentials":
+    case "pause": case "resume-paper": case "resume-live": case "stop-new-orders": case "erase-local-credentials":
       exact(payload, ["reason"], `${type} payload`); text(payload.reason, "reason"); break;
     case "cancel-open-orders":
       exact(payload, ["scope", "reason"], "cancel payload");

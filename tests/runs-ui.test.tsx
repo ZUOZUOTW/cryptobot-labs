@@ -133,6 +133,21 @@ describe("run control UI", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Paper 暫停命令已排隊");
     expect(screen.getByRole("button",{name:"等待代理回報"})).toBeDisabled();
   });
+
+  it("queues explicit live resume instead of starting immediately in the browser", async () => {
+    const liveRun={...run,mode:"live" as const,state:"paused" as const};
+    const fetchMock=vi.spyOn(globalThis,"fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({run:liveRun}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({connections:[],nextCursor:null}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({command:{id:"cmd_live"}}),{status:202}));
+    const user=userEvent.setup();
+    render(<RunDetailPanel runId="run_1" />);
+    await user.click(await screen.findByRole("button",{name:"啟動實盤自動交易"}));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/runs/run_1/commands",expect.objectContaining({
+      method:"POST",body:JSON.stringify({type:"resume-live",reason:"user-live-control",expectedVersion:2}),
+    }));
+    expect(await screen.findByRole("status")).toHaveTextContent("本機代理通過即時安全檢查後才會啟動");
+  });
 });
 
 describe("run response parser", () => {

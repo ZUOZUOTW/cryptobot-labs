@@ -10,6 +10,10 @@ export interface DeploymentInstallerDependencies {
     activate?(): Promise<void>;
     pause(): Promise<void>;
   };
+  readonly liveRunner?: {
+    resume(bundle: DeploymentBundle): Promise<void>;
+    pause(): Promise<void>;
+  };
   readonly liveUnlock?: {
     prepare(command: ControlCommand & { type: "request-live-unlock" }): Promise<DurableRunRecord["definition"]>;
   };
@@ -54,6 +58,7 @@ export class DeploymentInstaller {
   async execute(command: ControlCommand): Promise<CommandExecutionResult> {
     await this.initialize();
     if (command.type === "resume-paper") return this.#resume(command);
+    if (command.type === "resume-live") return this.#resumeLive(command);
     if (command.type === "pause") return this.#pause(command);
     if (command.type === "request-live-unlock") {
       return this.#unlock(command as ControlCommand & { type: "request-live-unlock" });
@@ -146,12 +151,43 @@ export class DeploymentInstaller {
       return { status: "rejected", code: "deployment_fence" };
     }
     if (record.status === "paused") return { status: "ok", code: "already_paused" };
-    const runner = this.#dependencies.runner;
+    const runner = record.definition.mode === "live" ? this.#dependencies.liveRunner : this.#dependencies.runner;
     if (!runner) return { status: "rejected", code: "runtime_not_ready" };
     await runner.pause();
     this.#record = await this.#dependencies.store.save({ definition: record.definition, status: "paused",
       pausedReason: "operator-paused", ambiguousOrder: record.ambiguousOrder, updatedAt: this.#timestamp() }, record.recordVersion);
     return { status: "ok", code: "paused" };
+  }
+
+  async #resumeLive(command: ControlCommand): Promise<CommandExecutionResult> {
+    const record = this.#record;
+    if (!record || storedVersion(record, command.deploymentId) !== command.expectedDeploymentVersion ||
+        record.definition.mode !== "live" || record.status !== "paused" || record.ambiguousOrder !== null) {
+      return { status: "rejected", code: "deployment_fence" };
+    }
+    const runner = this.#dependencies.liveRunner;
+    if (!runner) return { status: "rejected", code: "runtime_not_ready" };
+    const bundle = await this.#dependencies.deployments.fetchBundle(command.deploymentId, command.expectedDeploymentVersion);
+    if (bundle.deployment.mode !== "live" || bundle.deployment.state !== "paused" ||
+        bundle.strategy.market !== record.definition.market || bundle.strategy.symbol !== record.definition.symbol ||
+        (bundle.strategy.sourceHash ?? bundle.strategy.configHash) !== record.definition.scriptHash ||
+        bundle.risk === null || !bundle.risk.allowedSymbols.includes(bundle.strategy.symbol)) {
+      return { status: "rejected", code: "deployment_fence" };
+    }
+    await runner.resume(bundle);
+    try {
+      this.#record = await this.#dependencies.store.save({
+        definition: record.definition,
+        status: "running",
+        pausedReason: null,
+        ambiguousOrder: null,
+        updatedAt: this.#timestamp(),
+      }, record.recordVersion);
+    } catch (error) {
+      await runner.pause().catch(() => undefined);
+      throw error;
+    }
+    return { status: "ok", code: "live_resumed" };
   }
 
   async #unlock(command: ControlCommand & { type: "request-live-unlock" }): Promise<CommandExecutionResult> {

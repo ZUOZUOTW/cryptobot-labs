@@ -9,6 +9,7 @@ import { createDeploymentClient } from "./deployment-client";
 import { registerAgentIpc, type AgentShellServices } from "./ipc";
 import { createDeviceIdentityVault } from "./device-identity";
 import { createStartAtLoginController } from "./login-item";
+import { LiveRunRunner } from "./live-run-runner";
 import { createLiveUnlockService } from "./live-unlock-service";
 import { createPairingClient } from "./pairing-client";
 import { createPairingExpiryGuard } from "./pairing-expiry";
@@ -19,11 +20,14 @@ import { PaperRunRunner } from "./paper-run-runner";
 import { PaperScheduler } from "./paper-scheduler";
 import { InstrumentRuleState, PublicMarketService } from "./public-market-service";
 import { createRuntimeSupervisor } from "./runtime-supervisor";
+import type { RunAuditEvent } from "./run-manager";
 import { createDurableRunStore, createNodeRunFileStore } from "./run-store";
 import { createNodeTelemetryFileStore, createTelemetryBuffer } from "./telemetry-buffer";
 import { createCredentialVault, createNodeVaultFileStore, type AsyncSafeStorage } from "./vault";
+import { createVaultWeexExecutionClient } from "./vault-weex-execution-client";
 import { createWeexConnectionVerifier } from "./weex-connection-verifier";
 import { createMainWindow, TrayWindowLifecycle, type BrowserWindowLike } from "./windows";
+import type { RuntimeAuditEvent } from "../runtime/execution-runtime";
 export { createStartAtLoginController } from "./login-item";
 
 function trustedDevelopmentUrl(value: string): string {
@@ -96,34 +100,43 @@ export async function bootstrapAgent(): Promise<void> {
     try { await telemetry.enqueue(event, { priority }); }
     catch (error) { if (!(error instanceof Error) || !/ID collision/i.test(error.message)) throw error; }
   };
+  const runtimeAudit = async (event: RuntimeAuditEvent): Promise<void> => {
+    if (event.type !== "strategy-paused") return;
+    const version = Number(event.configurationVersion.replace(/^v/, ""));
+    if (!Number.isSafeInteger(version) || version < 1) return;
+    const occurredAt = event.at > 0 ? event.at : Date.now();
+    const id = `runtime-${createHash("sha256").update(`${event.deploymentId}:${event.type}:${occurredAt}`).digest("hex").slice(0, 48)}`;
+    await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: event.deploymentId,
+      expectedDeploymentVersion: version, correlationId: id, occurredAt,
+      payload: { state: "paused", reason: event.reason } }, "high");
+  };
+  const runAudit = async (event: RunAuditEvent): Promise<void> => {
+    if (event.type === "evaluation-complete") return;
+    const restored = await runStore.restore();
+    if (!restored || restored.definition.deploymentId !== event.deploymentId) return;
+    const version = Number(restored.definition.configurationVersion.replace(/^v/, ""));
+    if (!Number.isSafeInteger(version) || version < 1) return;
+    const occurredAt = event.at > 0 ? event.at : Date.now();
+    const state = event.type === "run-stopped" ? "stopped" : event.type === "run-started" ? "running" : "paused";
+    const id = `run-${createHash("sha256").update(`${event.deploymentId}:${event.type}:${occurredAt}`).digest("hex").slice(0, 48)}`;
+    await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: event.deploymentId,
+      expectedDeploymentVersion: version, correlationId: id, occurredAt, payload: { state, reason: event.reason } });
+  };
   const paperRunner = new PaperRunRunner({
     repository: orderRepository,
     market: marketState,
     clock: clockState,
     instruments: instrumentState,
-    runtimeAudit: async (event) => {
-      if (event.type !== "strategy-paused") return;
-      const version = Number(event.configurationVersion.replace(/^v/, ""));
-      if (!Number.isSafeInteger(version) || version < 1) return;
-      const occurredAt = event.at > 0 ? event.at : Date.now();
-      const id = `runtime-${createHash("sha256").update(`${event.deploymentId}:${event.type}:${occurredAt}`).digest("hex").slice(0, 48)}`;
-      await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: event.deploymentId,
-        expectedDeploymentVersion: version, correlationId: id, occurredAt,
-        payload: { state: "paused", reason: event.reason } }, "high");
-    },
-    runAudit: async (event) => {
-      if (event.type === "evaluation-complete") return;
-      const restored = await runStore.restore();
-      if (!restored || restored.definition.deploymentId !== event.deploymentId) return;
-      const version = Number(restored.definition.configurationVersion.replace(/^v/, ""));
-      if (!Number.isSafeInteger(version) || version < 1) return;
-      const occurredAt = event.at > 0 ? event.at : Date.now();
-      const state = event.type === "run-stopped" ? "stopped" : event.type === "run-started" ? "running" : "paused";
-      const id = `run-${createHash("sha256").update(`${event.deploymentId}:${event.type}:${occurredAt}`).digest("hex").slice(0, 48)}`;
-      await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: event.deploymentId,
-        expectedDeploymentVersion: version, correlationId: id, occurredAt, payload: { state, reason: event.reason } });
-    },
+    runtimeAudit,
+    runAudit,
   });
+  const liveExecutionClient = createVaultWeexExecutionClient({
+    vault,
+    rulesProvider: async (target, symbol) => instrumentState.requireFreshSnapshot(target.market, symbol, Date.now()),
+  });
+  const liveRunner = new LiveRunRunner({ repository: orderRepository, client: liveExecutionClient,
+    market: marketState, clock: clockState, connection: connectionRegistry, instruments: instrumentState,
+    runtimeAudit, runAudit });
   const paperScheduler = new PaperScheduler({ collector: publicMarket, market: marketState,
     account: (deploymentId) => new DurablePaperAccount(osStorage,
       createNodeVaultFileStore(join(vaultDirectory, "paper-accounts", `${deploymentId}.bin`))),
@@ -169,7 +182,8 @@ export async function bootstrapAgent(): Promise<void> {
     controlAbort?.abort();
     controlAbort = null;
     expiryGuard.cancel();
-    await Promise.all([runtime.emergencyStop().catch(() => undefined), paperScheduler.pause().catch(() => undefined)]);
+    await Promise.all([runtime.emergencyStop().catch(() => undefined), paperScheduler.pause().catch(() => undefined),
+      liveRunner.pause().catch(() => undefined)]);
   };
   const expiryGuard = createPairingExpiryGuard({
     onExpired: () => stopForInvalidPairing("expired"),
@@ -215,7 +229,8 @@ export async function bootstrapAgent(): Promise<void> {
       });
       const liveUnlock = createLiveUnlockService({ deployments, verifier: connectionVerifier,
         connection: connectionRegistry, market: publicMarket });
-      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler, liveUnlock });
+      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler,
+        liveRunner, liveUnlock });
       await deploymentInstaller.initialize();
     }
     const installer = deploymentInstaller;
@@ -331,7 +346,7 @@ export async function bootstrapAgent(): Promise<void> {
       return { paired: true, deviceId: paired.deviceId };
     },
     setStartAtLogin: (enabled) => login.set(enabled),
-    emergencyStop: async () => { await Promise.all([runtime.emergencyStop(), paperScheduler.pause()]); },
+    emergencyStop: async () => { await Promise.all([runtime.emergencyStop(), paperScheduler.pause(), liveRunner.pause()]); },
   };
   const window = await startAgentShell(services);
   await ensureControlPlane().catch(() => undefined);

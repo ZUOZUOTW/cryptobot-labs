@@ -148,7 +148,7 @@ export async function createLiveRevalidationEnvelope(context: LiveGateContext, i
 }
 
 export type RunCommand = {
-  type: "resume-paper" | "pause" | "stop-new-orders" | "cancel-open-orders" | "close-positions";
+  type: "resume-paper" | "resume-live" | "pause" | "stop-new-orders" | "cancel-open-orders" | "close-positions";
   expectedVersion: number;
   payload: JsonObject;
   confirmedAt?: number;
@@ -156,7 +156,7 @@ export type RunCommand = {
 
 export function parseRunCommand(value: unknown, now: number): RunCommand {
   const record = plainRecord(value, "command");
-  if (record.type === "resume-paper" || record.type === "pause") {
+  if (record.type === "resume-paper" || record.type === "resume-live" || record.type === "pause") {
     exact(record, ["type", "expectedVersion", "reason"], "lifecycle command");
     return { type: record.type, expectedVersion: positiveVersion(record.expectedVersion),
       payload: { reason: boundedText(record.reason, "reason") } };
