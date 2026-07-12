@@ -259,13 +259,36 @@ describe("historical backtest", () => {
     const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
     const result = await runHistoricalBacktest(request({
       dataset: dataset(items, "futures"), leverage: "10", maintenanceMarginRate: "0.02", feeRate: "0", slippageRate: "0",
-      funding: [{ timestamp: 4_000_000, rate: "0.09", markPrice: "100" }],
+      funding: [
+        { timestamp: 4_000_000, rate: "0.09", markPrice: "100" },
+        { timestamp: 5_000_000, rate: "-0.09", markPrice: "100" },
+      ],
       evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
         return { id: "funding-liq", action: candles.length === 1 ? "buy" : "hold", reason: "funding-liq", createdAt: candles.at(-1)!.closeTime };
       } },
     }));
     expect(result.trades[0]!.exitReason).toBe("liquidation");
+    expect(result.trades[0]!.exitTime).toBe(4_000_000);
     expect(result.provenance.fundingTreatment.appliedEvents).toBe(1);
+    expect(result.provenance.fundingTreatment).toMatchObject({ suppliedEvents: 2, netFunding: "-900" });
+  });
+
+  it("applies funding credit first, then the candle-wide adverse extreme", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    items[1] = { ...items[1]!, low: "70" };
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items, "futures"), leverage: "10", maintenanceMarginRate: "0.02", feeRate: "0", slippageRate: "0",
+      funding: [{ timestamp: 4_000_000, rate: "-0.05", markPrice: "100" }],
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: "credit-adverse", action: candles.length === 1 ? "buy" : "hold", reason: "credit-adverse", createdAt: candles.at(-1)!.closeTime };
+      } },
+    }));
+    expect(result.provenance.fundingTreatment).toMatchObject({ appliedEvents: 1, netFunding: "500" });
+    expect(result.trades[0]).toMatchObject({ exitReason: "liquidation", exitTime: items[1]!.closeTime });
+    expect(result.provenance.liquidationModel).toMatchObject({
+      check: "funding-event-mark-immediately-then-candle-low-long-high-short",
+      orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme",
+    });
   });
 
   it("latches daily loss until the next UTC day even after equity recovers", async () => {
@@ -403,11 +426,23 @@ describe("historical backtest", () => {
     await expect(runHistoricalBacktest(request({
       dataset: { ...dataset(fixedCandles as Candle[]), validation: { duplicates: Array(4).fill(1), ordered: true, gaps: [], incompleteCount: 0 } },
     }))).rejects.toThrow(/oversized/i);
-    await expect(runHistoricalBacktest(request({ dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "11" }))).rejects.toThrow(/10/);
+    await expect(runHistoricalBacktest(request({ dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "21" }))).rejects.toThrow(/20/);
     await expect(runHistoricalBacktest(request({ maintenanceMarginRate: "0.02" }))).rejects.toThrow(/spot/i);
     await expect(runHistoricalBacktest(request({
       dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "2", maintenanceMarginRate: "1",
     }))).rejects.toThrow(/less than one/i);
+  });
+
+  it("supports a viable 20x backtest under the disclosed 2% model", async () => {
+    const items = generatedCandles([{ open: 100, close: 100 }, { open: 100, close: 100 }, { open: 100, close: 100 }]);
+    const result = await runHistoricalBacktest(request({
+      dataset: dataset(items, "futures"), leverage: "20", maintenanceMarginRate: "0.02", feeRate: "0", slippageRate: "0",
+      evaluator: { async evaluate({ candles }: { candles: readonly Candle[] }) {
+        return { id: "twenty", action: candles.length === 1 ? "buy" : "hold", reason: "twenty", createdAt: candles.at(-1)!.closeTime };
+      } },
+    }));
+    expect(result.trades[0]!.exitReason).toBe("end-of-data");
+    expect(result.provenance.liquidationModel).toMatchObject({ maintenanceMarginRate: "0.02", maximumSupportedLeverage: "20" });
   });
 
   it("rejects unsafe candle timestamps at the engine boundary", async () => {

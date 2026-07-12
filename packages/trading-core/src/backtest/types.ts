@@ -101,8 +101,9 @@ export interface HistoricalBacktestProvenance {
   };
   liquidationModel: {
     maintenanceMarginRate: string;
-    maximumSupportedLeverage: "10";
-    check: "intrabar-low-for-long-high-for-short-and-after-funding";
+    maximumSupportedLeverage: "20";
+    check: "funding-event-mark-immediately-then-candle-low-long-high-short";
+    orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme";
     model: "fixed-conservative-not-weex-tier-exact";
   };
 }

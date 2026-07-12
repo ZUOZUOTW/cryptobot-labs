@@ -41,7 +41,7 @@ export const MAX_HISTORICAL_CANDLES = 10_000;
 export const MAX_DECIMAL_STRING_LENGTH = 128;
 export const MAX_HISTORICAL_FUNDING_EVENTS = MAX_HISTORICAL_CANDLES * 4;
 export const MAX_VALIDATION_ENTRIES = MAX_HISTORICAL_CANDLES;
-export const MAX_HISTORICAL_LEVERAGE = 10;
+export const MAX_HISTORICAL_LEVERAGE = 20;
 const DEFAULT_MAINTENANCE_MARGIN_RATE = "0.02";
 
 function numeric(value: string, label: string, options: { positive?: boolean; belowOne?: boolean; signed?: boolean } = {}): Decimal {
@@ -390,10 +390,6 @@ export async function runHistoricalBacktest(
       position.troughPrice = Decimal.min(position.troughPrice, candle.low);
     }
 
-    if (position) {
-      liquidateIfRequired(position.side === "long" ? candle.low : candle.high, candle.closeTime);
-    }
-
     let periodFunding = decimal(0);
     while (fundingCursor < validated.funding.length && validated.funding[fundingCursor]!.timestamp <= candle.closeTime) {
       const event = validated.funding[fundingCursor]!;
@@ -407,6 +403,7 @@ export async function runHistoricalBacktest(
       periodFunding = periodFunding.plus(adjustment);
       netFunding = netFunding.plus(adjustment);
       appliedFundingEvents += 1;
+      liquidateIfRequired(event.markPrice, event.timestamp);
     }
 
     if (position) {
@@ -425,10 +422,8 @@ export async function runHistoricalBacktest(
     const evaluatedAt = candle.closeTime;
     let signal: StrategySignal;
     try {
-      const inputCandles = Object.freeze(validated.candles.slice(
-        maximumLookback === undefined ? 0 : Math.max(0, index + 1 - maximumLookback),
-        index + 1,
-      ));
+      const lookbackStart = maximumLookback === undefined ? 0 : Math.max(0, index + 1 - maximumLookback);
+      const inputCandles = Object.freeze(validated.candles.slice(lookbackStart, index + 1));
       const candidate = await request.evaluator.evaluate(Object.freeze({
         candles: inputCandles,
         market,
@@ -548,8 +543,9 @@ export async function runHistoricalBacktest(
       },
       liquidationModel: {
         maintenanceMarginRate: decimalString(maintenanceMarginRate),
-        maximumSupportedLeverage: "10",
-        check: "intrabar-low-for-long-high-for-short-and-after-funding",
+        maximumSupportedLeverage: "20",
+        check: "funding-event-mark-immediately-then-candle-low-long-high-short",
+        orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme",
         model: "fixed-conservative-not-weex-tier-exact",
       },
     },
