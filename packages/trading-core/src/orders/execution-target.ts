@@ -1,18 +1,18 @@
 import type { ExecutionMode, Market } from "../contracts";
 
-/** A routable exchange environment. Paper execution is intentionally excluded. */
+/** A routable execution environment. Paper routes only to a local paper port. */
 export type ExecutionTarget =
-  | { readonly market: "spot"; readonly mode: "live" }
-  | { readonly market: "futures"; readonly mode: "live" | "futures-demo" };
+  | { readonly market: "spot"; readonly mode: "paper" | "live" }
+  | { readonly market: "futures"; readonly mode: "paper" | "live" | "futures-demo" };
 
 export function isExecutionTarget(value: unknown): value is ExecutionTarget {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const target = value as Record<string, unknown>;
   const keys = Object.keys(target);
   if (keys.length !== 2) return false;
-  return (target.market === "spot" && target.mode === "live") ||
+  return (target.market === "spot" && (target.mode === "paper" || target.mode === "live")) ||
     (target.market === "futures" &&
-      (target.mode === "live" || target.mode === "futures-demo"));
+      (target.mode === "paper" || target.mode === "live" || target.mode === "futures-demo"));
 }
 
 export function executionTargetFor(

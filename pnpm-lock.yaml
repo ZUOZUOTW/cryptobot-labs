@@ -99,6 +99,9 @@ importers:
       '@cryptobot-labs/trading-core':
         specifier: workspace:*
         version: link:../../packages/trading-core
+      '@cryptobot-labs/weex-client':
+        specifier: workspace:*
+        version: link:../../packages/weex-client
       react:
         specifier: 19.2.6
         version: 19.2.6

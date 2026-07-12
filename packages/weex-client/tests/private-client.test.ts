@@ -47,6 +47,18 @@ const request: ExchangeSubmitRequest = {
 };
 
 describe("WeexPrivateClient", () => {
+  it("rejects local paper targets before any WEEX request", async () => {
+    const transport = new ScriptedTransport([]);
+    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+
+    await expect(client.verifyAccount({ market: "spot", mode: "paper" })).rejects.toThrow(/paper|local/i);
+    await expect(client.submitOrder({
+      ...request,
+      target: { market: "spot", mode: "paper" },
+    })).rejects.toThrow(/paper|local/i);
+    expect(transport.requests).toHaveLength(0);
+  });
+
   it("signs and transmits the exact canonical spot body", async () => {
     const transport = new ScriptedTransport([verifiedSpotAccount, ok({ orderId: "42", clientOrderId: "cbl-1" })]);
     const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });

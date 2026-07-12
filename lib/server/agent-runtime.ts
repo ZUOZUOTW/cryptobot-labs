@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { createControlPlaneDatabase } from "../../db";
 import { createActivityRepository, createCommandRepository, createConnectionRepository, createDeploymentRepository } from "../../db/repositories";
 import { createAgentHandlers } from "./agent-routes";
+import { createAgentDeploymentBundleHandler, createAgentDeploymentBundleService } from "./agent-deployment-bundle";
 import { createCommandService } from "./commands";
 import { createDeviceEventService } from "./device-events";
 import { createDeviceRequestVerifier } from "./device-signature";
@@ -19,11 +20,11 @@ export function createProductionAgentHandlers(environment: AgentEnvironment = en
   const deployments = createDeploymentRepository(database);
   const commands = createCommandRepository(database);
   const verify = createDeviceRequestVerifier({ database, capabilities: [
-    "agent.heartbeat", "agent.events", "agent.commands.read", "agent.commands.ack",
+    "agent.heartbeat", "agent.events", "agent.commands.read", "agent.commands.ack", "agent.deployments.read",
   ] as const });
-  return createAgentHandlers({
+  return { ...createAgentHandlers({
     verify,
     eventService: createDeviceEventService(activity, { deployments, connections: createConnectionRepository(database) }),
     commandService: createCommandService(commands),
-  });
+  }), deployments: createAgentDeploymentBundleHandler({ verify, service: createAgentDeploymentBundleService(database) }) };
 }

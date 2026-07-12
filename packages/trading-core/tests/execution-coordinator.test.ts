@@ -137,16 +137,25 @@ describe("ExecutionCoordinator", () => {
     expect(exchange.submit).toHaveBeenCalledWith(expect.objectContaining({ target: expectedTarget }));
   });
 
-  it("rejects paper and unsupported spot-demo targets without touching the exchange", async () => {
-    for (const context of [
-      { ...executionContext, mode: "paper" as const },
-      { ...executionContext, mode: "futures-demo" as const },
-    ]) {
-      const { coordinator, exchange, normalizer } = setup();
-      await expect(coordinator.propose(signal, context)).rejects.toThrow(/execution target/i);
-      expect(normalizer.normalize).not.toHaveBeenCalled();
-      expect(exchange.submit).not.toHaveBeenCalled();
-    }
+  it("routes paper through the same risk and execution coordinator", async () => {
+    const { coordinator, exchange, normalizer } = setup();
+    const outcome = await coordinator.propose(signal, { ...executionContext, mode: "paper" });
+
+    expect(outcome.status).toBe("submitted");
+    expect(normalizer.normalize).toHaveBeenCalledOnce();
+    expect(exchange.submit).toHaveBeenCalledWith(expect.objectContaining({
+      target: { market: "spot", mode: "paper" },
+    }));
+  });
+
+  it("rejects unsupported spot futures-demo targets without touching the exchange", async () => {
+    const { coordinator, exchange, normalizer } = setup();
+    await expect(coordinator.propose(signal, {
+      ...executionContext,
+      mode: "futures-demo",
+    })).rejects.toThrow(/execution target/i);
+    expect(normalizer.normalize).not.toHaveBeenCalled();
+    expect(exchange.submit).not.toHaveBeenCalled();
   });
 
   it("returns the immutable existing order for the same deterministic signal", async () => {

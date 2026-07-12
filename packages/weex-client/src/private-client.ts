@@ -124,7 +124,9 @@ function schema(message: string): WeexApiError {
 }
 
 function assertTarget(target: unknown): asserts target is ExecutionTarget {
-  if (!isExecutionTarget(target)) throw validation("Invalid WEEX execution target");
+  if (!isExecutionTarget(target) || target.mode === "paper") {
+    throw validation("Paper execution is local and cannot use the WEEX private API");
+  }
 }
 
 function accountRoute(target: ExecutionTarget): Route {

@@ -114,6 +114,10 @@ function acknowledge(socket: MockSocket): void {
 describe("WEEX V3 private stream", () => {
   beforeEach(() => vi.restoreAllMocks());
 
+  it("rejects local paper targets before opening a WEEX socket", () => {
+    expect(() => setup({ market: "futures", mode: "paper" })).toThrow(/paper|invalid/i);
+  });
+
   it.each([
     [spot, "wss://ws-spot.weex.com/v3/ws/private"],
     [futures, "wss://ws-contract.weex.com/v3/ws/private"],

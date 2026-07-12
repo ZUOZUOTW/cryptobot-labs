@@ -7,3 +7,4 @@ export * from "./orders";
 export * from "./reliability";
 export * from "./execution";
 export * from "./sandbox";
+export * from "./strategies";

@@ -182,6 +182,7 @@ function validateSnapshot(value: unknown, hint: OrderHint): Readonly<ExchangeOrd
 }
 
 function socketUrl(target: ExecutionTarget): string {
+  if (target.mode === "paper") throw validation("Paper execution cannot use a WEEX private stream");
   if (target.market === "spot") return `wss://ws-spot.weex.com${PRIVATE_PATH}`;
   if (target.mode === "live") return `wss://ws-contract.weex.com${PRIVATE_PATH}`;
   throw validation("WEEX futures demo has no documented private stream");
@@ -261,7 +262,8 @@ export class WeexPrivateStream {
   #reconnectAttempts = 0;
 
   constructor(options: WeexPrivateStreamOptions) {
-    if (!options || !isExecutionTarget(options.target) || !(options.credentials instanceof WeexCredentials) ||
+    if (!options || !isExecutionTarget(options.target) || options.target.mode === "paper" ||
+        !(options.credentials instanceof WeexCredentials) ||
         typeof options.factory !== "function" || typeof options.lookup?.findByClientOrderId !== "function" ||
         typeof options.clock?.now !== "function" || typeof options.clock?.assertPrivateRequestWindow !== "function") {
       throw validation("Invalid WEEX private stream options");
@@ -497,7 +499,10 @@ export class WeexPrivateStream {
       const previousFill = this.#lastFills.get(key);
       if (previousFill !== undefined && compareDecimals(snapshot.cumulativeFilledQuantity, previousFill.quantity) < 0) continue;
       if (previousFill === undefined && this.#lastFills.size >= MAX_TRACKED_FILLS) {
-        const terminalKey = this.#lastFills.entries().find(([, tracked]) => tracked.terminal)?.[0];
+        let terminalKey: string | undefined;
+        for (const [candidateKey, tracked] of this.#lastFills) {
+          if (tracked.terminal) { terminalKey = candidateKey; break; }
+        }
         if (terminalKey === undefined) throw schema("Private fill tracker capacity exceeded");
         this.#lastFills.delete(terminalKey);
       }

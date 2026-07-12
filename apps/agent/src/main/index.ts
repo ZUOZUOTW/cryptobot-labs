@@ -11,6 +11,7 @@ import { createPairingExpiryGuard } from "./pairing-expiry";
 import { createRuntimeSupervisor } from "./runtime-supervisor";
 import { createNodeTelemetryFileStore, createTelemetryBuffer } from "./telemetry-buffer";
 import { createCredentialVault, createNodeVaultFileStore, type AsyncSafeStorage } from "./vault";
+import { createWeexConnectionVerifier } from "./weex-connection-verifier";
 import { createMainWindow, TrayWindowLifecycle, type BrowserWindowLike } from "./windows";
 export { createStartAtLoginController } from "./login-item";
 
@@ -54,6 +55,7 @@ export async function bootstrapAgent(): Promise<void> {
   };
   const vaultDirectory = join(app.getPath("userData"), "vault");
   const vault = createCredentialVault(osStorage, createNodeVaultFileStore(join(vaultDirectory, "credentials.bin")));
+  const connectionVerifier = createWeexConnectionVerifier({ vault });
   const identityVault = createDeviceIdentityVault(
     osStorage,
     createNodeVaultFileStore(join(vaultDirectory, "device-identity.bin")),
@@ -226,7 +228,7 @@ export async function bootstrapAgent(): Promise<void> {
         if (identity && identity.credentialExpiresAt <= Date.now()) await stopForInvalidPairing("expired");
         throw new Error("Pair this agent before verifying an exchange credential");
       }
-      throw new Error("Connection verification is unavailable until the WEEX connection service is configured");
+      return connectionVerifier.verify();
     },
     eraseCredentials: () => vault.erase(),
     pair: async (input) => {
