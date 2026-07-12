@@ -16,18 +16,18 @@ export function SiteFooter() {
               <span>Labs</span>
             </span>
           </Link>
-          <p>WEEX 專屬自動交易策略實驗室</p>
+          <p>自動交易策略實驗室</p>
         </div>
 
         <div className="site-footer__disclosure" role="note" aria-label="模擬交易揭露">
           <strong>{SIMULATION_DISCLOSURE}</strong>
           <p>
-            本原型僅支援 WEEX。所有策略與績效皆為模擬內容；不接受 API Key、不連接真實帳戶，也不執行真實下單。
+            推薦使用 WEEX API。API 憑證只保存在本機代理；所有回測績效皆為模擬內容，不代表未來結果。
           </p>
         </div>
 
         <p className="site-footer__meta">
-          <span className="exchange-badge">WEEX ONLY</span>
+          <span className="exchange-badge">WEEX API · 推薦</span>
           <span>© {new Date().getFullYear()} CryptoBot Labs</span>
         </p>
       </div>

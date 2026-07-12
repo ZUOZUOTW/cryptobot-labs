@@ -58,6 +58,13 @@ describe("device event boundary",()=>{
     await expect(service.ingest({verified:true,deviceId:"dev_1"},base("agent-error",{code:"E",message:"safe",retryable:true}))).rejects.toMatchObject({category:"deployment-fence"});
     expect(activity.appendDeviceAudit).not.toHaveBeenCalled();
   });
+  it("does not misclassify transient storage failures as deployment fences",async()=>{
+    const outage=new Error("temporary storage outage");
+    const activity={getDeviceAuditByEventId:vi.fn().mockResolvedValue(null),appendDeviceAudit:vi.fn().mockRejectedValue(outage)};
+    const deployments={getForDevice:vi.fn().mockResolvedValue({id:"dep_1",deviceId:"dev_1",version:2})};
+    const service=createDeviceEventService(activity as never,{deployments:deployments as never,now:()=>100});
+    await expect(service.ingest({verified:true,deviceId:"dev_1"},base("agent-error",{code:"E",message:"safe",retryable:true}))).rejects.toBe(outage);
+  });
 });
 
 describe("device event sqlite ledger",()=>{

@@ -8,7 +8,7 @@ export function OrbitalHero() {
       <div className="orbital-hero__copy">
         <span className="exchange-badge">
           <span className="exchange-badge__signal" aria-hidden="true" />
-          WEEX ONLY
+          WEEX API · 推薦
         </span>
         <p className="eyebrow">AUTOMATED STRATEGY LAB / 01</p>
         <h1 id="orbital-hero-title">把交易想法，<br />組裝成你的機器人。</h1>

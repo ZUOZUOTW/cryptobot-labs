@@ -74,14 +74,14 @@ describe("bot package", () => {
     const invalidConfig = { ...validConfig, exchange: "BINANCE" as "WEEX" };
 
     await expect(exportBotPackage(invalidConfig, runBacktest(validConfig)))
-      .rejects.toThrow("策略設定無效：只支援 WEEX 交易所");
+      .rejects.toThrow("策略設定無效：目前可用的實盤連線為 WEEX API");
   });
 
   it("rejects a package whose manifest does not declare WEEX", async () => {
     const files = validPackageFiles();
     files["manifest.json"] = JSON.stringify({ formatVersion: 1, exchange: "BINANCE" });
 
-    await expect(importBotPackage(await packageFile(files))).rejects.toThrow("只支援 WEEX 交易所");
+    await expect(importBotPackage(await packageFile(files))).rejects.toThrow("目前可用的實盤連線為 WEEX API");
   });
 
   it("rejects malformed ZIP input with a stable package error", async () => {
@@ -155,7 +155,7 @@ describe("bot package", () => {
     files["bot-config.json"] = JSON.stringify({ ...configWithSource, exchange: "BINANCE" });
 
     await expect(importBotPackage(await packageFile(files)))
-      .rejects.toThrow("策略設定無效：只支援 WEEX 交易所");
+      .rejects.toThrow("策略設定無效：目前可用的實盤連線為 WEEX API");
   });
 
   it("validates config before parsing a malformed report", async () => {

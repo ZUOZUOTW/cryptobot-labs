@@ -44,11 +44,11 @@ test("server-renders the CryptoBot Labs production shell", async () => {
   assert.match(html, /<meta property="og:image" content="https:\/\/preview\.example\/og\.png"\/>/i);
   assert.match(html, /<meta property="og:image:width" content="1672"\/>/i);
   assert.match(html, /<meta property="og:image:height" content="941"\/>/i);
-  assert.match(html, /<meta property="og:image:alt" content="CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX ONLY"\/>/i);
+  assert.match(html, /<meta property="og:image:alt" content="CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦"\/>/i);
   assert.match(html, /<meta name="twitter:image" content="https:\/\/preview\.example\/og\.png"\/>/i);
   assert.match(html, /<meta name="twitter:image:width" content="1672"\/>/i);
   assert.match(html, /<meta name="twitter:image:height" content="941"\/>/i);
-  assert.match(html, /<meta name="twitter:image:alt" content="CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX ONLY"\/>/i);
+  assert.match(html, /<meta name="twitter:image:alt" content="CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦"\/>/i);
 });
 
 test("omits social images for an ambiguous Host header", async () => {

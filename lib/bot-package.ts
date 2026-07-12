@@ -194,7 +194,7 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
   if (manifest.formatVersion !== FORMAT_VERSION) {
     throw new Error(`不支援的策略套件版本：${String(manifest.formatVersion)}`);
   }
-  if (manifest.exchange !== "WEEX") throw new Error("只支援 WEEX 交易所");
+  if (manifest.exchange !== "WEEX") throw new Error("目前可用的實盤連線為 WEEX API");
 
   const configValue = await parseJsonFile(zip, "bot-config.json");
   const importedConfig = assertConfig(configValue, false);

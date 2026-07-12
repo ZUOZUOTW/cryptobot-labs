@@ -78,7 +78,7 @@ describe("validateConfig", () => {
   });
 
   it("rejects non-WEEX configs", () => {
-    expect(validateConfig({ ...validConfig, exchange: "BINANCE" as "WEEX" }).errors).toContain("只支援 WEEX 交易所");
+    expect(validateConfig({ ...validConfig, exchange: "BINANCE" as "WEEX" }).errors).toContain("目前可用的實盤連線為 WEEX API");
   });
 
   it("requires an entry signal and an exit or risk rule", () => {

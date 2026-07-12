@@ -47,6 +47,29 @@ export const deviceCredentials = sqliteTable("device_credentials", {
   index("device_credentials_expiry_idx").on(table.expiresAt),
 ]);
 
+/** Safe, server-side projection of a credential that remains exclusively on the paired device. */
+export const deviceConnections = sqliteTable("device_connections", {
+  deviceId: text("device_id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  maskedApiKeySuffix: text("masked_api_key_suffix"),
+  permissionsJson: text("permissions_json").notNull(),
+  verifiedAt: timestamp("verified_at"),
+  status: text("status").notNull(),
+  hasLocalCredential: integer("has_local_credential", { mode: "boolean" }).notNull(),
+  withdrawalAccessAbsent: integer("withdrawal_access_absent", { mode: "boolean" }).notNull(),
+  version: integer("version").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+}, (table) => [
+  foreignKey({
+    columns: [table.deviceId, table.userId],
+    foreignColumns: [devices.id, devices.userId],
+    name: "device_connections_device_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("device_connections_id_user_uidx").on(table.deviceId, table.userId),
+  index("device_connections_user_status_idx").on(table.userId, table.status),
+]);
+
 export const pairingCodes = sqliteTable("pairing_codes", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

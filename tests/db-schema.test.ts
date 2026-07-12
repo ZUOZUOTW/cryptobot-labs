@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as schema from "../db/schema";
 
 const expectedTables = [
-  "users", "devices", "deviceCredentials", "pairingCodes", "deviceBootstraps", "deviceNonces",
+  "users", "devices", "deviceCredentials", "deviceConnections", "pairingCodes", "deviceBootstraps", "deviceNonces",
   "strategies", "strategyVersions", "backtestJobs", "backtestDatasets", "backtestResults",
   "deployments", "riskPolicies", "runHeartbeats", "positionSnapshots", "orders", "fills",
   "commands", "commandAcknowledgements", "auditEvents",
@@ -51,6 +51,9 @@ describe("D1 control-plane schema", () => {
     expect(columns(schema.pairingCodes)).not.toContain("code");
     expect(columns(schema.deviceCredentials)).toContain("credential_hash");
     expect(columns(schema.deviceCredentials)).not.toContain("credential");
+    expect(columns(schema.deviceConnections)).toEqual(expect.arrayContaining([
+      "provider", "masked_api_key_suffix", "permissions_json", "verified_at", "status", "has_local_credential",
+    ]));
   });
 
   it("has no secret or raw authorization/account columns", () => {
@@ -58,6 +61,27 @@ describe("D1 control-plane schema", () => {
     for (const name of expectedTables) {
       for (const column of columns(schema[name])) expect(column).not.toMatch(forbidden);
     }
+  });
+
+  it("adds device connections in an incremental migration without rewriting the applied baseline", async () => {
+    const baseline = await readFile(resolve("drizzle/0000_overconfident_lady_vermin.sql"), "utf8");
+    expect(baseline).not.toMatch(/CREATE TABLE `device_connections`/i);
+
+    const files = (await readdir(resolve("drizzle"))).filter((file) => /^0001_.*\.sql$/.test(file));
+    expect(files).toHaveLength(1);
+    const migration = await readFile(resolve("drizzle", files[0]!), "utf8");
+    expect(migration).toMatch(/CREATE TABLE `device_connections`/i);
+    expect(migration).not.toMatch(/CREATE TABLE `(backtest_request_keys|strategy_save_keys)`/i);
+
+    const journal = JSON.parse(await readFile(resolve("drizzle/meta/_journal.json"), "utf8")) as {
+      entries: Array<{ idx: number; tag: string }>;
+    };
+    expect(journal.entries.at(-1)).toMatchObject({ idx: 1, tag: files[0]!.replace(/\.sql$/, "") });
+
+    const snapshot = JSON.parse(await readFile(resolve("drizzle/meta/0001_snapshot.json"), "utf8")) as {
+      tables: Record<string, unknown>;
+    };
+    expect(snapshot.tables).toHaveProperty("device_connections");
   });
 
   it("enables the DB binding and generates append-only audit triggers", async () => {

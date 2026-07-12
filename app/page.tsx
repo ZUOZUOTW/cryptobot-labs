@@ -6,7 +6,7 @@ import { OrbitalHero } from "../components/OrbitalHero";
 const steps = [
   ["01", "挑選", "從現貨、合約與不同風險等級中，找到符合想法的策略起點。"],
   ["02", "組裝", "加入多個條件與風控積木，或使用 JavaScript 描述進階邏輯。"],
-  ["03", "回測與下載", "先檢視可重現的模擬結果，再下載 WEEX 專屬策略包。"],
+  ["03", "回測與下載", "先檢視可重現的模擬結果，再下載適用 WEEX 的策略包。"],
 ] as const;
 
 const leaderboardPreview = BOT_CATALOG.toSorted((a, b) => b.metrics.totalReturn - a.metrics.totalReturn).slice(0, 3);
@@ -77,8 +77,8 @@ export default function Home() {
       </section>
 
       <section className="landing-section site-container boundary-panel glass-panel">
-        <div><p className="eyebrow">EXCHANGE BOUNDARY</p><h2>只為 WEEX 而生。</h2></div>
-        <p>所有交易所設定與策略包都固定為 WEEX。首版不接受 API Key、不連接帳戶，也不執行真實下單。</p>
+        <div><p className="eyebrow">EXCHANGE CONNECTION</p><h2>推薦使用 WEEX API。</h2></div>
+        <p>目前可用的實盤連線為 WEEX API。API 憑證由本機代理保存，網站只顯示遮罩後的連線狀態。</p>
       </section>
 
       <section className="landing-section landing-cta site-container">

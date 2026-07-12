@@ -5,8 +5,8 @@ import { buildSiteMetadata, requestOrigin } from "../lib/site-metadata";
 
 const readProjectFile = (path: string) => readFile(resolve(process.cwd(), path), "utf8");
 const EXPECTED_TITLE = "CryptoBot Labs｜WEEX 自動交易策略實驗室";
-const EXPECTED_DESCRIPTION = "探索、比較並組裝 WEEX 專屬自動交易策略，透過可重現的模擬回測安全驗證交易想法。";
-const EXPECTED_IMAGE_ALT = "CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX ONLY";
+const EXPECTED_DESCRIPTION = "探索、比較並組裝自動交易策略，透過可重現的模擬回測安全驗證交易想法；推薦使用 WEEX API。";
+const EXPECTED_IMAGE_ALT = "CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦";
 
 describe("production metadata", () => {
   const rawHeaders = (host: string | null, forwardedHost: string | null = null, forwardedProto: string | null = null) => ({
@@ -152,7 +152,7 @@ describe("final responsive and maintenance contracts", () => {
     expect(metadataSource).toContain("export const SITE_DESCRIPTION");
     expect(metadataSource).toContain("export const SOCIAL_IMAGE_ALT");
     expect(metadataSource.match(/CryptoBot Labs｜WEEX 自動交易策略實驗室/g)).toHaveLength(1);
-    expect(metadataSource.match(/CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX ONLY/g)).toHaveLength(1);
+    expect(metadataSource.match(/CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦/g)).toHaveLength(1);
   });
 
   it("documents the repository's pnpm workflow", async () => {

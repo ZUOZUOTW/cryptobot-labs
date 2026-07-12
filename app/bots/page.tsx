@@ -70,7 +70,7 @@ export default function BotsPage() {
   return (
     <div className="catalog-page site-container">
       <header className="page-intro">
-        <p className="eyebrow">BOT CATALOG / WEEX ONLY</p>
+        <p className="eyebrow">BOT CATALOG / WEEX API · 推薦</p>
         <h1>機器人市場</h1>
         <p>比較 10 組經典策略的模擬績效，從市場、風險與策略邏輯找到合適的起點。</p>
         <p className="simulation-disclosure" role="note">模擬回測資料，不代表未來績效</p>

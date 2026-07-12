@@ -460,7 +460,7 @@ export const canonicalizeBotConfig = (config: BotConfig): BotConfig => ({
 export const validateDraftConfig = (value: unknown): ValidationResult => {
   if (!hasBotConfigShape(value)) return { valid: false, errors: ["策略設定格式不正確"] };
   const errors: string[] = [];
-  if (value.exchange !== "WEEX") errors.push("只支援 WEEX 交易所");
+  if (value.exchange !== "WEEX") errors.push("目前可用的實盤連線為 WEEX API");
   errors.push(...canonicalBlockErrors(value as BotConfig, false));
   return { valid: errors.length === 0, errors };
 };
@@ -470,7 +470,7 @@ export const validateConfig = (value: unknown): ValidationResult => {
   const config = value;
   const errors: string[] = [];
 
-  if (config.exchange !== "WEEX") errors.push("只支援 WEEX 交易所");
+  if (config.exchange !== "WEEX") errors.push("目前可用的實盤連線為 WEEX API");
   errors.push(...canonicalBlockErrors(config as BotConfig, true));
   if (!config.blocks.some((block) => block.group === "entry")) errors.push("至少需要一個進場訊號");
   if (!config.blocks.some((block) => block.group === "exit" || block.group === "risk")) {

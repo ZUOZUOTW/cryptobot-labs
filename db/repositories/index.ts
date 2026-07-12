@@ -9,6 +9,13 @@ export {
   type DeviceCredentialRecord,
 } from "./devices";
 export {
+  createConnectionRepository,
+  type ConnectionPermissions,
+  type ConnectionRecord,
+  type SafeConnectionSummary,
+  type SafeConnectionDevice,
+} from "./connections";
+export {
   createBacktestRepository,
   type BacktestJobRecord,
   type BacktestDetailRecord,

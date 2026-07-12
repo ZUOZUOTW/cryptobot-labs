@@ -28,11 +28,11 @@ afterEach(() => {
 });
 
 describe("landing page", () => {
-  it("introduces the approved WEEX-only discovery flow", () => {
+  it("introduces the approved WEEX-recommended discovery flow", () => {
     render(<Home />);
 
     expect(screen.getByRole("heading", { level: 1, name: "把交易想法，組裝成你的機器人。" })).toBeInTheDocument();
-    expect(screen.getByText("WEEX ONLY")).toBeInTheDocument();
+    expect(screen.getByText("WEEX API · 推薦")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "探索機器人" })).toHaveAttribute("href", "/bots");
     expect(screen.getByRole("link", { name: "開始組裝" })).toHaveAttribute("href", "/workshop");
   });
@@ -46,7 +46,7 @@ describe("landing page", () => {
     expect(screen.getByRole("heading", { name: "用 JavaScript 寫下你的交易邏輯。" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "熱門機器人" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "績效排行榜預覽" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "只為 WEEX 而生。" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "推薦使用 WEEX API。" })).toBeInTheDocument();
   });
 
   it("uses an explicit blank-workshop flag for the landing CTA", () => {

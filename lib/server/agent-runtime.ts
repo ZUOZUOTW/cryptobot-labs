@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { createControlPlaneDatabase } from "../../db";
-import { createActivityRepository, createCommandRepository, createDeploymentRepository } from "../../db/repositories";
+import { createActivityRepository, createCommandRepository, createConnectionRepository, createDeploymentRepository } from "../../db/repositories";
 import { createAgentHandlers } from "./agent-routes";
 import { createCommandService } from "./commands";
 import { createDeviceEventService } from "./device-events";
@@ -23,7 +23,7 @@ export function createProductionAgentHandlers(environment: AgentEnvironment = en
   ] as const });
   return createAgentHandlers({
     verify,
-    eventService: createDeviceEventService(activity, { deployments }),
+    eventService: createDeviceEventService(activity, { deployments, connections: createConnectionRepository(database) }),
     commandService: createCommandService(commands),
   });
 }

@@ -7,7 +7,7 @@ const validConfig = STRATEGY_PRESETS.find((preset) => preset.name === "突破追
 describe("runBacktest", () => {
   it("rejects a runtime non-WEEX exchange at the public boundary", () => {
     expect(() => runBacktest({ ...validConfig, exchange: "BINANCE" as "WEEX" }))
-      .toThrowError("策略設定無效：只支援 WEEX 交易所");
+      .toThrowError("策略設定無效：目前可用的實盤連線為 WEEX API");
   });
 
   it("rejects forbidden JavaScript source at the public boundary", () => {

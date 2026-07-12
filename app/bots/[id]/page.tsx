@@ -54,7 +54,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
         <div className="bot-detail-hero__content">
           <div>
             <div className="tag-row">
-              <span className="exchange-badge">WEEX ONLY</span>
+              <span className="exchange-badge">WEEX API · 推薦</span>
               <span className="market-badge">{marketLabel(bot)} · {bot.timeframe}</span>
               <span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span>
             </div>
@@ -134,7 +134,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
       </section>
 
       <section className="detail-section detail-cta site-container glass-panel">
-        <div><p className="eyebrow">CUSTOMIZE OR DOWNLOAD</p><h2>把官方策略變成你的版本。</h2><p>先複製到組裝車間調整參數，或下載固定 WEEX 設定的官方策略包。</p></div>
+        <div><p className="eyebrow">CUSTOMIZE OR DOWNLOAD</p><h2>把官方策略變成你的版本。</h2><p>先複製到組裝車間調整參數，或下載目前適用 WEEX 的官方策略包。</p></div>
         <div className="button-row"><Link className="button button--primary" href={`/workshop?bot=${bot.id}`}>複製到組裝車間</Link><BotDownloadButton bot={bot} className="button button--secondary" /></div>
       </section>
     </article>

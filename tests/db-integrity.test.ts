@@ -31,19 +31,20 @@ afterEach(() => {
 });
 
 describe("D1 tenant integrity migrations", () => {
-  it("applies one clean baseline, preserves immutable audit identity, and enforces tenant parents", async () => {
+  it("applies the ordered migration chain, preserves immutable audit identity, and enforces tenant parents", async () => {
     const database = new DatabaseSync(":memory:");
     openDatabases.push(database);
     database.exec("PRAGMA foreign_keys=ON");
 
-    const migrationFiles = (await readdir(resolve("drizzle"))).filter((file) => file.endsWith(".sql"));
-    expect(migrationFiles).toHaveLength(1);
-    const sql = await readFile(resolve("drizzle", migrationFiles[0]!), "utf8");
+    const migrationFiles = (await readdir(resolve("drizzle"))).filter((file) => file.endsWith(".sql")).sort();
+    expect(migrationFiles.map((file) => file.slice(0, 4))).toEqual(["0000", "0001"]);
+    const migrations = await Promise.all(migrationFiles.map((file) => readFile(resolve("drizzle", file), "utf8")));
+    const sql = migrations.join("\n");
     expect(sql).not.toMatch(/PRAGMA\s+foreign_keys\s*=\s*OFF/i);
     expect(sql).toMatch(/FOREIGN KEY \(`device_id`,`user_id`\) REFERENCES `devices`\(`id`,`user_id`\)/i);
     expect(sql).toMatch(/FOREIGN KEY \(`strategy_version_id`,`user_id`\) REFERENCES `strategy_versions`\(`id`,`user_id`\)/i);
     expect(sql).toMatch(/FOREIGN KEY \(`pairing_code_id`,`user_id`\) REFERENCES `pairing_codes`\(`id`,`user_id`\)/i);
-    database.exec(sql.replaceAll("--> statement-breakpoint", ""));
+    for (const migration of migrations) database.exec(migration.replaceAll("--> statement-breakpoint", ""));
 
     addUser(database, "user_a");
     addUser(database, "user_b");

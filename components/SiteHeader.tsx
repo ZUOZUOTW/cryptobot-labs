@@ -8,6 +8,7 @@ const NAVIGATION_LINKS = [
   { href: "/leaderboard", label: "排行榜" },
   { href: "/workshop", label: "組裝車間" },
   { href: "/backtests", label: "歷史回測" },
+  { href: "/connections", label: "連線" },
 ] as const;
 
 function NavigationLinks() {
@@ -44,7 +45,7 @@ export function SiteHeader() {
         <div className="site-header__actions">
           <span className="exchange-badge">
             <span className="exchange-badge__signal" aria-hidden="true" />
-            WEEX ONLY
+            WEEX API · 推薦
           </span>
           <button
             aria-controls="mobile-navigation"

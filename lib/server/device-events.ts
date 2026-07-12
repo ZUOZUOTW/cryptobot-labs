@@ -1,5 +1,6 @@
 import type { createActivityRepository } from "../../db/repositories/activity";
 import type { createDeploymentRepository } from "../../db/repositories/deployments";
+import type { createConnectionRepository, ConnectionPermissions } from "../../db/repositories/connections";
 import { safeCanonicalJsonStringify } from "../control-plane/schemas";
 import type { JsonObject } from "../control-plane/types";
 
@@ -23,6 +24,7 @@ export class DeviceEventError extends Error {
 
 type Activity = ReturnType<typeof createActivityRepository>;
 type Deployments = Pick<ReturnType<typeof createDeploymentRepository>, "getForDevice">;
+type Connections = Pick<ReturnType<typeof createConnectionRepository>, "applyDeviceEvent">;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
@@ -68,6 +70,10 @@ const oneOf = <T extends string>(value: unknown, values: readonly T[], label: st
   return value as T;
 };
 const optional = <T>(value: unknown, parse: (value: unknown) => T): T | null => value === null ? null : parse(value);
+const boolean = (value: unknown, label: string): boolean => {
+  if (typeof value !== "boolean") throw new DeviceEventError("invalid-event", `${label} is invalid`);
+  return value;
+};
 
 const normalizedName = (name: string) => name.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
 const rejectSecrets = (value: unknown): void => {
@@ -76,7 +82,7 @@ const rejectSecrets = (value: unknown): void => {
     if (++nodes > 2_048 || depth > 32) throw new DeviceEventError("invalid-event", "event payload is too complex");
     if (key) {
       const normalized = normalizedName(key);
-      if (normalized !== "apikeysuffix" && normalized !== "maskedapikeysuffix"
+      if (normalized !== "apikeysuffix" && normalized !== "maskedapikeysuffix" && normalized !== "haslocalcredential"
         && FORBIDDEN_NAMES.some((part) => normalized.includes(part))) {
         throw new DeviceEventError("forbidden-data", "event contains forbidden credential material");
       }
@@ -137,14 +143,14 @@ const payloadParsers: Record<DeviceEventType, (value: unknown, deploymentId: str
     if(id(h.deploymentId,"heartbeat.deploymentId")!==deploymentId) throw new DeviceEventError("deployment-fence","event deployment fence failed");
     if(!Array.isArray(h.positions)||h.positions.length>100||!Array.isArray(p.positionIds)||p.positionIds.length!==h.positions.length) throw new DeviceEventError("invalid-event","heartbeat positions are invalid");
     return {heartbeat:{deploymentId,sequence:integer(h.sequence,"sequence",1),occurredAt:integer(h.occurredAt,"heartbeat.occurredAt"),mode:oneOf(h.mode,["paper","futures-demo","live"] as const,"mode"),state:oneOf(h.state,["running","paused","stopped","error"] as const,"state"),health:oneOf(h.health,["healthy","degraded","paused"] as const,"health"),positions:h.positions.map(parsePosition)},positionIds:p.positionIds.map((v)=>id(v,"positionId"))}; },
-  "connection-verified"(value){const p=record(value,"connection payload");exact(p,["mode","market","accountAlias","apiKeySuffix"],"connection payload");const suffix=text(p.apiKeySuffix,"apiKeySuffix",8);if(!MASKED_SUFFIX.test(suffix))throw new DeviceEventError("forbidden-data","masked suffix is invalid");return {mode:oneOf(p.mode,["paper","futures-demo","live"] as const,"mode"),market:oneOf(p.market,["spot","futures"] as const,"market"),accountAlias:text(p.accountAlias,"accountAlias",64),apiKeySuffix:suffix};},
+  "connection-verified"(value){const p=record(value,"connection payload");exact(p,["provider","maskedApiKeySuffix","permissions","connectionVersion"],"connection payload");if(p.provider!=="WEEX")throw new DeviceEventError("invalid-event","provider is invalid");const suffix=text(p.maskedApiKeySuffix,"maskedApiKeySuffix",8);if(!MASKED_SUFFIX.test(suffix))throw new DeviceEventError("forbidden-data","masked suffix is invalid");const permissions=record(p.permissions,"permissions");exact(permissions,["read","spotTrade","futuresTrade","withdrawal"],"permissions");const read=boolean(permissions.read,"permissions.read"),spotTrade=boolean(permissions.spotTrade,"permissions.spotTrade"),futuresTrade=boolean(permissions.futuresTrade,"permissions.futuresTrade"),withdrawal=boolean(permissions.withdrawal,"permissions.withdrawal");if(!read||(!spotTrade&&!futuresTrade)||withdrawal)throw new DeviceEventError("forbidden-data","connection permissions are unsafe");return {provider:"WEEX",maskedApiKeySuffix:suffix,permissions:{read:true,spotTrade,futuresTrade,withdrawal:false},connectionVersion:integer(p.connectionVersion,"connectionVersion",1)};},
   signal(value){const p=record(value,"signal payload");exact(p,["symbol","action","side","quantity","price","reason"],"signal payload");const symbol=text(p.symbol,"symbol",64);if(!SYMBOL.test(symbol))throw new DeviceEventError("invalid-event","symbol is invalid");return {symbol,action:oneOf(p.action,["enter","exit","hold"] as const,"action"),side:oneOf(p.side,["buy","sell"] as const,"side"),quantity:decimal(p.quantity,"quantity",false,true),price:optional(p.price,(v)=>decimal(v,"price",false,true)),reason:text(p.reason,"reason",256)};},
   "risk-block"(value){const p=record(value,"risk payload");exact(p,["code","symbol","message"],"risk payload");return {code:text(p.code,"code",64),symbol:optional(p.symbol,(v)=>{const s=text(v,"symbol",64);if(!SYMBOL.test(s))throw new DeviceEventError("invalid-event","symbol is invalid");return s;}),message:text(p.message,"message",512)};},
   "order-state":parseOrderTelemetry,
   fill(value,deploymentId){const result=parseOrderTelemetry(value,deploymentId);if(!Array.isArray(result.fills)||result.fills.length<1)throw new DeviceEventError("invalid-event","fill event requires fills");return result;},
   "deployment-state"(value){const p=record(value,"state payload");exact(p,["state","reason"],"state payload");return {state:oneOf(p.state,["running","paused","stopped","error"] as const,"state"),reason:text(p.reason,"reason",256)};},
   "key-rotated"(value){const p=record(value,"key payload");exact(p,["apiKeySuffix"],"key payload");const suffix=text(p.apiKeySuffix,"apiKeySuffix",8);if(!MASKED_SUFFIX.test(suffix))throw new DeviceEventError("forbidden-data","masked suffix is invalid");return {apiKeySuffix:suffix};},
-  "key-erased"(value){const p=record(value,"erase payload");exact(p,["reason"],"erase payload");return {reason:text(p.reason,"reason",256)};},
+  "key-erased"(value){const p=record(value,"erase payload");const keys=Object.keys(p).sort().join(",");if(keys!=="reason"&&keys!=="connectionVersion,reason")throw new DeviceEventError("invalid-event","erase payload fields are invalid");return {reason:text(p.reason,"reason",256),connectionVersion:p.connectionVersion===undefined?1:integer(p.connectionVersion,"connectionVersion",1)};},
   "agent-error"(value){const p=record(value,"error payload");exact(p,["code","message","retryable"],"error payload");if(typeof p.retryable!=="boolean")throw new DeviceEventError("invalid-event","retryable is invalid");return {code:text(p.code,"code",64),message:text(p.message,"message",512),retryable:p.retryable};},
 };
 function parseOrderTelemetry(value: unknown, deploymentId: string): JsonObject {const p=record(value,"order payload");exact(p,["mode","deploymentState","order","fills"],"order payload");const order=parseOrder(p.order);if(order.deploymentId!==deploymentId)throw new DeviceEventError("deployment-fence","event deployment fence failed");if(!Array.isArray(p.fills)||p.fills.length>500)throw new DeviceEventError("invalid-event","fills are invalid");return {mode:oneOf(p.mode,["paper","futures-demo","live"] as const,"mode"),deploymentState:oneOf(p.deploymentState,["running","paused","stopped","error"] as const,"deploymentState"),order,fills:p.fills.map(parseFill)};}
@@ -176,7 +182,7 @@ export function parseDeviceEvent(value: unknown): DeviceEventEnvelope {
   return parsed;
 }
 
-export function createDeviceEventService(activity: Activity, options: { deployments: Deployments; now?:()=>number }) {
+export function createDeviceEventService(activity: Activity, options: { deployments: Deployments; connections?: Connections; now?:()=>number }) {
   return { async ingest(identity: VerifiedDeviceIdentity, input: unknown) {
     if(identity?.verified!==true)throw new DeviceEventError("invalid-event","verified device identity is required");
     const event=parseDeviceEvent(input); const now=(options.now??Date.now)();
@@ -208,8 +214,24 @@ export function createDeviceEventService(activity: Activity, options: { deployme
       const ledger={version:1 as const,expectedDeploymentVersion:event.expectedDeploymentVersion,type:event.type,correlationId:event.correlationId,payload:event.payload,occurredAt:event.occurredAt,now};
       if(event.type==="heartbeat") { const p=event.payload as unknown as {heartbeat: Parameters<Activity["ingestHeartbeat"]>[0]["heartbeat"];positionIds:string[]}; return {kind:"heartbeat" as const,...await activity.ingestHeartbeat({id:event.id,deviceId:identity.deviceId,expectedDeploymentVersion:event.expectedDeploymentVersion,heartbeat:p.heartbeat,positionIds:p.positionIds,event:ledger})}; }
       if(event.type==="order-state"||event.type==="fill") { const p=event.payload as unknown as {mode:"paper"|"futures-demo"|"live";deploymentState:"running"|"paused"|"stopped"|"error";order:Parameters<Activity["ingestOrderTelemetry"]>[0]["order"];fills:Parameters<Activity["ingestOrderTelemetry"]>[0]["fills"]}; return {kind:"order" as const,...await activity.ingestOrderTelemetry({deviceId:identity.deviceId,expectedDeploymentVersion:event.expectedDeploymentVersion,...p,event:{id:event.id,...ledger}})}; }
+      if(event.type==="connection-verified"||event.type==="key-erased") {
+        if(!options.connections)throw new DeviceEventError("invalid-event","connection event persistence is unavailable");
+        const p=event.payload as unknown as {connectionVersion:number;maskedApiKeySuffix?:string;permissions?:ConnectionPermissions};
+        const result=await options.connections.applyDeviceEvent({id:event.id,deviceId:identity.deviceId,deploymentId:event.deploymentId,
+          expectedDeploymentVersion:event.expectedDeploymentVersion,type:event.type,correlationId:event.correlationId,payload:event.payload,
+          occurredAt:event.occurredAt,now,connectionVersion:p.connectionVersion,
+          verified:event.type==="connection-verified"?{maskedApiKeySuffix:p.maskedApiKeySuffix!,permissions:p.permissions!}:undefined});
+        return {kind:"connection" as const,...result};
+      }
       const audit=await activity.appendDeviceAudit({id:event.id,deviceId:identity.deviceId,deploymentId:event.deploymentId,expectedDeploymentVersion:event.expectedDeploymentVersion,type:event.type,correlationId:event.correlationId,payload:{version:1,expectedDeploymentVersion:event.expectedDeploymentVersion,payload:event.payload},occurredAt:event.occurredAt,now});
       return {kind:"audit" as const,...audit};
-    } catch(error) { if(error instanceof DeviceEventError)throw error; const message=error instanceof Error?error.message:"event persistence failed"; throw new DeviceEventError(/conflict|duplicate|sequence/i.test(message)?"event-conflict":"deployment-fence",/conflict|duplicate|sequence/i.test(message)?"event conflict":"deployment fence failed"); }
+    } catch(error) {
+      if(error instanceof DeviceEventError)throw error;
+      const message=error instanceof Error?error.message:"event persistence failed";
+      if(/conflict|duplicate|sequence/i.test(message))throw new DeviceEventError("event-conflict","event conflict");
+      // Storage/runtime failures must remain retryable at the agent route boundary. Deployment
+      // fences are established explicitly above instead of being inferred from arbitrary errors.
+      throw error;
+    }
   }};
 }
