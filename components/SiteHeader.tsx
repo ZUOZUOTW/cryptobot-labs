@@ -10,6 +10,7 @@ const NAVIGATION_LINKS = [
   { href: "/backtests", label: "歷史回測" },
   { href: "/connections", label: "連線" },
   { href: "/runs", label: "運行" },
+  { href: "/activity", label: "活動" },
 ] as const;
 
 function NavigationLinks() {

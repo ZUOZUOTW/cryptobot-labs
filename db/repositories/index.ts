@@ -40,6 +40,7 @@ export {
   createActivityRepository,
   type HeartbeatRecord,
   type AuditEventRecord,
+  type ActivityEvidenceRecord,
   type OrderRecord,
   type OrderInput,
   type FillInput,

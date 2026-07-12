@@ -14,6 +14,16 @@ export interface AuditEventRecord {
   deviceId: string | null; deploymentId: string | null; strategyVersionId: string | null;
   type: string; correlationId: string; payloadJson: string; occurredAt: number; createdAt: number;
 }
+export interface ActivityEvidenceRecord extends AuditEventRecord {
+  deploymentConfigurationHash: string | null;
+  deploymentStrategyVersionId: string | null;
+  strategyVersion: number | null;
+  strategyConfigHash: string | null;
+  strategySourceHash: string | null;
+  clientOrderId: string | null;
+  exchangeOrderId: string | null;
+  orderStatus: string | null;
+}
 export interface OrderRecord {
   id: string; userId: string; deploymentId: string; clientOrderId: string; exchangeOrderId: string | null;
   market: "spot" | "futures"; symbol: string; side: "buy" | "sell"; positionSide: "net" | "long" | "short";
@@ -32,6 +42,24 @@ const heartbeatColumns = `id,user_id AS userId,deployment_id AS deploymentId,dev
 const auditColumns = `id,user_id AS userId,actor_type AS actorType,actor_id AS actorId,device_id AS deviceId,
   deployment_id AS deploymentId,strategy_version_id AS strategyVersionId,type,correlation_id AS correlationId,
   payload_json AS payloadJson,occurred_at AS occurredAt,created_at AS createdAt`;
+const activityEvidenceColumns = `a.id,a.user_id AS userId,a.actor_type AS actorType,a.actor_id AS actorId,
+  a.device_id AS deviceId,a.deployment_id AS deploymentId,a.strategy_version_id AS strategyVersionId,
+  a.type,a.correlation_id AS correlationId,a.payload_json AS payloadJson,a.occurred_at AS occurredAt,
+  a.created_at AS createdAt,d.configuration_hash AS deploymentConfigurationHash,
+  d.strategy_version_id AS deploymentStrategyVersionId,sv.version AS strategyVersion,
+  sv.config_hash AS strategyConfigHash,sv.source_hash AS strategySourceHash,
+  (SELECT o.client_order_id FROM orders o WHERE a.type IN ('order-state','fill')
+    AND a.deployment_id IS NOT NULL AND o.user_id=a.user_id AND o.deployment_id=a.deployment_id
+    AND o.correlation_id=a.correlation_id
+    ORDER BY o.updated_at DESC,o.id DESC LIMIT 1) AS clientOrderId,
+  (SELECT o.exchange_order_id FROM orders o WHERE a.type IN ('order-state','fill')
+    AND a.deployment_id IS NOT NULL AND o.user_id=a.user_id AND o.deployment_id=a.deployment_id
+    AND o.correlation_id=a.correlation_id
+    ORDER BY o.updated_at DESC,o.id DESC LIMIT 1) AS exchangeOrderId,
+  (SELECT o.state FROM orders o WHERE a.type IN ('order-state','fill')
+    AND a.deployment_id IS NOT NULL AND o.user_id=a.user_id AND o.deployment_id=a.deployment_id
+    AND o.correlation_id=a.correlation_id
+    ORDER BY o.updated_at DESC,o.id DESC LIMIT 1) AS orderStatus`;
 const orderColumns = `id,user_id AS userId,deployment_id AS deploymentId,client_order_id AS clientOrderId,
   exchange_order_id AS exchangeOrderId,market,symbol,side,position_side AS positionSide,order_type AS orderType,
   state,price,quantity,filled_quantity AS filledQuantity,average_fill_price AS averageFillPrice,notional,
@@ -615,6 +643,32 @@ export function createActivityRepository(database: ControlPlaneDatabase) {
       const items = rows.results.slice(0, pageSize);
       const last = items.at(-1);
       return { items, nextCursor: rows.results.length > pageSize && last ? { occurredAt: last.occurredAt, id: last.id } : null };
+    },
+    async listActivityForUser(userId: string, options: { limit: number; cursor?: { occurredAt: number; id: string };
+      from?: number; to?: number }): Promise<{ items: ActivityEvidenceRecord[];
+        nextCursor: { occurredAt: number; id: string } | null }> {
+      exactInput(options, ["limit", "cursor", "from", "to"]);
+      const pageSize = limit(options.limit);
+      if (options.cursor) exactInput(options.cursor, ["occurredAt", "id"]);
+      const cursorTime = options.cursor ? time(options.cursor.occurredAt, "cursor.occurredAt") : null;
+      const cursorId = options.cursor ? id(options.cursor.id, "cursor.id") : null;
+      const from = options.from === undefined ? null : time(options.from, "from");
+      const to = options.to === undefined ? null : time(options.to, "to");
+      if (from !== null && to !== null && from > to) throw new Error("activity time range is invalid");
+      const owner = id(userId, "userId");
+      const rows = await database.prepare(`SELECT ${activityEvidenceColumns} FROM audit_events a
+        LEFT JOIN deployments d ON d.id=a.deployment_id AND d.user_id=a.user_id
+        LEFT JOIN strategy_versions sv ON sv.id=COALESCE(a.strategy_version_id,d.strategy_version_id)
+          AND sv.user_id=a.user_id
+        WHERE a.user_id=? AND (? IS NULL OR a.occurred_at>=?) AND (? IS NULL OR a.occurred_at<=?)
+          AND (? IS NULL OR a.occurred_at<? OR (a.occurred_at=? AND a.id<?))
+        ORDER BY a.occurred_at DESC,a.id DESC LIMIT ?`)
+        .bind(owner, from, from, to, to, cursorTime, cursorTime, cursorTime, cursorId, pageSize + 1)
+        .all<ActivityEvidenceRecord>();
+      if (!rows.success) throw new Error("activity list failed");
+      const items = rows.results.slice(0, pageSize); const last = items.at(-1);
+      return { items, nextCursor: rows.results.length > pageSize && last
+        ? { occurredAt: last.occurredAt, id: last.id } : null };
     },
   };
 }

@@ -128,6 +128,61 @@ describe("activity repository", () => {
     expect((await activity.listAuditForUser("usr_a", { limit: 2, cursor: first.nextCursor! })).items.map((event) => event.id)).toEqual(["audit_a"]);
   });
 
+  it("lists owner-scoped enriched activity with bounded time filters and stable cursors", async () => {
+    const input = { type: "signal", correlationId: "corr_a", payload: { reason: "entry" }, now: 1_000 };
+    await activity.appendUserAudit({ id: "audit_old", userId: "usr_a", deploymentId: "dep_a",
+      strategyVersionId: "version_a", occurredAt: 100, ...input });
+    await activity.appendUserAudit({ id: "audit_new", userId: "usr_a", deploymentId: "dep_a",
+      strategyVersionId: "version_a", occurredAt: 200, ...input });
+    await activity.appendUserAudit({ id: "audit_other", userId: "usr_b", deploymentId: "dep_b",
+      strategyVersionId: "version_b", occurredAt: 200, ...input });
+    const first = await activity.listActivityForUser("usr_a", { limit: 1, from: 100, to: 200 });
+    expect(first.items).toMatchObject([{ id: "audit_new", deploymentConfigurationHash: "c".repeat(64),
+      deploymentStrategyVersionId: "version_a", strategyVersion: 1, strategyConfigHash: "a".repeat(64) }]);
+    expect((await activity.listActivityForUser("usr_a", { limit: 2, from: 100, to: 200,
+      cursor: first.nextCursor! })).items.map((event) => event.id)).toEqual(["audit_old"]);
+    expect((await activity.listActivityForUser("usr_b", { limit: 10 })).items.map((event) => event.id))
+      .toEqual(["audit_other"]);
+    await expect(activity.listActivityForUser("usr_a", { limit: 10, from: 201, to: 200 }))
+      .rejects.toThrow(/range/i);
+  });
+
+  it("attributes order evidence only to order events in the same owned non-null deployment", async () => {
+    database.raw.exec(`
+      INSERT INTO deployments VALUES ('dep_other','usr_a','dev_a','version_a','Other','paper','running',2,
+        '${"e".repeat(64)}',1,1,1,NULL);
+      INSERT INTO orders (id,user_id,deployment_id,client_order_id,exchange_order_id,market,symbol,side,
+        position_side,order_type,state,price,quantity,filled_quantity,average_fill_price,notional,
+        correlation_id,created_at,updated_at) VALUES
+        ('order_same','usr_a','dep_a','client_same','exchange_same','spot','BTCUSDT','buy','net','market',
+          'acknowledged',NULL,'1','0',NULL,'100','corr_shared',90,100),
+        ('order_other','usr_a','dep_other','client_other','exchange_other','spot','BTCUSDT','buy','net','market',
+          'filled',NULL,'1','1','100','100','corr_shared',90,200),
+        ('order_cross','usr_a','dep_other','client_cross','exchange_cross','spot','BTCUSDT','buy','net','market',
+          'filled',NULL,'1','1','100','100','corr_cross',90,300);
+    `);
+    const common = { deviceId: "dev_a", expectedDeploymentVersion: 2, occurredAt: 300, now: 301 };
+    await activity.appendDeviceAudit({ id: "evt_order", deploymentId: "dep_a", type: "order-state",
+      correlationId: "corr_shared", payload: {}, ...common });
+    await activity.appendDeviceAudit({ id: "evt_cross", deploymentId: "dep_a", type: "fill",
+      correlationId: "corr_cross", payload: {}, ...common });
+    await activity.appendDeviceAudit({ id: "evt_unrelated", deploymentId: "dep_a", type: "agent-error",
+      correlationId: "corr_shared", payload: {}, ...common });
+    await activity.appendUserAudit({ id: "evt_null_deployment", userId: "usr_a", type: "order-state",
+      correlationId: "corr_shared", payload: {}, occurredAt: 300, now: 301 });
+
+    const rows = (await activity.listActivityForUser("usr_a", { limit: 10 })).items;
+    expect(rows.find((row) => row.id === "evt_order")).toMatchObject({
+      clientOrderId: "client_same", exchangeOrderId: "exchange_same", orderStatus: "acknowledged",
+    });
+    for (const eventId of ["evt_cross", "evt_unrelated", "evt_null_deployment"]) {
+      expect(rows.find((row) => row.id === eventId)).toMatchObject({
+        clientOrderId: null, exchangeOrderId: null, orderStatus: null,
+      });
+    }
+    expect(JSON.stringify(rows)).not.toContain("client_cross");
+  });
+
   it("keeps audit rows immutable at the database boundary", async () => {
     await activity.appendUserAudit({ id: "audit_a", userId: "usr_a", type: "run.started", correlationId: "corr_a",
       payload: {}, occurredAt: 500, now: 501 });

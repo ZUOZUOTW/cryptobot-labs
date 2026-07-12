@@ -12,6 +12,7 @@ describe("SiteHeader", () => {
     ["組裝車間", "/workshop"],
     ["連線", "/connections"],
     ["運行", "/runs"],
+    ["活動", "/activity"],
   ])("links %s to %s", (name, href) => {
     render(<SiteHeader />);
 
