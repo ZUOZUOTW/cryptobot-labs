@@ -23,13 +23,13 @@ export function OrbitalHero() {
       </div>
 
       <div className="orbital-hero__visual" aria-label="策略核心與模擬績效概覽">
-        <div className="orbital-core" aria-hidden="true">
-          <span className="orbital-core__ring orbital-core__ring--outer" />
-          <span className="orbital-core__ring orbital-core__ring--inner" />
-          <span className="orbital-core__node orbital-core__node--one" />
-          <span className="orbital-core__node orbital-core__node--two" />
-          <span className="orbital-core__signal" />
-          <span className="orbital-core__label">STRATEGY<br />CORE</span>
+        <div className="ai-observatory">
+          <div className="ai-observatory__sphere" aria-hidden="true" />
+          <span className="ai-observatory__token ai-observatory__token--btc" aria-hidden="true">BTC</span>
+          <span className="ai-observatory__token ai-observatory__token--ai" aria-hidden="true">AI</span>
+          <span className="ai-observatory__token ai-observatory__token--risk" aria-hidden="true">RISK</span>
+          <img alt="親切可愛的 AI 機器人正在分析加密貨幣策略" className="ai-observatory__mascot" height="500" src="/mascots/ai-observer.png" width="560" />
+          <div className="ai-observatory__caption"><span aria-hidden="true" />AI STRATEGY OBSERVATORY</div>
         </div>
         <article className="hero-metric hero-metric--return glass-panel float-motion">
           <span>模擬累積收益</span><strong>+126.4%</strong><small>{DISCLOSURE}</small>

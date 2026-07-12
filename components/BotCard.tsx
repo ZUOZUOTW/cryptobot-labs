@@ -98,9 +98,11 @@ export function BotDownloadButton({ bot, label = "快速下載", className = "bu
 }
 
 export function BotCard({ bot, favorite = false, onFavorite }: BotCardProps) {
+  const mascot = bot.risk === "高" ? "/mascots/ai-guardian.png" : bot.market === "spot" ? "/mascots/ai-observer.png" : "/mascots/ai-builder.png";
   return (
     <article className="bot-card glass-panel" aria-labelledby={`bot-${bot.id}-title`}>
       <div className="bot-card__header">
+        <img alt="" aria-hidden="true" className="bot-card__mascot" height="96" src={mascot} width="112" />
         <div>
           <p className="eyebrow">{bot.exchange} / {bot.symbol}</p>
           <h3 id={`bot-${bot.id}-title`}>{bot.name}</h3>

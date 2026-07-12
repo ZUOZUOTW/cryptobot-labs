@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
+import { RouteCompanion } from "@/components/RouteCompanion";
 import {
   buildSiteMetadata,
   requestOrigin,
@@ -44,6 +45,7 @@ export default function RootLayout({
       >
         <SiteHeader />
         <main className="site-main" id="main-content" tabIndex={-1}>
+          <RouteCompanion />
           {children}
         </main>
         <SiteFooter />
