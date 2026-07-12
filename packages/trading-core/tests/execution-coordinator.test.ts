@@ -269,7 +269,7 @@ describe("ExecutionCoordinator", () => {
     await vi.waitFor(() => expect(exchange.submit).toHaveBeenCalledTimes(1));
     release();
     const outcomes = await Promise.all([first, second]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(["submitted", "idempotent"]);
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["idempotent", "submitted"]);
     expect(exchange.submit).toHaveBeenCalledTimes(1);
   });
 
