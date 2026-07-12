@@ -229,6 +229,50 @@ describe("WeexPrivateClient", () => {
     ]);
   });
 
+  it("returns a permission-fenced spot balance snapshot without exposing credentials",async()=>{
+    const transport=new ScriptedTransport([
+      ok({canTrade:true,canWithdraw:false,balances:[]}),
+      ok({canTrade:true,canWithdraw:false,balances:[{asset:"BTC",free:"0.004",locked:"0.001"},{asset:"USDT",free:"1200.00000000",locked:"0"}]})]);
+    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    await client.verifyAccount({market:"spot",mode:"live"});
+    await expect(client.getAccountSnapshot({market:"spot",mode:"live"})).resolves.toEqual({
+      target:{market:"spot",mode:"live"},observedAt:1_700_000_000_000,positions:[],balances:[
+        {asset:"BTC",total:"0.005",available:"0.004",frozen:"0.001",unrealizedPnl:"0"},
+        {asset:"USDT",total:"1200",available:"1200.00000000",frozen:"0",unrealizedPnl:"0"},
+      ],
+    });
+  });
+
+  it("revokes the spot snapshot gate when current permissions become unsafe",async()=>{
+    const transport=new ScriptedTransport([ok({canTrade:true,canWithdraw:false,balances:[]}),
+      ok({canTrade:true,canWithdraw:true,balances:[]})]);
+    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    await client.verifyAccount({market:"spot",mode:"live"});
+    await expect(client.getAccountSnapshot({market:"spot",mode:"live"})).rejects.toMatchObject({category:"validation"});
+    await expect(client.getAccountSnapshot({market:"spot",mode:"live"})).rejects.toMatchObject({category:"validation"});
+    expect(transport.requests).toHaveLength(2);
+  });
+
+  it("returns validated live futures balances and all nonzero positions",async()=>{
+    const balance=[{asset:"USDT",balance:"5696.49288823",availableBalance:"5413.06877369",frozen:"81.28240000",unrealizePnl:"-34.55300000"}];
+    const configResponse={canTrade:true,canDeposit:true,canWithdraw:false,dualSidePosition:true,updateTime:1_700_000_000_000};
+    const positions=[{id:689987235755328154,asset:"USDT",symbol:"BTCUSDT",side:"LONG",leverage:"10",size:"0.02",
+      openValue:"1801.067",unrealizePnl:"-85.569",updatedTime:1_700_000_000_000},
+    {id:"2",asset:"USDT",symbol:"ETHUSDT",side:"SHORT",leverage:"5",size:"0",openValue:"0",unrealizePnl:"0",updatedTime:"1700000000000"}];
+    const transport=new ScriptedTransport([ok(balance),ok(configResponse),ok(balance),ok(positions)]);
+    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    await client.verifyAccount({market:"futures",mode:"live"});
+    await expect(client.getAccountSnapshot({market:"futures",mode:"live"})).resolves.toMatchObject({
+      target:{market:"futures",mode:"live"},observedAt:1_700_000_000_000,
+      balances:[{asset:"USDT",total:"5696.49288823",available:"5413.06877369",frozen:"81.28240000",unrealizedPnl:"-34.55300000"}],
+      positions:[{symbol:"BTCUSDT",side:"long",size:"0.02",openValue:"1801.067",unrealizedPnl:"-85.569"}],
+    });
+    expect(transport.requests.map(({url})=>url).slice(-2)).toEqual([
+      "https://api-contract.weex.com/capi/v3/account/balance",
+      "https://api-contract.weex.com/capi/v3/account/position/allPosition",
+    ]);
+  });
+
   it("fails closed before live futures submit when account config is one-way", async () => {
     const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
     const transport = new ScriptedTransport([

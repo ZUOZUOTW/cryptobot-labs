@@ -95,6 +95,32 @@ export interface VerifiedAccountSummary {
   readonly balanceAssetCount: number;
 }
 
+export interface WeexAccountBalance {
+  readonly asset: string;
+  readonly total: string;
+  readonly available: string;
+  readonly frozen: string;
+  readonly unrealizedPnl: string;
+}
+
+export interface WeexAccountPosition {
+  readonly asset: string;
+  readonly symbol: string;
+  readonly side: "long" | "short";
+  readonly leverage: string;
+  readonly size: string;
+  readonly openValue: string;
+  readonly unrealizedPnl: string;
+  readonly updatedAt: number;
+}
+
+export interface WeexAccountSnapshot {
+  readonly target: { readonly market: "spot" | "futures"; readonly mode: "live" };
+  readonly observedAt: number;
+  readonly balances: readonly WeexAccountBalance[];
+  readonly positions: readonly WeexAccountPosition[];
+}
+
 export interface WeexPrivateClientOptions {
   readonly transport: HttpTransport;
   readonly credentials: WeexCredentials;
@@ -140,6 +166,10 @@ function accountRoute(target: ExecutionTarget): Route {
 const FUTURES_ACCOUNT_CONFIG: Route = {
   origin: ORIGIN.futures,
   path: "/capi/v3/account/accountConfig",
+};
+const FUTURES_POSITIONS: Route = {
+  origin: ORIGIN.futures,
+  path: "/capi/v3/account/position/allPosition",
 };
 
 function orderRoute(target: ExecutionTarget): Route {
@@ -190,9 +220,20 @@ function unwrapGet(body: unknown): unknown {
 const UNSIGNED_AMOUNT = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 const SIGNED_AMOUNT = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 
-function validateBalanceCollection(value: unknown, market: "spot" | "futures"): number {
+function canonicalSum(left: string, right: string): string {
+  const [leftWhole, leftFraction = ""] = left.split(".");
+  const [rightWhole, rightFraction = ""] = right.split(".");
+  const scale = Math.max(leftFraction.length, rightFraction.length);
+  const sum = BigInt(leftWhole + leftFraction.padEnd(scale, "0")) + BigInt(rightWhole + rightFraction.padEnd(scale, "0"));
+  const digits = sum.toString().padStart(scale + 1, "0");
+  if (scale === 0) return digits;
+  const fraction = digits.slice(-scale).replace(/0+$/, "");
+  return fraction ? `${digits.slice(0, -scale)}.${fraction}` : digits.slice(0, -scale);
+}
+
+function parseBalanceCollection(value: unknown, market: "spot" | "futures"): readonly WeexAccountBalance[] {
   if (!Array.isArray(value) || value.length > 500) throw schema("Invalid account balance collection");
-  for (const item of value) {
+  return Object.freeze(value.map((item) => {
     const balance = record(item, "account balance");
     const asset = balance.asset ?? balance.coin;
     if (typeof asset !== "string" || !/^[A-Z0-9]{1,16}$/.test(asset)) throw schema("Invalid account balance asset");
@@ -206,8 +247,36 @@ function validateBalanceCollection(value: unknown, market: "spot" | "futures"): 
         throw schema(`Invalid account balance ${key}`);
       }
     }
-  }
-  return value.length;
+    const available = (market === "spot" ? balance.free : balance.availableBalance) as string;
+    const frozen = (market === "spot" ? balance.locked : balance.frozen) as string;
+    return Object.freeze({ asset, total: market === "spot" ? canonicalSum(available, frozen) : balance.balance as string,
+      available, frozen, unrealizedPnl: market === "spot" ? "0" : balance.unrealizePnl as string });
+  }));
+}
+
+function parsePositions(value: unknown): readonly WeexAccountPosition[] {
+  const data = unwrapGet(value);
+  if (!Array.isArray(data) || data.length > 500) throw schema("Invalid account position collection");
+  const positions = data.map((item) => {
+    const position = record(item, "account position");
+    const rawId = position.id;
+    const validId = (typeof rawId === "number" && Number.isFinite(rawId) && Number.isInteger(rawId) && rawId >= 0)
+      || (typeof rawId === "string" && /^\d{1,32}$/.test(rawId));
+    const side = position.side === "LONG" ? "long" : position.side === "SHORT" ? "short" : null;
+    const updatedAt = typeof position.updatedTime === "string" && /^\d+$/.test(position.updatedTime)
+      ? Number(position.updatedTime) : position.updatedTime;
+    if (!validId || typeof position.asset !== "string" || !/^[A-Z0-9]{1,16}$/.test(position.asset)
+      || typeof position.symbol !== "string" || !isPrivateSymbol(position.symbol) || side === null
+      || typeof position.leverage !== "string" || !UNSIGNED_AMOUNT.test(position.leverage) || !/[1-9]/.test(position.leverage)
+      || typeof position.size !== "string" || !UNSIGNED_AMOUNT.test(position.size)
+      || typeof position.openValue !== "string" || !UNSIGNED_AMOUNT.test(position.openValue)
+      || typeof position.unrealizePnl !== "string" || !SIGNED_AMOUNT.test(position.unrealizePnl)
+      || !Number.isSafeInteger(updatedAt) || (updatedAt as number) < 0) throw schema("Invalid account position");
+    return Object.freeze({ asset: position.asset, symbol: position.symbol, side,
+      leverage: position.leverage, size: position.size, openValue: position.openValue,
+      unrealizedPnl: position.unrealizePnl, updatedAt: updatedAt as number });
+  }).filter((position) => /[1-9]/.test(position.size));
+  return Object.freeze(positions);
 }
 
 function parseAccount(
@@ -222,7 +291,7 @@ function parseAccount(
     if (typeof account.canTrade !== "boolean" || typeof account.canWithdraw !== "boolean") {
       throw schema("Invalid spot account permissions");
     }
-    const balanceAssetCount = validateBalanceCollection(account.balances, "spot");
+    const balanceAssetCount = parseBalanceCollection(account.balances, "spot").length;
     return {
       market: "spot", mode: "live", verifiedAt, canTrade: account.canTrade,
       readPermission: true,
@@ -237,7 +306,7 @@ function parseAccount(
         const source = record(data, "futures account balance response");
         return source.balances ?? source.assets ?? source.list;
       })();
-  const balanceAssetCount = validateBalanceCollection(collection, "futures");
+  const balanceAssetCount = parseBalanceCollection(collection, "futures").length;
   if (target.mode === "futures-demo") {
     return {
       market: "futures", mode: target.mode, verifiedAt, canTrade: "unknown",
@@ -531,6 +600,37 @@ export class WeexPrivateClient {
       };
     }
     return summary;
+  }
+
+  async getAccountSnapshot(target: ExecutionTarget): Promise<WeexAccountSnapshot> {
+    assertTarget(target);
+    if (target.mode !== "live") throw validation("Account snapshots require a live WEEX target");
+    const authorization = this.#authorizationSnapshot(target);
+    const accountResponse = await this.#safeGet(accountRoute(target));
+    let balances: readonly WeexAccountBalance[];
+    if (target.market === "spot") {
+      const account = record(unwrapGet(accountResponse.body), "spot account");
+      if (account.canTrade !== true || account.canWithdraw !== false) {
+        this.#verifiedSpotLive = undefined;
+        throw validation("Spot account permissions changed after verification");
+      }
+      balances = parseBalanceCollection(account.balances, "spot");
+    } else {
+      const data = unwrapGet(accountResponse.body);
+      const collection = Array.isArray(data) ? data : (() => {
+        const source = record(data, "futures account balance response");
+        return source.balances ?? source.assets ?? source.list;
+      })();
+      balances = parseBalanceCollection(collection, "futures");
+    }
+    const positions = target.market === "futures"
+      ? parsePositions((await this.#safeGet(FUTURES_POSITIONS)).body)
+      : Object.freeze([]) as readonly WeexAccountPosition[];
+    this.#assertAuthorization(authorization);
+    const observedAt = Math.floor(this.#now());
+    if (!Number.isSafeInteger(observedAt) || observedAt < 0) throw validation("Invalid account snapshot time");
+    return Object.freeze({ target: Object.freeze({ market: target.market, mode: "live" as const }), observedAt,
+      balances, positions });
   }
 
   async submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome> {
