@@ -54,6 +54,15 @@ export class ConnectionRegistry {
     this.#verified = null;
   }
 
+  refresh(verifiedAt: number): void {
+    const current = this.#verified;
+    if (!current) throw new LocalConnectionError("missing", "A verified local WEEX connection is required");
+    if (!Number.isSafeInteger(verifiedAt) || verifiedAt < current.verifiedAt) {
+      throw new LocalConnectionError("invalid", "Verified connection refresh moved backward");
+    }
+    this.#verified = validate({ ...current, verifiedAt });
+  }
+
   snapshot(): VerifiedLocalConnection | null {
     return this.#verified;
   }

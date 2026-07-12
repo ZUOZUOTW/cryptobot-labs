@@ -17,6 +17,7 @@ const Exact = Decimal.clone({ precision: 96 });
 const DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 
 export interface LiveAccountEvidence {
+  readonly connectionVerifiedAt: number;
   readonly observedAt: number;
   readonly portfolio: Readonly<StrategyPortfolioSnapshot>;
   readonly risk: Readonly<RiskContext>;
@@ -90,7 +91,7 @@ export function createLiveAccountService(options: LiveAccountServiceOptions) {
       readonly priceTimestamp: number;
       readonly configuredLeverage: string;
       readonly local: Readonly<{ lastSignalAt: number | null; realizedDailyPnl: string; consecutiveFailures: number;
-        dayStartEquity: string; position?: Readonly<StrategyPositionSnapshot> }>;
+        dayStartEquity: string | null; position?: Readonly<StrategyPositionSnapshot> }>;
     }): Promise<LiveAccountEvidence> {
       exactTarget(input.target);
       if (input.rules.market !== input.target.market || !input.rules.symbol || !input.rules.baseAsset || !input.rules.quoteAsset) {
@@ -106,8 +107,8 @@ export function createLiveAccountService(options: LiveAccountServiceOptions) {
         throw new Error("Invalid local live risk evidence");
       }
       const realizedDailyPnl = amount(input.local.realizedDailyPnl, "realized daily PnL");
-      const dayStartEquity = unsigned(input.local.dayStartEquity, "day-start equity");
-      if (!dayStartEquity.isPositive()) throw new Error("Invalid day-start equity");
+      const dayStartEquity = input.local.dayStartEquity === null ? null : unsigned(input.local.dayStartEquity, "day-start equity");
+      if (dayStartEquity?.isPositive() === false) throw new Error("Invalid day-start equity");
       validateLocalPosition(input.local.position);
       const clock = new WeexClock(now);
       const sentAt = timestamp(now(), "clock probe start");
@@ -187,14 +188,14 @@ export function createLiveAccountService(options: LiveAccountServiceOptions) {
 
         const utcDay = new Date(snapshot.observedAt).toISOString().slice(0, 10);
         const portfolio = Object.freeze({ equity: equity.toFixed(), availableEquity: availableEquity.toFixed(),
-          dayStartEquity: dayStartEquity.toFixed(), utcDay, ...(position ? { position } : {}) });
+          dayStartEquity: (dayStartEquity ?? equity).toFixed(), utcDay, ...(position ? { position } : {}) });
         const risk = Object.freeze({ market: input.target.market, symbol: input.rules.symbol, now: snapshot.observedAt,
           priceTimestamp: input.priceTimestamp, lastSignalAt: input.local.lastSignalAt, openPositions, positionSide,
           currentPositionQuantity: positionQuantity.toFixed(), currentPositionNotional: positionNotional.toFixed(),
           totalExposure: totalExposure.toFixed(), realizedDailyPnl: realizedDailyPnl.toFixed(),
           unrealizedDailyPnl: unrealizedDailyPnl.toFixed(), consecutiveFailures: input.local.consecutiveFailures,
           leverage: configuredLeverage.toFixed() }) satisfies Readonly<RiskContext>;
-        return Object.freeze({ observedAt: snapshot.observedAt, portfolio, risk });
+        return Object.freeze({ connectionVerifiedAt: verified.verifiedAt, observedAt: snapshot.observedAt, portfolio, risk });
       });
     },
   });

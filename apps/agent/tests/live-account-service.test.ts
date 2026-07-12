@@ -20,7 +20,7 @@ describe("live account service",()=>{
     const transport=new Transport([response({symbol:"BTCUSDT",price:"50000"},{date:new Date(NOW).toUTCString()}),response(account),response(account)]);
     const evidence=await createLiveAccountService({vault,transport,now:()=>NOW}).collect({target:{market:"spot",mode:"live"},rules:spotRules,
       referencePrice:"50000",priceTimestamp:NOW,configuredLeverage:"1",local:{lastSignalAt:null,realizedDailyPnl:"0",consecutiveFailures:0,dayStartEquity:"1020"}});
-    expect(evidence).toEqual({observedAt:NOW,portfolio:{equity:"1020",availableEquity:"1000",dayStartEquity:"1020",utcDay:"2023-11-14"},
+    expect(evidence).toEqual({connectionVerifiedAt:NOW,observedAt:NOW,portfolio:{equity:"1020",availableEquity:"1000",dayStartEquity:"1020",utcDay:"2023-11-14"},
       risk:{market:"spot",symbol:"BTCUSDT",now:NOW,priceTimestamp:NOW,lastSignalAt:null,openPositions:0,positionSide:"flat",
         currentPositionQuantity:"0",currentPositionNotional:"0",totalExposure:"0",realizedDailyPnl:"0",unrealizedDailyPnl:"0",
         consecutiveFailures:0,leverage:"1"}});

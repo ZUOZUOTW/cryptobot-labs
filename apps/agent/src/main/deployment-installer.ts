@@ -12,6 +12,7 @@ export interface DeploymentInstallerDependencies {
   };
   readonly liveRunner?: {
     resume(bundle: DeploymentBundle): Promise<void>;
+    activate?(): Promise<void>;
     pause(): Promise<void>;
   };
   readonly liveUnlock?: {
@@ -183,8 +184,13 @@ export class DeploymentInstaller {
         ambiguousOrder: null,
         updatedAt: this.#timestamp(),
       }, record.recordVersion);
+      await runner.activate?.();
     } catch (error) {
       await runner.pause().catch(() => undefined);
+      if (this.#record?.status === "running") {
+        this.#record = await this.#dependencies.store.save({ definition: this.#record.definition, status: "paused",
+          pausedReason: "runtime-start-failed", ambiguousOrder: null, updatedAt: this.#timestamp() }, this.#record.recordVersion);
+      }
       throw error;
     }
     return { status: "ok", code: "live_resumed" };

@@ -9,7 +9,10 @@ import { createDeploymentClient } from "./deployment-client";
 import { registerAgentIpc, type AgentShellServices } from "./ipc";
 import { createDeviceIdentityVault } from "./device-identity";
 import { createStartAtLoginController } from "./login-item";
+import { createLiveAccountService } from "./live-account-service";
 import { LiveRunRunner } from "./live-run-runner";
+import { LiveScheduler } from "./live-scheduler";
+import { DurableLiveState } from "./live-state";
 import { createLiveUnlockService } from "./live-unlock-service";
 import { createPairingClient } from "./pairing-client";
 import { createPairingExpiryGuard } from "./pairing-expiry";
@@ -137,6 +140,19 @@ export async function bootstrapAgent(): Promise<void> {
   const liveRunner = new LiveRunRunner({ repository: orderRepository, client: liveExecutionClient,
     market: marketState, clock: clockState, connection: connectionRegistry, instruments: instrumentState,
     runtimeAudit, runAudit });
+  const liveScheduler = new LiveScheduler({ collector: publicMarket, market: marketState,
+    account: createLiveAccountService({ vault }), connection: connectionRegistry, orders: orderRepository,
+    state: (deploymentId) => new DurableLiveState(osStorage,
+      createNodeVaultFileStore(join(vaultDirectory, "live-states", `${deploymentId}.bin`))),
+    runner: liveRunner,
+    onFault: async (reason, bundle) => {
+      const occurredAt = Date.now();
+      const id = `live-fault-${createHash("sha256").update(`${bundle.deployment.id}:${reason}:${occurredAt}`).digest("hex").slice(0, 40)}`;
+      await enqueueTelemetrySafely({ version: 1, id, type: "agent-error", deploymentId: bundle.deployment.id,
+        expectedDeploymentVersion: bundle.deployment.version, correlationId: id, occurredAt,
+        payload: { code: reason, message: "Live evaluation paused locally", retryable: false } }, "high");
+    },
+  });
   const paperScheduler = new PaperScheduler({ collector: publicMarket, market: marketState,
     account: (deploymentId) => new DurablePaperAccount(osStorage,
       createNodeVaultFileStore(join(vaultDirectory, "paper-accounts", `${deploymentId}.bin`))),
@@ -183,7 +199,7 @@ export async function bootstrapAgent(): Promise<void> {
     controlAbort = null;
     expiryGuard.cancel();
     await Promise.all([runtime.emergencyStop().catch(() => undefined), paperScheduler.pause().catch(() => undefined),
-      liveRunner.pause().catch(() => undefined)]);
+      liveScheduler.pause().catch(() => undefined)]);
   };
   const expiryGuard = createPairingExpiryGuard({
     onExpired: () => stopForInvalidPairing("expired"),
@@ -230,7 +246,7 @@ export async function bootstrapAgent(): Promise<void> {
       const liveUnlock = createLiveUnlockService({ deployments, verifier: connectionVerifier,
         connection: connectionRegistry, market: publicMarket });
       deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler,
-        liveRunner, liveUnlock });
+        liveRunner: liveScheduler, liveUnlock });
       await deploymentInstaller.initialize();
     }
     const installer = deploymentInstaller;
@@ -346,7 +362,7 @@ export async function bootstrapAgent(): Promise<void> {
       return { paired: true, deviceId: paired.deviceId };
     },
     setStartAtLogin: (enabled) => login.set(enabled),
-    emergencyStop: async () => { await Promise.all([runtime.emergencyStop(), paperScheduler.pause(), liveRunner.pause()]); },
+    emergencyStop: async () => { await Promise.all([runtime.emergencyStop(), paperScheduler.pause(), liveScheduler.pause()]); },
   };
   const window = await startAgentShell(services);
   await ensureControlPlane().catch(() => undefined);

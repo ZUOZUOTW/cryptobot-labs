@@ -52,7 +52,7 @@ const candles=[{openTime:0,closeTime:3_599_999,open:"100",high:"101",low:"99",cl
   {openTime:3_600_000,closeTime:NOW-1,open:"98",high:"99",low:"97",close:"98",volume:"10",complete:true}];
 const marketSnapshot={candles,rules,collectedAt:NOW};
 const quote={market:"spot" as const,symbol:"BTCUSDT",bid:"97.9",ask:"98.1",last:"98",exchangeTimestamp:NOW-1,receivedAt:NOW};
-const evidence={observedAt:NOW,portfolio:{equity:"1000",dayStartEquity:"1000",availableEquity:"1000",utcDay:"1970-01-01"},
+const evidence={connectionVerifiedAt:NOW,observedAt:NOW,portfolio:{equity:"1000",dayStartEquity:"1000",availableEquity:"1000",utcDay:"1970-01-01"},
   risk:{market:"spot" as const,symbol:"BTCUSDT",now:NOW,priceTimestamp:NOW-1,lastSignalAt:null,openPositions:0,positionSide:"flat" as const,
     currentPositionQuantity:"0",currentPositionNotional:"0",totalExposure:"0",realizedDailyPnl:"0",unrealizedDailyPnl:"0",consecutiveFailures:0,leverage:"1"}};
 

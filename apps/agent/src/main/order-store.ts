@@ -69,7 +69,9 @@ async function write(storage: AsyncSafeStorage, file: VaultFileStore, orders: re
 }
 
 /** Encrypted, atomic OrderRepository shared by paper, demo, and live execution. */
-export function createDurableOrderRepository(storage: AsyncSafeStorage, file: VaultFileStore): OrderRepository {
+export function createDurableOrderRepository(storage: AsyncSafeStorage, file: VaultFileStore): OrderRepository & {
+  listForDeployment(deploymentId: string, symbol?: string): Promise<readonly TrackedOrder[]>;
+} {
   let tail: Promise<void> = Promise.resolve();
   const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = tail.then(operation, operation);
@@ -90,6 +92,15 @@ export function createDurableOrderRepository(storage: AsyncSafeStorage, file: Va
         }
         return (await read(storage, file)).orders.filter((order) => order.deploymentId === deploymentId &&
           (symbol === undefined || order.approvedIntent.symbol === symbol) && ACTIVE.has(order.status));
+      });
+    },
+    listForDeployment(deploymentId, symbol) {
+      return exclusive(async () => {
+        if (!ID.test(deploymentId) || (symbol !== undefined && (symbol.length < 3 || symbol.length > 64))) {
+          throw new TypeError("Invalid deployment order query");
+        }
+        return (await read(storage, file)).orders.filter((order) => order.deploymentId === deploymentId &&
+          (symbol === undefined || order.approvedIntent.symbol === symbol));
       });
     },
     claim(candidate): Promise<ProposalClaim> {

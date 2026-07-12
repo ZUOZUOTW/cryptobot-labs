@@ -28,7 +28,11 @@ export interface LiveRunRunnerOptions {
 }
 
 type LiveRuntime = ReturnType<typeof createLiveRuntime>;
-interface LiveSession { readonly manager: RunManager; readonly coordinator: LiveRuntime["coordinator"]; }
+interface LiveSession {
+  readonly manager: RunManager;
+  readonly coordinator: LiveRuntime["coordinator"];
+  readonly exchange: LiveRuntime["exchange"];
+}
 
 /** Owns one fail-closed live session; deployment activation remains a separate local gate. */
 export class LiveRunRunner {
@@ -78,6 +82,26 @@ export class LiveRunRunner {
     return this.#session?.manager.evaluate(request) ?? Promise.resolve({ status: "paused", reason: "inactive" });
   }
 
+  async reconcileActiveOrders(deploymentId: string, symbol: string): Promise<
+    | { readonly ready: true }
+    | { readonly ready: false; readonly reason: string }
+  > {
+    const session = this.#session;
+    if (!session) return { ready: false, reason: "live-runner-inactive" };
+    const active = await this.#options.repository.listActive(deploymentId, symbol);
+    for (const order of active) {
+      if (order.status === "proposed") continue;
+      const snapshot = await session.exchange.findByClientOrderId({ target: order.executionTarget,
+        symbol: order.approvedIntent.symbol, clientOrderId: order.clientOrderId,
+        exchangeOrderId: order.exchangeOrderId });
+      if (!snapshot) return { ready: false, reason: "live-order-unresolved" };
+      const result = reconcileOrder({ local: order, snapshot, at: Math.max(this.#timestamp(), order.updatedAt) });
+      if (result.resolution !== "resolved") return { ready: false, reason: "live-order-unresolved" };
+      if (result.state !== order) await this.#options.repository.save(result.state, order.version);
+    }
+    return { ready: true };
+  }
+
   async cancelOpenOrders(deploymentId: string): Promise<unknown> {
     if (!this.#session) throw new Error("Live runner is inactive");
     return this.#session.coordinator.cancelOpenOrders(deploymentId, this.#timestamp());
@@ -88,24 +112,12 @@ export class LiveRunRunner {
     const live = createLiveRuntime({ config, source: bundle.strategy.source,
       ...(bundle.strategy.source === null ? {} : { worker: this.#options.createStrategyWorker?.() ?? new StrategyWorker() }),
       repository: this.#options.repository, client: this.#options.client, audit: this.#options.runtimeAudit });
-    const reconciliation = { reconcileBeforeSubmit: async (input: { deploymentId: string; symbol: string }) => {
-      const active = await this.#options.repository.listActive(input.deploymentId, input.symbol);
-      for (const order of active) {
-        if (order.status === "proposed") continue;
-        const snapshot = await live.exchange.findByClientOrderId({ target: order.executionTarget,
-          symbol: order.approvedIntent.symbol, clientOrderId: order.clientOrderId,
-          exchangeOrderId: order.exchangeOrderId });
-        if (!snapshot) return { ready: false as const, reason: "live-order-unresolved" };
-        const result = reconcileOrder({ local: order, snapshot, at: Math.max(this.#timestamp(), order.updatedAt) });
-        if (result.resolution !== "resolved") return { ready: false as const, reason: "live-order-unresolved" };
-        if (result.state !== order) await this.#options.repository.save(result.state, order.version);
-      }
-      return { ready: true as const };
-    } };
+    const reconciliation = { reconcileBeforeSubmit: (input: { deploymentId: string; symbol: string }) =>
+      this.reconcileActiveOrders(input.deploymentId, input.symbol) };
     const manager = new RunManager({ runtime: live.runtime, market: this.#options.market, clock: this.#options.clock,
       connection: this.#options.connection, instruments: this.#options.instruments, reconciliation,
       circuitBreaker: live.circuitBreaker, audit: this.#options.runAudit });
-    return { manager, coordinator: live.coordinator };
+    return { manager, coordinator: live.coordinator, exchange: live.exchange };
   }
 
   #timestamp(): number {
