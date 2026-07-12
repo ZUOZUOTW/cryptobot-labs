@@ -6,6 +6,8 @@ dist/
 .vinext/
 .wrangler/
 coverage/
+apps/agent/.vite/
+apps/agent/out/
 tsconfig.tsbuildinfo
 package-lock.json
 .env*
