@@ -150,9 +150,13 @@ export class ExecutionRuntime {
     if (result.scriptHash !== deployment.scriptHash) {
       return this.#pause(deployment, request.now, "script-hash-mismatch");
     }
+    if (result.signal.action === "hold") {
+      await this.#auditSafely(deployment, request.now, "signal-discarded", result.signal.reason);
+      return { status: "discarded", reason: "hold" };
+    }
 
     try {
-      // This is the only path by which a sandbox signal can leave the runtime.
+      // This is the only path by which an executable sandbox signal can leave the runtime.
       const outcome = await this.#coordinator.propose(result.signal, request.context);
       if (!this.#isCurrent(deployment, epoch)) {
         await this.#auditSafely(deployment, request.now, "signal-discarded", "stale-proposal-result");

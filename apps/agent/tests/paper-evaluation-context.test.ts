@@ -36,4 +36,15 @@ describe("paper evaluation context", () => {
     expect(() => buildPaperEvaluationRequest({ bundle, market, quote: { ...quote, symbol: "ETHUSDT" }, account, signalSequence: 1 })).toThrow(/match/i);
     expect(() => buildPaperEvaluationRequest({ bundle, market, quote, account, signalSequence: 0 })).toThrow(/sequence/i);
   });
+
+  it("builds identical trusted evidence for a source-hash-fenced JavaScript deployment",()=>{
+    const source="export default () => ({action:'hold',reason:'test'})";
+    const custom={...bundle,strategy:{...bundle.strategy,source,sourceHash:"c".repeat(64),config:{...config,source}}};
+    expect(buildPaperEvaluationRequest({bundle:custom,market,quote,account,signalSequence:1})).toMatchObject({
+      context:{deploymentId:"dep-1",configurationVersion:"v2",mode:"paper"},
+      input:{market:"spot",symbol:"BTCUSDT",timeframe:"1h"},
+    });
+    expect(()=>buildPaperEvaluationRequest({bundle:{...custom,strategy:{...custom.strategy,source:"different"}},market,quote,account,signalSequence:1}))
+      .toThrow(/source/i);
+  });
 });

@@ -48,7 +48,7 @@ const context = {
 
 const signal: StrategySignal = {
   id: "signal-1",
-  action: "hold",
+  action: "buy",
   reason: "deterministic-test",
   createdAt: 1_000,
 };
@@ -151,7 +151,7 @@ describe("StrategyWorker", () => {
 });
 
 describe("ExecutionRuntime", () => {
-  it("passes every sandbox signal through ExecutionCoordinator.propose", async () => {
+  it("passes every executable sandbox signal through ExecutionCoordinator.propose", async () => {
     const { runtime, propose, candidate, audit } = setup();
 
     await expect(runtime.evaluate({ input, now: 1_000, randomSeed: "seed", context }))
@@ -169,6 +169,16 @@ describe("ExecutionRuntime", () => {
     expect(evaluate.mock.calls[0]?.[0]).not.toHaveProperty("credentials");
     expect(evaluate.mock.calls[0]?.[0]).not.toHaveProperty("exchange");
     expect(audit).toContainEqual(expect.objectContaining({ type: "signal-proposed" }));
+  });
+
+  it("records hold as a non-executable signal without pausing or proposing an order",async()=>{
+    const hold={...signal,action:"hold" as const};
+    const candidate=sandbox(vi.fn(async()=>({signal:hold,scriptHash:deployment.scriptHash,durationMs:1})));
+    const {runtime,propose,audit}=setup(candidate);
+    await expect(runtime.evaluate({input,now:1_000,randomSeed:"seed",context}))
+      .resolves.toEqual({status:"discarded",reason:"hold"});
+    expect(runtime.paused).toBe(false); expect(propose).not.toHaveBeenCalled();
+    expect(audit).toContainEqual(expect.objectContaining({type:"signal-discarded",reason:"deterministic-test"}));
   });
 
   it("rejects a configuration fence before sandbox evaluation", async () => {

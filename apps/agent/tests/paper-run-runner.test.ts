@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeploymentBundle } from "../src/main/deployment-client";
 import { ClockFreshnessGuard, MarketStreamState } from "../src/main/market-stream";
 import { PaperRunRunner } from "../src/main/paper-run-runner";
+import { StrategyWorker, type StrategySandboxLike } from "../src/runtime/strategy-worker";
 
 class MemoryRepository implements OrderRepository {
   readonly orders = new Map<string, TrackedOrder>();
@@ -56,5 +57,18 @@ describe("paper run runner", () => {
     await expect(runner.evaluate({ input, context, now: NOW, randomSeed: "seed" })).resolves.toMatchObject({ status: "proposed",
       outcome: { order: { status: "filled" } } });
     await runner.pause(); expect(runner.status).toBe("idle");
+  });
+
+  it("prepares a source-hash-fenced JavaScript deployment with a dedicated strategy worker",async()=>{
+    const source="export default () => ({action:'hold',reason:'test'})";
+    const custom={...bundle,strategy:{...bundle.strategy,source,sourceHash:"c".repeat(64),config:{...config,source}}};
+    const sandbox={evaluate:vi.fn(),dispose:vi.fn(async()=>undefined)} satisfies StrategySandboxLike;
+    const createStrategyWorker=vi.fn(()=>new StrategyWorker(async()=>sandbox,1_000));
+    const runner=new PaperRunRunner({repository:new MemoryRepository(),market:{requireFresh:vi.fn()},clock:{requireFresh:vi.fn()},
+      instruments:{requireFresh:vi.fn()},runtimeAudit:vi.fn(),runAudit:vi.fn(),createStrategyWorker,now:()=>NOW});
+    await runner.resume(custom);
+    expect(runner.status).toBe("running"); expect(createStrategyWorker).toHaveBeenCalledOnce();
+    await runner.pause(); expect(runner.status).toBe("idle");
+    expect(sandbox.dispose).not.toHaveBeenCalled();
   });
 });

@@ -12,11 +12,14 @@ import {
 } from "@cryptobot-labs/trading-core";
 
 import { VisualExecutionRuntime } from "../runtime/visual-execution-runtime";
-import type { RuntimeAuditEvent } from "../runtime/execution-runtime";
+import { ExecutionRuntime, type RuntimeAuditEvent } from "../runtime/execution-runtime";
+import { StrategyWorker } from "../runtime/strategy-worker";
 import { PaperExchange, type PaperExchangeOptions } from "./paper-exchange";
 
 export interface PaperRuntimeOptions {
   readonly config: VisualBotConfig;
+  readonly source?: string | null;
+  readonly worker?: StrategyWorker;
   readonly repository: OrderRepository;
   readonly exchange?: PaperExchange;
   readonly fill?: PaperExchangeOptions;
@@ -52,7 +55,9 @@ export function createPaperRuntime(options: PaperRuntimeOptions) {
   const coordinator = new ExecutionCoordinator({ normalizer: new SignalIntentNormalizer(), riskEvaluator: evaluateOrderRisk,
     repository: options.repository, exchange, circuitBreaker, failureClassifier: () => "unknown" });
   const fills = new PaperFillCoordinator(coordinator, options.repository, exchange);
-  const runtime = new VisualExecutionRuntime({ evaluator: createVisualStrategyEvaluator(options.config),
-    coordinator: fills, audit: options.audit });
+  const runtime = options.source === undefined || options.source === null
+    ? new VisualExecutionRuntime({ evaluator: createVisualStrategyEvaluator(options.config),
+      coordinator: fills, audit: options.audit })
+    : new ExecutionRuntime({ worker: options.worker ?? new StrategyWorker(), coordinator: fills, audit: options.audit });
   return Object.freeze({ runtime, coordinator, circuitBreaker, exchange });
 }

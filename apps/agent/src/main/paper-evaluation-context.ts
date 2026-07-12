@@ -30,9 +30,14 @@ export function buildPaperEvaluationRequest(input: {
 }): RunEvaluationRequest {
   positiveSequence(input.signalSequence);
   const risk = input.bundle.risk;
-  if (input.bundle.deployment.mode !== "paper" || risk === null || input.bundle.strategy.source !== null ||
-      input.bundle.strategy.config === null) throw new TypeError("Paper evaluation requires a visual paper deployment");
-  const evaluator = createVisualStrategyEvaluator(input.bundle.strategy.config as VisualBotConfig);
+  if (input.bundle.deployment.mode !== "paper" || risk === null ||
+      input.bundle.strategy.config === null) throw new TypeError("Paper evaluation requires a complete paper deployment");
+  const storedConfig = input.bundle.strategy.config as VisualBotConfig & { source?: unknown };
+  if ((input.bundle.strategy.source === null && storedConfig.source !== undefined)
+    || (input.bundle.strategy.source !== null && storedConfig.source !== input.bundle.strategy.source)) {
+    throw new TypeError("Paper strategy source does not match its configuration");
+  }
+  const evaluator = createVisualStrategyEvaluator({ ...storedConfig, source: undefined });
   const config = evaluator.config;
   const now = input.market.collectedAt;
   const candles = Object.freeze(input.market.candles.map((candle) => Object.freeze({ ...candle })));

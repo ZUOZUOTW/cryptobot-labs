@@ -6,6 +6,7 @@ import {
 } from "@cryptobot-labs/trading-core";
 
 import type { RuntimeAuditEvent } from "../runtime/execution-runtime";
+import { StrategyWorker } from "../runtime/strategy-worker";
 import type { DeploymentBundle } from "./deployment-client";
 import type { ClockFreshnessGuard, MarketStreamState } from "./market-stream";
 import { createPaperRuntime } from "./paper-runtime";
@@ -18,6 +19,7 @@ export interface PaperRunRunnerOptions {
   readonly instruments: { requireFresh(market: "spot" | "futures", symbol: string, now: number): Readonly<InstrumentRules> };
   readonly runtimeAudit: (event: RuntimeAuditEvent) => void | Promise<void>;
   readonly runAudit: (event: RunAuditEvent) => void | Promise<void>;
+  readonly createStrategyWorker?: () => StrategyWorker;
   readonly now?: () => number;
 }
 
@@ -41,14 +43,21 @@ export class PaperRunRunner {
 
   async resume(bundle: DeploymentBundle): Promise<void> {
     if (this.#transitioning || this.#session) throw new Error("Paper runner is already active");
-    if (bundle.deployment.mode !== "paper" || bundle.strategy.source !== null || bundle.strategy.config === null || bundle.risk === null) {
-      throw new Error("Paper runner requires a visual paper deployment");
+    if (bundle.deployment.mode !== "paper" || bundle.strategy.config === null || bundle.risk === null) {
+      throw new Error("Paper runner requires a complete paper deployment");
+    }
+    const configuredSource = (bundle.strategy.config as { source?: unknown }).source;
+    if ((bundle.strategy.source === null && configuredSource !== undefined)
+      || (bundle.strategy.source !== null && configuredSource !== bundle.strategy.source)) {
+      throw new Error("Paper runner strategy source is inconsistent");
     }
     this.#transitioning = true;
     try {
       const session = this.#createSession(bundle);
       session.manager.start({ deployment: { deploymentId: bundle.deployment.id,
-        configurationVersion: `v${bundle.deployment.version}`, scriptHash: bundle.strategy.configHash, source: "visual" },
+        configurationVersion: `v${bundle.deployment.version}`,
+        scriptHash: bundle.strategy.sourceHash ?? bundle.strategy.configHash,
+        source: bundle.strategy.source ?? "visual" },
       mode: "paper", market: bundle.strategy.market, symbol: bundle.strategy.symbol });
       this.#session = session;
     } finally { this.#transitioning = false; }
@@ -74,7 +83,9 @@ export class PaperRunRunner {
   }
 
   #createSession(bundle: DeploymentBundle): PaperSession {
-    const paper = createPaperRuntime({ config: bundle.strategy.config as VisualBotConfig,
+    const config = { ...(bundle.strategy.config as VisualBotConfig), source: undefined };
+    const paper = createPaperRuntime({ config, source: bundle.strategy.source,
+      ...(bundle.strategy.source === null ? {} : { worker: this.#options.createStrategyWorker?.() ?? new StrategyWorker() }),
       repository: this.#options.repository, audit: this.#options.runtimeAudit });
     const reconciliation = { reconcileBeforeSubmit: async (input: { deploymentId: string; symbol: string }) => {
       const active = await this.#options.repository.listActive(input.deploymentId, input.symbol);
