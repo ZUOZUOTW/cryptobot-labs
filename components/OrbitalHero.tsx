@@ -11,7 +11,7 @@ export function OrbitalHero() {
           WEEX API · 推薦
         </span>
         <p className="eyebrow">AUTOMATED STRATEGY LAB / 01</p>
-        <h1 id="orbital-hero-title">把交易想法，<br />組裝成你的機器人。</h1>
+        <h1 id="orbital-hero-title">把交易想法，組裝成你的機器人。</h1>
         <p className="orbital-hero__lead">
           從 10 組經典策略開始，組合交易條件、調整風控，用可重現的模擬回測理解每一個決策。
         </p>

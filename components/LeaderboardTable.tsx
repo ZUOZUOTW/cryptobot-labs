@@ -172,6 +172,7 @@ export function LeaderboardTable() {
           {podium.map((bot, index) => (
             <article className="podium-card glass-panel" data-rank={index + 1} key={bot.id}>
               <span className="podium-card__rank" aria-label={`第 ${index + 1} 名`}>0{index + 1}</span>
+              <img alt="" aria-hidden="true" className="podium-card__mascot" height="180" src={index === 0 ? "/mascots/ai-guardian.png" : index === 1 ? "/mascots/ai-observer.png" : "/mascots/ai-builder.png"} width="200" />
               <div>
                 <p className="eyebrow">{bot.exchange} / {bot.symbol}</p>
                 <h3><Link href={`/bots/${bot.id}`}>{bot.name}</Link></h3>

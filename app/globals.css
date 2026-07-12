@@ -1793,3 +1793,233 @@ body {
   .route-companion__signal,
   .bot-card__mascot { animation: none !important; }
 }
+
+/* Readability, animated trend lines, and showcase surfaces */
+.site-nav__link { font-size: 0.9rem; }
+.exchange-badge { font-size: 0.76rem; }
+.eyebrow { font-size: 0.76rem; }
+.simulation-disclosure { font-size: 0.76rem; line-height: 1.6; }
+.button { font-size: 0.88rem; }
+
+.orbital-hero { grid-template-columns: minmax(35rem, 1fr) minmax(32rem, 1fr); }
+.orbital-hero__copy { max-width: 48rem; }
+.orbital-hero h1 {
+  max-width: 14ch;
+  font-size: clamp(3.5rem, 5.25vw, 5.75rem);
+  line-height: 1.05;
+  text-wrap: balance;
+}
+.orbital-hero__lead { max-width: 42rem; font-size: 1.1rem; }
+.page-intro h1 { max-width: 16ch; font-size: clamp(3.2rem, 5.1vw, 5.25rem); line-height: 1.05; text-wrap: balance; }
+.page-intro h1 br { display: none; }
+
+.catalog-controls label { font-size: 0.82rem; }
+.catalog-controls select { font-size: 0.92rem; }
+.catalog-summary { font-size: 0.88rem; }
+.bot-card h3 { font-size: 1.42rem; }
+.bot-card__description { font-size: 0.94rem; }
+.risk-badge,
+.market-badge,
+.strategy-tag { font-size: 0.75rem; }
+.bot-card__metrics dt { font-size: 0.75rem; }
+.bot-card__metrics dd { font-size: 0.92rem; }
+.catalog-page .bot-card__actions .button { font-size: 0.78rem; }
+
+.performance-chart { --chart-profit: #63f2ae; --chart-loss: #ff6f69; }
+.performance-chart::before { display: none; }
+.performance-chart__caption { position: relative; z-index: 2; font-size: 0.8rem; }
+.performance-chart__caption strong { color: var(--chart-profit); font-size: 0.86rem; }
+.performance-chart[data-result="loss"] .performance-chart__caption strong { color: var(--chart-loss); }
+.performance-chart__plot { position: relative; height: 9.4rem; display: block; margin-top: 0.75rem; padding: 0; }
+.performance-chart__svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.performance-chart__gridline { stroke: rgb(135 161 199 / 12%); stroke-width: 1; }
+.performance-chart__area { fill: rgb(99 242 174 / 7%); }
+.performance-chart[data-result="loss"] .performance-chart__area { fill: rgb(255 111 105 / 7%); }
+.performance-chart__segment {
+  stroke: var(--chart-profit);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  filter: drop-shadow(0 0 7px rgb(99 242 174 / 45%));
+  animation: trend-line-draw 620ms cubic-bezier(.2,.8,.2,1) forwards;
+  animation-delay: calc(var(--segment-index) * 55ms);
+}
+.performance-chart__segment[data-direction="loss"] { stroke: var(--chart-loss); filter: drop-shadow(0 0 7px rgb(255 111 105 / 45%)); }
+.performance-chart__dot { fill: #06111f; stroke: var(--chart-profit); stroke-width: 3; }
+.performance-chart__dot[data-direction="loss"] { stroke: var(--chart-loss); }
+.performance-chart__dot:last-of-type { animation: trend-dot-pulse 1.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.bot-card .performance-chart__plot { height: 6.5rem; margin-top: 0.55rem; }
+.bot-card .performance-chart__caption { font-size: 0.74rem; }
+.catalog-page .bot-card { grid-template-columns: minmax(20rem, 1.05fr) minmax(24rem, 1.55fr) minmax(9rem, 0.55fr) minmax(12rem, 0.72fr); }
+.catalog-page .bot-card h3 { white-space: nowrap; }
+
+.route-companion--builder { top: -1.6rem; width: clamp(26rem, 31vw, 32rem); }
+.route-companion--builder::before,
+.route-companion--builder::after {
+  position: absolute;
+  z-index: 1;
+  content: "";
+  pointer-events: none;
+}
+.route-companion--builder::before {
+  inset: 8% -5% 12%;
+  border: 1px solid rgb(73 216 255 / 26%);
+  border-radius: 46% 54% 48% 52%;
+  box-shadow: inset 0 0 4rem rgb(69 119 255 / 12%), 0 0 3rem rgb(152 120 255 / 12%);
+  animation: workshop-frame-spin 11s linear infinite;
+}
+.route-companion--builder::after {
+  right: 4%;
+  bottom: 14%;
+  left: 4%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan), var(--violet), transparent);
+  box-shadow: 0 0 1.2rem rgb(73 216 255 / 70%);
+  animation: workshop-scan 2.4s ease-in-out infinite;
+}
+.route-companion--builder .route-companion__halo {
+  inset: 4% 0 9%;
+  border-color: rgb(152 120 255 / 38%);
+  box-shadow: inset 0 0 6rem rgb(73 216 255 / 13%), 0 0 4rem rgb(152 120 255 / 14%);
+}
+.route-companion--builder .route-companion__image { filter: drop-shadow(0 2rem 2.7rem rgb(62 124 255 / 40%)); }
+.route-companion--builder .route-companion__status {
+  top: 3rem;
+  right: auto;
+  bottom: auto;
+  left: 0;
+}
+.route-companion__workshop-readout {
+  position: absolute;
+  z-index: 5;
+  right: 1%;
+  bottom: 2%;
+  left: 1%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+.route-companion__workshop-readout span {
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgb(73 216 255 / 25%);
+  border-radius: 0.65rem;
+  background: rgb(3 12 26 / 80%);
+  color: #aeeeff;
+  font: 0.62rem/1 var(--font-geist-mono), monospace;
+  letter-spacing: 0.08em;
+  text-align: center;
+  box-shadow: inset 0 0 1rem rgb(73 216 255 / 6%);
+  animation: workshop-readout 2.7s ease-in-out infinite;
+}
+.route-companion__workshop-readout span:nth-child(2) { animation-delay: -0.9s; color: #c6b7ff; }
+.route-companion__workshop-readout span:nth-child(3) { animation-delay: -1.8s; color: var(--mint); }
+.workshop-page__intro { max-width: 66rem; min-height: 17rem; }
+.workshop-page__intro h1 { max-width: 18ch; font-size: clamp(3.4rem, 5vw, 5.3rem); line-height: 1.05; text-wrap: balance; }
+.workshop-page p { font-size: 0.92rem; }
+.workshop-page small { font-size: 0.78rem; }
+.workshop-page label,
+.workshop-page dt { font-size: 0.8rem; }
+.workshop-page dd,
+.workshop-page li { font-size: 0.88rem; }
+.workshop-page button,
+.workshop-page input,
+.workshop-page select,
+.workshop-page textarea { font-size: 0.88rem; }
+.workshop-panel__heading .eyebrow { font-size: 0.75rem; }
+.workshop-panel__heading h2 { font-size: clamp(1.65rem, 2.6vw, 2.35rem); }
+.strategy-option strong { font-size: 0.92rem; }
+.strategy-option p { font-size: 0.82rem; }
+.strategy-summary ol li { font-size: 0.88rem; }
+.market-controls label > span,
+.parameter-row__label label,
+.parameter-row__label span { font-size: 0.8rem; }
+
+.leaderboard-page { padding-top: 4.5rem; }
+.leaderboard-page__intro { min-height: 13rem; max-width: 54rem; }
+.leaderboard-page__intro h1 { font-size: clamp(3.7rem, 5.4vw, 5.7rem); }
+.leaderboard-page__intro > p:not(.eyebrow, .simulation-disclosure) { max-width: 48rem; font-size: 1.08rem; }
+.leaderboard-experience { gap: clamp(3rem, 5vw, 4.8rem); margin-top: 0.5rem; }
+.leaderboard-controls legend,
+.leaderboard-controls label > span { font-size: 0.82rem; }
+.leaderboard-controls select,
+.period-switcher__button { font-size: 0.9rem; }
+.leaderboard-controls__status { max-width: 16rem; font-size: 0.8rem; }
+.leaderboard-section .section-heading h2 { font-size: clamp(2.4rem, 4vw, 4rem); }
+.podium-grid { gap: 1.15rem; perspective: 900px; }
+.podium-card { min-height: 21rem; padding: 1.5rem; border-color: rgb(119 162 224 / 28%); }
+.podium-card[data-rank="1"] { order: 2; min-height: 23.5rem; border-color: rgb(100 239 189 / 50%); transform: translateY(-1rem); }
+.podium-card[data-rank="2"] { order: 1; }
+.podium-card[data-rank="3"] { order: 3; }
+.podium-card::after {
+  position: absolute;
+  inset: -30% auto -30% -35%;
+  width: 35%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 12%), transparent);
+  content: "";
+  transform: skewX(-18deg);
+  animation: podium-shine 5.4s ease-in-out infinite;
+}
+.podium-card__rank { z-index: 3; font-size: 2.8rem; font-weight: 760; opacity: 0.82; }
+.podium-card__mascot {
+  position: absolute;
+  z-index: 2;
+  top: 1.6rem;
+  right: 0.8rem;
+  width: 11rem;
+  height: 10rem;
+  object-fit: contain;
+  filter: drop-shadow(0 1rem 1.8rem rgb(73 142 255 / 30%));
+  animation: mascot-float 4.2s ease-in-out infinite;
+}
+.podium-card h3 { max-width: 12rem; font-size: clamp(1.65rem, 2.4vw, 2.25rem); }
+.podium-card dt { font-size: 0.78rem; }
+.podium-card dd { font-size: 1.3rem; }
+.comparison-bars li > a { font-size: 0.92rem; }
+.comparison-bars__rank,
+.comparison-bars strong { font-size: 0.84rem; }
+.leaderboard-table th,
+.leaderboard-table td { font-size: 0.86rem; }
+.leaderboard-table tbody th small { font-size: 0.74rem; }
+.risk-return-panel__axis { font-size: 0.72rem; }
+.risk-return-panel__point strong { font-size: 0.7rem; }
+.route-companion--ranking { width: clamp(22rem, 27vw, 28rem); }
+
+@keyframes trend-line-draw { to { stroke-dashoffset: 0; } }
+@keyframes trend-dot-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.65); } }
+@keyframes workshop-frame-spin { to { transform: rotate(360deg); } }
+@keyframes workshop-scan { 0%, 100% { opacity: 0.3; transform: translateY(-3.2rem); } 50% { opacity: 1; transform: translateY(3.2rem); } }
+@keyframes workshop-readout { 0%, 100% { opacity: 0.52; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-0.2rem); } }
+@keyframes podium-shine { 0%, 68% { transform: translateX(0) skewX(-18deg); opacity: 0; } 78% { opacity: 1; } 100% { transform: translateX(38rem) skewX(-18deg); opacity: 0; } }
+
+@media (max-width: 72rem) {
+  .orbital-hero { grid-template-columns: 1fr 1fr; }
+  .orbital-hero h1 { font-size: clamp(3.2rem, 6.4vw, 5.2rem); }
+  .route-companion--builder { width: 23rem; }
+  .podium-card__mascot { width: 8rem; opacity: 0.78; }
+}
+
+@media (max-width: 52rem) {
+  .orbital-hero { grid-template-columns: 1fr; }
+  .orbital-hero h1 { max-width: 11ch; font-size: clamp(2.9rem, 12vw, 4.2rem); }
+  .page-intro h1,
+  .workshop-page__intro h1,
+  .leaderboard-page__intro h1 { font-size: clamp(2.7rem, 11vw, 4rem); }
+  .route-companion__workshop-readout { display: none; }
+  .catalog-page .bot-card { grid-template-columns: 1fr; }
+  .catalog-page .bot-card h3 { white-space: normal; }
+  .podium-card[data-rank="1"],
+  .podium-card[data-rank="2"],
+  .podium-card[data-rank="3"] { order: initial; min-height: 18rem; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .performance-chart__segment,
+  .performance-chart__dot,
+  .route-companion--builder::before,
+  .route-companion--builder::after,
+  .route-companion__workshop-readout span,
+  .podium-card::after,
+  .podium-card__mascot { animation: none !important; }
+  .performance-chart__segment { stroke-dashoffset: 0; }
+}

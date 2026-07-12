@@ -12,7 +12,7 @@ type CompanionTheme = {
 const resolveTheme = (pathname: string): CompanionTheme | null => {
   if (pathname === "/") return null;
   if (pathname.startsWith("/workshop")) return { image: "/mascots/ai-builder.png", label: "策略組裝中", detail: "AI LOGIC BUILDER", mode: "builder" };
-  if (pathname.startsWith("/leaderboard")) return { image: "/mascots/ai-guardian.png", label: "排名分析中", detail: "RISK-ADJUSTED AI", mode: "ranking" };
+  if (pathname.startsWith("/leaderboard")) return { image: "/mascots/ai-observer.png", label: "排名分析中", detail: "RISK-ADJUSTED AI", mode: "ranking" };
   if (pathname.startsWith("/connections")) return { image: "/mascots/ai-guardian.png", label: "連線守護中", detail: "LOCAL-FIRST SHIELD", mode: "connection" };
   if (pathname.startsWith("/runs")) return { image: "/mascots/ai-guardian.png", label: "風險監測中", detail: "LIVE SAFETY WATCH", mode: "run" };
   if (pathname.startsWith("/activity")) return { image: "/mascots/ai-observer.png", label: "軌跡核對中", detail: "AUDIT SIGNAL TRACE", mode: "activity" };
@@ -31,6 +31,11 @@ export function RouteCompanion() {
       <div className="route-companion__halo" aria-hidden="true" />
       <div className="route-companion__signal route-companion__signal--one" aria-hidden="true">BTC</div>
       <div className="route-companion__signal route-companion__signal--two" aria-hidden="true">AI</div>
+      {theme.mode === "builder" && (
+        <div className="route-companion__workshop-readout" aria-hidden="true">
+          <span>01 SIGNAL</span><span>02 MODEL</span><span>03 RISK</span>
+        </div>
+      )}
       <img alt="親切可愛的 CryptoBot AI 導航機器人" className="route-companion__image" height="360" src={theme.image} width="420" />
       <div className="route-companion__status">
         <span aria-hidden="true" />

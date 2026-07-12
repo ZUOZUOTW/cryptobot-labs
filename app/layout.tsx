@@ -12,6 +12,7 @@ import {
 } from "@/lib/site-metadata";
 import "./globals.css";
 import "./workshop.css";
+import "./observatory-polish.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
