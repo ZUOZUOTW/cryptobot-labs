@@ -10,6 +10,12 @@ import { createDeviceIdentityVault } from "./device-identity";
 import { createStartAtLoginController } from "./login-item";
 import { createPairingClient } from "./pairing-client";
 import { createPairingExpiryGuard } from "./pairing-expiry";
+import { ClockFreshnessGuard, MarketStreamState } from "./market-stream";
+import { createDurableOrderRepository } from "./order-store";
+import { DurablePaperAccount } from "./paper-account";
+import { PaperRunRunner } from "./paper-run-runner";
+import { PaperScheduler } from "./paper-scheduler";
+import { InstrumentRuleState, PublicMarketService } from "./public-market-service";
 import { createRuntimeSupervisor } from "./runtime-supervisor";
 import { createDurableRunStore, createNodeRunFileStore } from "./run-store";
 import { createNodeTelemetryFileStore, createTelemetryBuffer } from "./telemetry-buffer";
@@ -75,6 +81,58 @@ export async function bootstrapAgent(): Promise<void> {
     osStorage,
     createNodeTelemetryFileStore(join(app.getPath("userData"), "telemetry", "events.bin")),
   );
+  const marketState = new MarketStreamState();
+  const clockState = new ClockFreshnessGuard();
+  const instrumentState = new InstrumentRuleState();
+  const publicMarket = new PublicMarketService({ market: marketState, clock: clockState, instruments: instrumentState });
+  const orderRepository = createDurableOrderRepository(
+    osStorage,
+    createNodeVaultFileStore(join(vaultDirectory, "orders.bin")),
+  );
+  const enqueueTelemetrySafely = async (event: Parameters<typeof telemetry.enqueue>[0], priority: "normal" | "high" = "normal") => {
+    try { await telemetry.enqueue(event, { priority }); }
+    catch (error) { if (!(error instanceof Error) || !/ID collision/i.test(error.message)) throw error; }
+  };
+  const paperRunner = new PaperRunRunner({
+    repository: orderRepository,
+    market: marketState,
+    clock: clockState,
+    instruments: instrumentState,
+    runtimeAudit: async (event) => {
+      if (event.type !== "strategy-paused") return;
+      const version = Number(event.configurationVersion.replace(/^v/, ""));
+      if (!Number.isSafeInteger(version) || version < 1) return;
+      const occurredAt = event.at > 0 ? event.at : Date.now();
+      const id = `runtime-${createHash("sha256").update(`${event.deploymentId}:${event.type}:${occurredAt}`).digest("hex").slice(0, 48)}`;
+      await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: event.deploymentId,
+        expectedDeploymentVersion: version, correlationId: id, occurredAt,
+        payload: { state: "paused", reason: event.reason } }, "high");
+    },
+    runAudit: async (event) => {
+      if (event.type === "evaluation-complete") return;
+      const restored = await runStore.restore();
+      if (!restored || restored.definition.deploymentId !== event.deploymentId) return;
+      const version = Number(restored.definition.configurationVersion.replace(/^v/, ""));
+      if (!Number.isSafeInteger(version) || version < 1) return;
+      const occurredAt = event.at > 0 ? event.at : Date.now();
+      const state = event.type === "run-stopped" ? "stopped" : event.type === "run-started" ? "running" : "paused";
+      const id = `run-${createHash("sha256").update(`${event.deploymentId}:${event.type}:${occurredAt}`).digest("hex").slice(0, 48)}`;
+      await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: event.deploymentId,
+        expectedDeploymentVersion: version, correlationId: id, occurredAt, payload: { state, reason: event.reason } });
+    },
+  });
+  const paperScheduler = new PaperScheduler({ collector: publicMarket, market: marketState,
+    account: (deploymentId) => new DurablePaperAccount(osStorage,
+      createNodeVaultFileStore(join(vaultDirectory, "paper-accounts", `${deploymentId}.bin`))),
+    runner: paperRunner,
+    onFault: async (reason, bundle) => {
+      const occurredAt = Date.now();
+      const id = `paper-fault-${createHash("sha256").update(`${bundle.deployment.id}:${reason}:${occurredAt}`).digest("hex").slice(0, 40)}`;
+      await enqueueTelemetrySafely({ version: 1, id, type: "agent-error", deploymentId: bundle.deployment.id,
+        expectedDeploymentVersion: bundle.deployment.version, correlationId: id, occurredAt,
+        payload: { code: reason, message: "Paper evaluation paused locally", retryable: true } }, "high");
+    },
+  });
   const runtime = createRuntimeSupervisor({
     fork: () => {
       const child = utilityProcess.fork(join(currentDirectory, "runtime.cjs"));
@@ -108,7 +166,7 @@ export async function bootstrapAgent(): Promise<void> {
     controlAbort?.abort();
     controlAbort = null;
     expiryGuard.cancel();
-    await runtime.emergencyStop().catch(() => undefined);
+    await Promise.all([runtime.emergencyStop().catch(() => undefined), paperScheduler.pause().catch(() => undefined)]);
   };
   const expiryGuard = createPairingExpiryGuard({
     onExpired: () => stopForInvalidPairing("expired"),
@@ -152,7 +210,7 @@ export async function bootstrapAgent(): Promise<void> {
         },
         onRevoked: () => stopForInvalidPairing("revoked"),
       });
-      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore });
+      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler });
       await deploymentInstaller.initialize();
     }
     const installer = deploymentInstaller;
@@ -268,7 +326,7 @@ export async function bootstrapAgent(): Promise<void> {
       return { paired: true, deviceId: paired.deviceId };
     },
     setStartAtLogin: (enabled) => login.set(enabled),
-    emergencyStop: () => runtime.emergencyStop(),
+    emergencyStop: async () => { await Promise.all([runtime.emergencyStop(), paperScheduler.pause()]); },
   };
   const window = await startAgentShell(services);
   await ensureControlPlane().catch(() => undefined);

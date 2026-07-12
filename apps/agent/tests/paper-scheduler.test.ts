@@ -30,7 +30,7 @@ describe("paper scheduler", () => {
     const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined),
       evaluate: vi.fn(async () => ({ status: "discarded" as const, reason: "hold" as const })) };
     let scheduled: (() => void) | null = null;
-    const scheduler = new PaperScheduler({ collector, market, account, runner, onFault: vi.fn(),
+    const scheduler = new PaperScheduler({ collector, market, account: () => account, runner, onFault: vi.fn(),
       schedule: (work) => { scheduled = work; return 1; }, cancel: vi.fn() });
     await scheduler.resume(bundle); expect(runner.evaluate).not.toHaveBeenCalled();
     await scheduler.activate(); expect(runner.evaluate).toHaveBeenCalledOnce(); expect(account.completeEvaluation).toHaveBeenCalledOnce();

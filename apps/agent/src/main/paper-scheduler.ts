@@ -10,9 +10,9 @@ import type { PaperRunRunner } from "./paper-run-runner";
 export interface PaperSchedulerOptions {
   readonly collector: Pick<PublicMarketService, "collect">;
   readonly market: Pick<MarketStreamState, "requireFresh">;
-  readonly account: Pick<DurablePaperAccount, "initialize" | "mark" | "snapshot" | "applyFill" | "evaluationCursor" | "completeEvaluation">;
+  readonly account: (deploymentId: string) => Pick<DurablePaperAccount, "initialize" | "mark" | "snapshot" | "applyFill" | "evaluationCursor" | "completeEvaluation">;
   readonly runner: Pick<PaperRunRunner, "resume" | "pause" | "evaluate">;
-  readonly onFault: (reason: string) => void | Promise<void>;
+  readonly onFault: (reason: string, bundle: DeploymentBundle) => void | Promise<void>;
   readonly now?: () => number;
   readonly schedule?: (work: () => void, delayMs: number) => unknown;
   readonly cancel?: (handle: unknown) => void;
@@ -22,6 +22,7 @@ export interface PaperSchedulerOptions {
 export class PaperScheduler {
   readonly #options: PaperSchedulerOptions;
   #bundle: DeploymentBundle | null = null;
+  #account: ReturnType<PaperSchedulerOptions["account"]> | null = null;
   #active = false;
   #busy = false;
   #timer: unknown = null;
@@ -32,9 +33,10 @@ export class PaperScheduler {
     if (this.#bundle || bundle.deployment.mode !== "paper" || bundle.risk === null || bundle.strategy.config === null) {
       throw new Error("Paper scheduler cannot prepare this deployment");
     }
-    await this.#options.account.initialize({ deploymentId: bundle.deployment.id, market: bundle.strategy.market,
+    const account = this.#options.account(bundle.deployment.id);
+    await account.initialize({ deploymentId: bundle.deployment.id, market: bundle.strategy.market,
       symbol: bundle.strategy.symbol, initialEquity: bundle.risk.maxTotalExposure, now: (this.#options.now ?? Date.now)() });
-    await this.#options.runner.resume(bundle); this.#bundle = bundle;
+    await this.#options.runner.resume(bundle); this.#account = account; this.#bundle = bundle;
   }
 
   async activate(): Promise<void> {
@@ -47,29 +49,29 @@ export class PaperScheduler {
   async pause(): Promise<void> {
     this.#active = false;
     this.#cancelTimer();
-    await this.#options.runner.pause(); this.#bundle = null;
+    await this.#options.runner.pause(); this.#bundle = null; this.#account = null;
   }
 
   async #tick(): Promise<void> {
-    const bundle = this.#bundle;
-    if (!this.#active || !bundle || this.#busy) return;
+    const bundle = this.#bundle, account = this.#account;
+    if (!this.#active || !bundle || !account || this.#busy) return;
     this.#busy = true;
     try {
       const snapshot: PublicMarketSnapshot = await this.#options.collector.collect({ market: bundle.strategy.market,
         symbol: bundle.strategy.symbol, timeframe: (bundle.strategy.config as { timeframe?: unknown }).timeframe as string });
       const latest = snapshot.candles.at(-1); if (!latest) throw new Error("Paper market snapshot has no candle");
-      const cursor = await this.#options.account.evaluationCursor();
+      const cursor = await account.evaluationCursor();
       if (cursor.lastEvaluatedCloseTime !== null && latest.closeTime <= cursor.lastEvaluatedCloseTime) return;
       const quote = this.#options.market.requireFresh(bundle.strategy.market, bundle.strategy.symbol, snapshot.collectedAt, 60_000);
-      await this.#options.account.mark(quote.last, snapshot.collectedAt);
-      const account = await this.#options.account.snapshot(String((bundle.strategy.config as { leverage?: unknown }).leverage));
-      const request = buildPaperEvaluationRequest({ bundle, market: snapshot, quote, account,
+      await account.mark(quote.last, snapshot.collectedAt);
+      const accountSnapshot = await account.snapshot(String((bundle.strategy.config as { leverage?: unknown }).leverage));
+      const request = buildPaperEvaluationRequest({ bundle, market: snapshot, quote, account: accountSnapshot,
         signalSequence: cursor.nextSignalSequence });
       const result = await this.#options.runner.evaluate(request);
       const signaled = result.status === "proposed";
       if (result.status === "proposed" && (result.outcome.status === "submitted" || result.outcome.status === "idempotent") &&
-          result.outcome.order.status === "filled") await this.#options.account.applyFill(result.outcome.order, snapshot.collectedAt);
-      await this.#options.account.completeEvaluation({ closeTime: latest.closeTime, at: snapshot.collectedAt,
+          result.outcome.order.status === "filled") await account.applyFill(result.outcome.order, snapshot.collectedAt);
+      await account.completeEvaluation({ closeTime: latest.closeTime, at: snapshot.collectedAt,
         signaled, failed: result.status === "paused" });
     } finally { this.#busy = false; }
   }
@@ -83,10 +85,11 @@ export class PaperScheduler {
   }
 
   async #fault(reason: string): Promise<void> {
+    const bundle = this.#bundle;
     this.#active = false;
     this.#cancelTimer();
     await this.#options.runner.pause().catch(() => undefined);
-    await this.#options.onFault(reason);
+    if (bundle) await this.#options.onFault(reason, bundle);
   }
 
   #cancelTimer(): void {
