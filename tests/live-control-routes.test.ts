@@ -25,10 +25,13 @@ describe("run control service",()=>{
   it("creates every new run in paper mode",async()=>{
     const deployments={create:vi.fn().mockImplementation(async(input)=>({deployment:{...deployment,id:input.id,mode:input.mode,name:input.name},risk:{...risk,id:input.risk.id,deploymentId:input.id}})),getForUser:vi.fn(),getRiskForUser:vi.fn().mockResolvedValue(risk),listForUser:vi.fn()};
     const getEvidenceForUser=vi.fn().mockResolvedValue({health:null,positions:[],openOrders:[],pnl:null,heartbeatOccurredAt:null,heartbeatExpectedDeploymentVersion:null,lastSignal:null,riskBlocks:[]});
-    const service=createRunService({deployments:deployments as never,liveData:{getEvidenceForUser,getMarketForUser:vi.fn().mockResolvedValue("futures"),getConnectionForUser:vi.fn()} as never,commands:{enqueue:vi.fn()} as never,now:()=>400_000});
+    const enqueue=vi.fn().mockResolvedValue({command:{id:"cmd_deploy",deploymentId:"run_1",type:"deploy",version:1,correlationId:"request-1",expectedDeploymentVersion:3,status:"pending",createdAt:400_000,expiresAt:86_800_000},idempotent:false});
+    const service=createRunService({deployments:deployments as never,liveData:{getEvidenceForUser,getMarketForUser:vi.fn().mockResolvedValue("futures"),getConnectionForUser:vi.fn()} as never,commands:{enqueue} as never,now:()=>400_000});
     const created=await service.create("usr_1","request-1",{deviceId:"dev_1",strategyVersionId:"sv_1",botName:"Orbit",configurationHash:"a".repeat(64),riskPolicy:{allowedSymbols:["BTCUSDT"],maxOrderNotional:"100",maxPositionNotional:"500",maxTotalExposure:"1000",maxSimultaneousPositions:2,maxDailyLoss:"50",maxLeverage:"3",maxSlippageBps:30,minSignalCooldownMs:0,maxConsecutiveFailures:3,operationMode:"approval-required"}});
     expect(deployments.create).toHaveBeenCalledWith(expect.objectContaining({mode:"paper"}));
     expect(created.run).toMatchObject({market:"futures",pnl:null,evidence:{heartbeatOccurredAt:null,heartbeatExpectedDeploymentVersion:null,pnlSource:null}});
+    expect(created.deploymentCommand).toMatchObject({type:"deploy",expectedDeploymentVersion:3});
+    expect(enqueue).toHaveBeenCalledWith("usr_1",{id:null,deploymentId:created.run.id,type:"deploy",version:1,correlationId:"request-1",expectedDeploymentVersion:3,payload:{configurationHash:"a".repeat(64),mode:"paper"},expiresAt:86_800_000});
     expect(getEvidenceForUser).toHaveBeenCalledWith("usr_1",created.run.id,3);
   });
 
