@@ -145,6 +145,27 @@ describe("deployment, risk, and command repositories", () => {
     expect((await commands.pollForDevice("dev_a", { now: 251, limit: 10 })).items).toEqual([]);
   });
 
+  it("changes paper to live paused only in the successful live-unlock acknowledgement transaction", async () => {
+    await create();
+    const command = (id: string, correlationId: string) => ({ id, userId: "usr_a", deploymentId: "dep_a",
+      type: "request-live-unlock" as const, version: 1, correlationId, expectedDeploymentVersion: 1,
+      payload: {}, now: 200, expiresAt: 500 });
+    await commands.enqueue(command("cmd_rejected", "corr_rejected"));
+    await commands.ack({ id: "ack_rejected", deviceId: "dev_a", commandId: "cmd_rejected", deploymentId: "dep_a",
+      expectedDeploymentVersion: 1, status: "rejected", payload: { applied: false }, now: 250 });
+    expect(await deployments.getForUser("usr_a", "dep_a")).toMatchObject({ mode: "paper", state: "stopped", version: 1 });
+    await commands.enqueue(command("cmd_live", "corr_live"));
+    const acknowledged = await commands.ack({ id: "ack_live", deviceId: "dev_a", commandId: "cmd_live",
+      deploymentId: "dep_a", expectedDeploymentVersion: 1, status: "ok", payload: { applied: true }, now: 260 });
+    expect(acknowledged).toMatchObject({ idempotent: false });
+    expect(await deployments.getForUser("usr_a", "dep_a")).toMatchObject({
+      mode: "live", state: "paused", version: 1, updatedAt: 260,
+    });
+    await expect(commands.ack({ id: "ack_live_retry", deviceId: "dev_a", commandId: "cmd_live",
+      deploymentId: "dep_a", expectedDeploymentVersion: 1, status: "ok", payload: { applied: true }, now: 270 }))
+      .resolves.toMatchObject({ idempotent: true });
+  });
+
   it("accepts a bounded late durable outcome against the original command fence", async () => {
     await create();
     const base = { userId: "usr_a", deploymentId: "dep_a", type: "pause" as const, version: 1,

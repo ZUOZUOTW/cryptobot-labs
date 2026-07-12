@@ -10,6 +10,9 @@ export interface DeploymentInstallerDependencies {
     activate?(): Promise<void>;
     pause(): Promise<void>;
   };
+  readonly liveUnlock?: {
+    prepare(command: ControlCommand & { type: "request-live-unlock" }): Promise<DurableRunRecord["definition"]>;
+  };
   readonly now?: () => number;
 }
 
@@ -52,6 +55,9 @@ export class DeploymentInstaller {
     await this.initialize();
     if (command.type === "resume-paper") return this.#resume(command);
     if (command.type === "pause") return this.#pause(command);
+    if (command.type === "request-live-unlock") {
+      return this.#unlock(command as ControlCommand & { type: "request-live-unlock" });
+    }
     if (command.type !== "deploy") return { status: "rejected", code: "command_not_ready" };
     const payload = command.payload;
     if (payload.mode !== "paper" || typeof payload.configurationHash !== "string") {
@@ -146,6 +152,31 @@ export class DeploymentInstaller {
     this.#record = await this.#dependencies.store.save({ definition: record.definition, status: "paused",
       pausedReason: "operator-paused", ambiguousOrder: record.ambiguousOrder, updatedAt: this.#timestamp() }, record.recordVersion);
     return { status: "ok", code: "paused" };
+  }
+
+  async #unlock(command: ControlCommand & { type: "request-live-unlock" }): Promise<CommandExecutionResult> {
+    const record = this.#record;
+    const unlock = this.#dependencies.liveUnlock;
+    if (!record || !unlock ||
+        storedVersion(record, command.deploymentId) !== command.expectedDeploymentVersion ||
+        record.definition.mode !== "paper" || record.status !== "paused" || record.ambiguousOrder !== null) {
+      return { status: "rejected", code: "deployment_fence" };
+    }
+    const definition = await unlock.prepare(command);
+    if (definition.deploymentId !== record.definition.deploymentId ||
+        definition.configurationVersion !== record.definition.configurationVersion ||
+        definition.scriptHash !== record.definition.scriptHash || definition.market !== record.definition.market ||
+        definition.symbol !== record.definition.symbol || definition.mode !== "live") {
+      return { status: "rejected", code: "deployment_fence" };
+    }
+    this.#record = await this.#dependencies.store.save({
+      definition,
+      status: "paused",
+      pausedReason: "live-unlock-pending",
+      ambiguousOrder: null,
+      updatedAt: this.#timestamp(),
+    }, record.recordVersion);
+    return { status: "ok", code: "live_unlock_staged" };
   }
 
   #timestamp(): number {

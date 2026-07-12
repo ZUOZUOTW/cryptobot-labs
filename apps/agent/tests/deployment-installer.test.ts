@@ -67,4 +67,34 @@ describe("deployment installer", () => {
     expect(runner.pause).toHaveBeenCalledOnce();
     expect(store.saved.at(-1)).toMatchObject({ status: "paused", pausedReason: "operator-paused" });
   });
+
+  it("stages a locally verified live definition paused without starting a runner", async () => {
+    const store = memoryStore();
+    const runner = { resume: vi.fn(async () => undefined), activate: vi.fn(async () => undefined),
+      pause: vi.fn(async () => undefined) };
+    const prepare = vi.fn(async () => ({ deploymentId: "dep_1", configurationVersion: "v2",
+      scriptHash: "b".repeat(64), mode: "live" as const, market: "spot" as const, symbol: "BTCUSDT" }));
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => bundle() }, store, runner,
+      liveUnlock: { prepare }, now: () => 700 });
+    await installer.execute(command());
+
+    await expect(installer.execute(command({ id: "cmd_live", type: "request-live-unlock", payload: { revalidate: {} } })))
+      .resolves.toEqual({ status: "ok", code: "live_unlock_staged" });
+    expect(store.saved.at(-1)).toMatchObject({ definition: { mode: "live" }, status: "paused",
+      pausedReason: "live-unlock-pending", updatedAt: 700 });
+    expect(runner.resume).not.toHaveBeenCalled();
+    expect(runner.activate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the paper record unchanged when local live revalidation fails", async () => {
+    const store = memoryStore();
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => bundle() }, store,
+      liveUnlock: { prepare: async () => { throw new Error("unsafe permissions"); } } });
+    await installer.execute(command());
+
+    await expect(installer.execute(command({ type: "request-live-unlock", payload: { revalidate: {} } })))
+      .rejects.toThrow("unsafe permissions");
+    expect(store.saved).toHaveLength(1);
+    expect(store.saved[0]).toMatchObject({ definition: { mode: "paper" }, status: "paused" });
+  });
 });

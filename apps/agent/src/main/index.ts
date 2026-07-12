@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createControlClient, createEncryptedCommandOutcomeStore, ControlClientRevokedError } from "./control-client";
+import { ConnectionRegistry } from "./connections";
 import { DeploymentInstaller } from "./deployment-installer";
 import { createDeploymentClient } from "./deployment-client";
 import { registerAgentIpc, type AgentShellServices } from "./ipc";
 import { createDeviceIdentityVault } from "./device-identity";
 import { createStartAtLoginController } from "./login-item";
+import { createLiveUnlockService } from "./live-unlock-service";
 import { createPairingClient } from "./pairing-client";
 import { createPairingExpiryGuard } from "./pairing-expiry";
 import { ClockFreshnessGuard, MarketStreamState } from "./market-stream";
@@ -85,6 +87,7 @@ export async function bootstrapAgent(): Promise<void> {
   const clockState = new ClockFreshnessGuard();
   const instrumentState = new InstrumentRuleState();
   const publicMarket = new PublicMarketService({ market: marketState, clock: clockState, instruments: instrumentState });
+  const connectionRegistry = new ConnectionRegistry();
   const orderRepository = createDurableOrderRepository(
     osStorage,
     createNodeVaultFileStore(join(vaultDirectory, "orders.bin")),
@@ -210,7 +213,9 @@ export async function bootstrapAgent(): Promise<void> {
         },
         onRevoked: () => stopForInvalidPairing("revoked"),
       });
-      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler });
+      const liveUnlock = createLiveUnlockService({ deployments, verifier: connectionVerifier,
+        connection: connectionRegistry, market: publicMarket });
+      deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler, liveUnlock });
       await deploymentInstaller.initialize();
     }
     const installer = deploymentInstaller;

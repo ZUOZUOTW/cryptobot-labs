@@ -346,19 +346,32 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
         if (!identical(existing)) throw new CommandRepositoryError("command-conflict", "command acknowledgement conflict");
         return { acknowledgement: existing, idempotent: true };
       }
+      const command = await database.prepare(`SELECT type FROM commands WHERE id=? AND device_id=? AND deployment_id=?
+        AND expected_deployment_version=? AND status='pending'`).bind(commandId, deviceId, deploymentId, expected)
+        .first<{ type: CommandType }>();
+      if (!command) return null;
+      const unlock = command.type === "request-live-unlock" && input.status === "ok";
       let results: ControlPlaneRunResult[];
       try {
-        results = await database.batch([
+        const statements = [
           database.prepare(`INSERT INTO command_acknowledgements
             (id,command_id,user_id,device_id,status,payload_json,acknowledged_at)
             SELECT ?,c.id,c.user_id,c.device_id,?,?,? FROM commands c
             WHERE c.id=? AND c.device_id=? AND c.deployment_id=? AND c.expected_deployment_version=?
-              AND c.status='pending' AND c.expires_at>?`)
-            .bind(ackId, input.status, payloadJson, now, commandId, deviceId, deploymentId, expected, lateCutoff),
+              AND c.status='pending' AND c.expires_at>?
+              AND (?=0 OR (c.type='request-live-unlock' AND EXISTS (SELECT 1 FROM deployments d
+                WHERE d.id=c.deployment_id AND d.user_id=c.user_id AND d.device_id=c.device_id
+                  AND d.version=c.expected_deployment_version AND d.mode='paper' AND d.state IN ('stopped','paused'))))`)
+            .bind(ackId, input.status, payloadJson, now, commandId, deviceId, deploymentId, expected, lateCutoff, unlock ? 1 : 0),
+          ...(unlock ? [database.prepare(`UPDATE deployments SET mode='live',state='paused',updated_at=?
+            WHERE id=? AND device_id=? AND version=? AND mode='paper' AND state IN ('stopped','paused')
+              AND EXISTS (SELECT 1 FROM command_acknowledgements a WHERE a.id=? AND a.command_id=?)`)
+            .bind(now, deploymentId, deviceId, expected, ackId, commandId)] : []),
           database.prepare(`UPDATE commands SET status='acknowledged' WHERE id=? AND device_id=?
             AND EXISTS (SELECT 1 FROM command_acknowledgements WHERE command_id=?)`)
             .bind(commandId, deviceId, commandId),
-        ]);
+        ];
+        results = await database.batch(statements);
       } catch (error) {
         const raced = await getAck(commandId, deviceId);
         if (raced && identical(raced)) return { acknowledgement: raced, idempotent: true };
