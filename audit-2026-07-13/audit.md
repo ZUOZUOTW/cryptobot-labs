@@ -8,3 +8,13 @@
 6. Captured final desktop and mobile states and tested the leaderboard period interaction.
 
 Health: passed. No remaining P0/P1/P2 visual issue in the requested scope.
+
+## Bot card grid follow-up
+
+1. Captured Hyperdash `/copytrading` as the trend-line-only reference.
+2. Replaced full-width bot rows with responsive three/two/one-column information cards.
+3. Promoted the animated green/red trend line to the card's primary visual and removed the nested chart-panel appearance.
+4. Preserved all CryptoBot copy, mascots, filters, disclosures, favorite state, detail, workshop-copy, and download actions.
+5. Verified desktop and 390px mobile layouts, filter interaction, and zero browser console errors.
+
+Health: passed. The reference is used only for trend-line presentation; CryptoBot Labs branding and interaction model remain intact.
