@@ -3,6 +3,7 @@
 node_modules/
 dist/
 .next/
+.netlify/
 .vinext/
 .wrangler/
 coverage/

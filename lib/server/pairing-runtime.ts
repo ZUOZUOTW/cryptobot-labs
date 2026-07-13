@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env } from "./platform-env";
 import { createControlPlaneDatabase } from "../../db";
 import { createDeviceRepository, createUserRepository } from "../../db/repositories";
 import { deriveWorkspaceUserId, workspaceIdentityProvider } from "./auth";

@@ -1,7 +1,10 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  resolve: { alias: { "cloudflare:workers": new URL("./tests/cloudflare-workers.ts", import.meta.url).pathname } },
+  resolve: { alias: {
+    "@": new URL("./", import.meta.url).pathname,
+    "cloudflare:workers": new URL("./tests/cloudflare-workers.ts", import.meta.url).pathname,
+  } },
   test: {
     environment: "jsdom",
     setupFiles: ["./tests/setup.ts"],

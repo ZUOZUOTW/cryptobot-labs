@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env } from "@/lib/server/platform-env";
 import { createProductionTradingHandlers, productionTradingFailure } from "../../../lib/server/backtest-runtime";
 
 export async function POST(request: Request): Promise<Response> {

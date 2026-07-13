@@ -1,0 +1,11 @@
+[build]
+  command = "pnpm exec next build --webpack"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22.13.0"
+
+[dev]
+  command = "pnpm dev"
+  targetPort = 4173
+  framework = "#custom"

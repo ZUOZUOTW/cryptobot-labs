@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env } from "@/lib/server/platform-env";
 import { createProductionConnectionHandlers, productionConnectionFailure } from "../../../lib/server/connection-runtime";
 
 export async function GET(request: Request): Promise<Response> {

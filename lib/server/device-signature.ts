@@ -59,7 +59,7 @@ const bytesToHex = (value: Uint8Array): string => [...value]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const sha256Bytes = async (value: Uint8Array, implementation: Pick<DeviceCrypto, "digest">): Promise<Uint8Array> =>
-  new Uint8Array(await implementation.digest("SHA-256", value));
+  new Uint8Array(await implementation.digest("SHA-256", value as BufferSource));
 
 export const sha256Hex = async (value: Uint8Array | string, implementation: Pick<DeviceCrypto, "digest"> = defaultCrypto()): Promise<string> =>
   bytesToHex(await sha256Bytes(typeof value === "string" ? encoder.encode(value) : value, implementation));
@@ -262,7 +262,8 @@ export function createDeviceRequestVerifier(dependencies: DeviceRequestVerifierD
       }
       const canonical = await canonicalDeviceRequest({ ...input, timestamp, nonce, crypto: implementation });
       const key = await implementation.importKey("jwk", strictVerificationJwk(row.publicKeyJwk), { name: "Ed25519" }, false, ["verify"]);
-      if (!await implementation.verify({ name: "Ed25519" }, key, signature, encoder.encode(canonical))) {
+      if (!await implementation.verify({ name: "Ed25519" }, key, signature as BufferSource,
+        encoder.encode(canonical) as BufferSource)) {
         throw new DeviceAuthenticationError();
       }
       const nonceHash = await sha256Hex(`${row.userId}\n${row.deviceId}\n${nonce}`, implementation);
@@ -314,7 +315,8 @@ export function createBootstrapProofVerifier(implementation: DeviceCrypto = defa
       const signature = decodeBase64url(descriptors.signature.value, 64);
       const key = await implementation.importKey("jwk", strictVerificationJwk(input.publicKeyJwk), { name: "Ed25519" }, false, ["verify"]);
       const canonical = await canonicalBootstrapProof(input, implementation);
-      return implementation.verify({ name: "Ed25519" }, key, signature, encoder.encode(canonical));
+      return implementation.verify({ name: "Ed25519" }, key, signature as BufferSource,
+        encoder.encode(canonical) as BufferSource);
     } catch { return false; }
   };
 }

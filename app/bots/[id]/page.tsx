@@ -4,7 +4,8 @@ import { BotDownloadButton } from "../../../components/BotCard";
 import { MetricCard } from "../../../components/MetricCard";
 import { PerformanceChart } from "../../../components/PerformanceChart";
 import { BOT_CATALOG } from "../../../data/bots";
-import type { BotDefinition, EquityPoint } from "../../../lib/types";
+import { benchmarkSeries } from "../../../lib/benchmark-series";
+import type { BotDefinition } from "../../../lib/types";
 
 interface BotDetailPageProps {
   params: Promise<{ id: string }>;
@@ -21,18 +22,6 @@ const monthlyReturns = (bot: BotDefinition) => bot.equityCurve.map((point, index
   const change = previous === 0 ? 0 : ((point.value - previous) / previous) * 100;
   return { ...point, change };
 });
-
-export const benchmarkSeries = (bot: BotDefinition): EquityPoint[] => {
-  const seed = [...bot.id].reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  let value = 100;
-  return bot.equityCurve.map((point, index) => {
-    if (index > 0) {
-      const cycle = ((seed + index * 7) % 9) - 3;
-      value *= 1 + (0.012 + cycle * 0.002);
-    }
-    return { label: point.label, value: Number(value.toFixed(2)) };
-  });
-};
 
 export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const { id } = await params;
