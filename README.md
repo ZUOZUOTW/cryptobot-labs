@@ -1,8 +1,8 @@
 # CryptoBot Labs
 
-A WEEX-only strategy discovery and assembly prototype running on
-[vinext](https://github.com/cloudflare/vinext). All performance is deterministic
-simulation data; the site does not accept exchange credentials or place trades.
+A WEEX-only strategy discovery, historical backtesting, and local automated-execution product running on
+[vinext](https://github.com/cloudflare/vinext). Exchange credentials remain inside the encrypted desktop Agent;
+the website stores only masked permission evidence and version-fenced control commands.
 
 ## Prerequisites
 
@@ -94,6 +94,37 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `pnpm run lint`: run ESLint
 - `pnpm run build`: verify the production vinext output
 - `pnpm run db:generate`: generate Drizzle migrations after schema changes
+
+## Formal member authentication
+
+The formal site uses Supabase Auth with Google OAuth and Email Magic Link. Auth transactions use PKCE plus a
+10-minute signed HttpOnly state cookie. Access and refresh tokens remain in `Secure`, `HttpOnly`, `SameSite=Lax`
+cookies, and server API identity is accepted only after the Supabase Auth `/user` endpoint validates the access token.
+Copy `.env.example` into the deployment secret manager and set `DEMO_MODE=false`; missing or malformed values fail
+closed. Only the Supabase publishable key may be used for this flow—never expose a secret or `service_role` key.
+
+Before enabling Google, add the site's exact `/auth/callback` URL to the Supabase redirect allow-list and configure
+the Google provider in Supabase. Live trading remains hard-disabled independently of successful member login.
+
+## Desktop Agent releases
+
+Pull requests build clearly labelled unsigned internal-test artifacts for macOS and Windows. Public `agent-v*`
+releases fail closed unless platform signing inputs are present, then create hardened, signed installers with
+SHA-256 checksums and a CycloneDX SBOM. Never publish artifacts from `apps/agent/out` manually; the website download
+manifest may only be updated from a release that passes `scripts/verify-agent-artifact.mjs --public`.
+Set the repository Actions variable `CBL_CONTROL_PLANE_ORIGIN` to the deployed HTTPS site origin before creating an
+`agent-v*` tag; public packaging fails closed when this origin or platform signing inputs are missing.
+
+## Security and operations gates
+
+- [Live trading threat model](docs/security/live-trading-threat-model.md)
+- [WEEX credential handling](docs/security/credential-handling.md)
+- [Desktop Agent release checklist](docs/operations/agent-release-checklist.md)
+- [Live execution smoke-test checklist](docs/operations/live-smoke-test-checklist.md)
+
+Automated validation must not place real-money orders. Public downloads require signed platform artifacts, checksums,
+an SBOM, and release verification. Real-money acceptance additionally requires explicit authorisation and the manual
+smoke-test checklist; missing certificates or test credentials must never weaken these gates.
 
 ## Learn More
 

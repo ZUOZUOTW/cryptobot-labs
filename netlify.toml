@@ -4,8 +4,12 @@
 
 [build.environment]
   NODE_VERSION = "22.13.0"
+  DEMO_MODE = "false"
 
 [dev]
   command = "pnpm dev"
   targetPort = 4173
   framework = "#custom"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
