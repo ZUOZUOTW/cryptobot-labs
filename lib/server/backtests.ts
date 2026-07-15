@@ -11,7 +11,12 @@ import type {
   BacktestCursor, BacktestDetailRecord, BacktestJobRecord, BacktestStatus, OwnedStrategyVersionRecord,
 } from "../../db/repositories";
 import type { HistoricalDataset, HistoricalBacktestResult, StrategyEvaluator, StrategySandbox } from "../../packages/trading-core/src";
-import { BACKTEST_SANDBOX_BUDGET, createQuickJsStrategySandbox, runHistoricalBacktest } from "../../packages/trading-core/src";
+import {
+  BACKTEST_SANDBOX_BUDGET,
+  MAX_HISTORICAL_LEVERAGE,
+  createQuickJsStrategySandbox,
+  runHistoricalBacktest,
+} from "../../packages/trading-core/src";
 import { validateConfig } from "../strategy-validation";
 import type { HistoricalFundingDataset } from "../../packages/weex-client/src";
 import {
@@ -20,7 +25,7 @@ import {
   MAX_FUTURES_HISTORY_RANGE_MS, MAX_SPOT_HISTORY_CANDLES, parseIntervalMs, validateCandleDataset,
 } from "../../packages/weex-client/src";
 
-export const HISTORICAL_ENGINE_VERSION = "cryptobot-labs-historical-v1";
+export const HISTORICAL_ENGINE_VERSION = "cryptobot-labs-historical-v2";
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -28,7 +33,12 @@ const DATA_ENDPOINTS = {
   spot: "/api/v3/market/klines",
   futures: "/capi/v3/market/historyKlines",
 } as const;
-const MAINTENANCE_MARGIN_RATE = { spot: "0", futures: "0.02" } as const;
+const maintenanceMarginRate = (market: "spot" | "futures", leverage: string): string => {
+  if (market === "spot") return "0";
+  // Keep maintenance below initial margin for high-leverage research runs. This is
+  // deliberately disclosed as a conservative approximation, not a WEEX tier table.
+  return String(Math.min(0.02, 0.5 / Number(leverage)));
+};
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
@@ -153,7 +163,7 @@ const assertEconomics = (request: BacktestJobCreateDto): void => {
   const slippage = decimalNumber(request.slippageRate, "slippageRate");
   const leverage = decimalNumber(request.leverage, "leverage");
   if (capital <= 0 || capital > 100_000_000 || fee < 0 || fee > 0.05 || slippage < 0 || slippage > 0.1
-    || leverage <= 0 || leverage > 20 || (request.market === "spot" && leverage !== 1)
+    || leverage <= 0 || leverage > MAX_HISTORICAL_LEVERAGE || (request.market === "spot" && leverage !== 1)
     || leverage * fee >= 1) {
     throw new HistoricalBacktestProblem(422, "invalid_economic_parameters");
   }
@@ -374,12 +384,13 @@ export function createHistoricalBacktestService(dependencies: {
             return evaluated.signal;
           } };
         }
+        const maintenanceRate = maintenanceMarginRate(request.market, request.leverage);
         let result: HistoricalBacktestResult;
         try {
           result = await runHistoricalBacktest({ dataset, evaluator,
             initialCapital: request.initialCapital, feeRate: request.feeRate, slippageRate: request.slippageRate,
             leverage: request.leverage, funding: funding?.funding ?? [], gapPolicy: request.gapPolicy,
-            maintenanceMarginRate: MAINTENANCE_MARGIN_RATE[request.market],
+            maintenanceMarginRate: maintenanceRate,
             engineVersion: HISTORICAL_ENGINE_VERSION, configHash: integrity.configHash, strategyHash: integrity.strategyHash });
         } finally { await sandbox?.dispose(); }
         signal?.throwIfAborted();
@@ -401,7 +412,7 @@ export function createHistoricalBacktestService(dependencies: {
             metrics: result.metrics,
             provenance: { ...result.provenance, fundingMode: request.fundingMode,
               fundingCoverageComplete: funding?.complete ?? true,
-              maintenanceMarginAssumption: { rate: MAINTENANCE_MARGIN_RATE[request.market],
+              maintenanceMarginAssumption: { rate: maintenanceRate,
                 model: "fixed-conservative-not-weex-tier-exact" } },
             equityCurve: result.equityCurve, engineVersion: HISTORICAL_ENGINE_VERSION,
             configurationHash: integrity.configHash, strategyHash: integrity.strategyHash,

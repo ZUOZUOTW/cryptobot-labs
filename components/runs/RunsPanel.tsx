@@ -33,7 +33,7 @@ export function RunsPanel() {
       <div aria-live="polite">
         {state === "loading" && <p className="runs-empty">正在載入運行證據…</p>}
         {state === "error" && <div className="runs-empty"><p>無法載入運行。</p><button className="button button--secondary button--small" onClick={() => void load()} type="button">重試載入</button></div>}
-        {state === "unauthorized" && <p className="runs-empty">登入狀態已過期。 <Link href="/signin-with-chatgpt?return_to=%2Fruns">使用 ChatGPT 重新登入</Link></p>}
+        {state === "unauthorized" && <p className="runs-empty">登入狀態已過期。 <Link href="/auth?return_to=%2Fruns">重新登入</Link></p>}
         {state === "ready" && runs.length === 0 && <div className="runs-empty"><p>尚無運行。先在組裝車間完成策略與風險設定；建立後一律從模擬運行開始。</p><Link className="button button--primary button--small" href="/workshop">前往組裝車間</Link></div>}
       </div>
       {state === "ready" && runs.length > 0 && <ul className="run-list" aria-label="我的運行">{runs.map((run) => <li key={run.id}><RunCard run={run} /></li>)}</ul>}

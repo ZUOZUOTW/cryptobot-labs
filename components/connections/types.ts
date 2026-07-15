@@ -21,4 +21,5 @@ export type ConnectionDevice = {
   deviceStatus: "active";
   lastSeenAt: number | null;
   connection: ConnectionSummary | null;
+  commandTarget: { deploymentId: string; expectedVersion: number } | null;
 };

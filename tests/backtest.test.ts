@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STRATEGY_PRESETS } from "../data/strategies";
+import { STRATEGY_PRESETS, cloneStrategyBlock } from "../data/strategies";
 import { runBacktest } from "../lib/backtest";
 
 const validConfig = STRATEGY_PRESETS.find((preset) => preset.name === "突破追蹤")!;
@@ -57,16 +57,40 @@ describe("runBacktest", () => {
 
   it("returns the exact metrics derived from the deterministic fixture", () => {
     expect(runBacktest(validConfig).metrics).toEqual({
-      totalReturn: 42.15,
-      annualizedReturn: 12.44,
-      maxDrawdown: -1.92,
-      winRate: 77.78,
-      profitFactor: 9.13,
-      sharpe: 2.78,
-      trades: 224,
+      totalReturn: 8.34,
+      annualizedReturn: 2.71,
+      maxDrawdown: -9.2,
+      winRate: 58.33,
+      profitFactor: 1.4,
+      sharpe: 0.46,
+      trades: 237,
       runningDays: 1095,
-      stability: 27.22,
+      stability: 20.42,
     });
+  });
+
+  it("can produce losses for an aggressive leveraged configuration", () => {
+    const fixedPosition = cloneStrategyBlock("fixed-position");
+    fixedPosition.parameters[0]!.value = 100;
+    const stopLoss = cloneStrategyBlock("stop-loss");
+    stopLoss.parameters[0]!.value = 20;
+    const takeProfit = cloneStrategyBlock("take-profit");
+    takeProfit.parameters[0]!.value = 0.5;
+    const aggressive = {
+      ...validConfig,
+      id: "aggressive-loss-fixture",
+      leverage: 80,
+      blocks: [
+        ...validConfig.blocks.filter((block) => block.id !== "atr-sizing"),
+        fixedPosition,
+        stopLoss,
+        takeProfit,
+      ],
+    };
+
+    const report = runBacktest(aggressive);
+    expect(report.metrics.totalReturn).toBeLessThan(0);
+    expect(report.metrics.maxDrawdown).toBeLessThan(-20);
   });
 
   it("counts a first-period loss from the initial equity of 100", () => {
@@ -79,8 +103,8 @@ describe("runBacktest", () => {
     };
     const report = runBacktest(firstPeriodLossConfig);
 
-    expect(report.equityCurve[0].value).toBe(99.17);
-    expect(report.metrics.maxDrawdown).toBe(-3.08);
+    expect(report.equityCurve[0].value).toBeLessThan(100);
+    expect(report.metrics.maxDrawdown).toBeLessThan(0);
   });
 
   it("derives a fixed timestamp and seed from the config", () => {

@@ -58,6 +58,8 @@ export interface RunView {
   state: RunState;
   health: RunHealth;
   pnl: string | null;
+  realizedPnl: string | null;
+  unrealizedPnl: string | null;
   positions: RunPosition[];
   openOrders: RunOrder[];
   lastSignal: RunSignal | null;
@@ -65,7 +67,7 @@ export interface RunView {
   evidence: {
     heartbeatOccurredAt: number | null;
     heartbeatExpectedDeploymentVersion: number | null;
-    pnlSource: "heartbeat-positions" | null;
+    pnlSource: "heartbeat-account" | null;
   };
   device: { id: string };
   strategyVersion: { id: string };

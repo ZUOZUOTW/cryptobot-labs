@@ -17,7 +17,8 @@ const policy: RiskPolicy = {
 };
 
 const run: RunView = {
-  id: "run_1", botName: "Orbit", market: "futures", mode: "paper", state: "running", health: null, pnl: null,
+  id: "run_1", botName: "Orbit", market: "futures", mode: "paper", state: "running", health: null,
+  pnl: null, realizedPnl: null, unrealizedPnl: null,
   positions: [], openOrders: [], lastSignal: null, riskBlocks: [], device: { id: "dev_1" },
   evidence: { heartbeatOccurredAt: null, heartbeatExpectedDeploymentVersion: null, pnlSource: null },
   strategyVersion: { id: "version_1" }, version: 2, updatedAt: 1_700_000_000_000, riskPolicy: policy,
@@ -90,6 +91,16 @@ describe("run control UI", () => {
     expect(onCommand).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps Demo emergency stop and close available while disabling undocumented cancellation",async()=>{
+    const onCommand=vi.fn(async()=>undefined);const user=userEvent.setup();
+    render(<EmergencyStopDialog mode="futures-demo" onCommand={onCommand}/>);
+    expect(screen.getByRole("button",{name:"Demo 不支援撤單"})).toBeDisabled();
+    expect(screen.getByText(/尚未提供 Demo 撤單 API/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button",{name:"立即停止新訂單"}));
+    expect(onCommand).toHaveBeenCalledWith({type:"stop-new-orders",reason:"user-emergency-stop"});
+    expect(screen.getByRole("button",{name:"關閉所有部位"})).toBeEnabled();
+  });
+
   it("labels absent telemetry as absent evidence instead of inventing values", () => {
     render(<RunCard run={run} />);
     expect(screen.getByRole("heading", { name: "Orbit" })).toBeInTheDocument();
@@ -148,6 +159,31 @@ describe("run control UI", () => {
     }));
     expect(await screen.findByRole("status")).toHaveTextContent("本機代理通過即時安全檢查後才會啟動");
   });
+
+  it("queues Demo enable and then uses the explicit Demo resume command",async()=>{
+    const automatic={...run,state:"paused" as const,riskPolicy:{...policy,operationMode:"automatic" as const}};
+    const connection={connections:[{id:"dev_1",connection:{status:"verified",hasLocalCredential:true,
+      permissions:{read:true,spotTrade:false,futuresTrade:true,withdrawal:false}}}],nextCursor:null};
+    const enableFetch=vi.spyOn(globalThis,"fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({run:automatic}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify(connection),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({command:{id:"cmd_enable"}}),{status:202}));
+    const user=userEvent.setup();render(<RunDetailPanel runId="run_1" />);
+    await user.click(await screen.findByRole("button",{name:"啟用 WEEX 合約 Demo"}));
+    expect(enableFetch).toHaveBeenLastCalledWith("/api/runs/run_1/commands",expect.objectContaining({
+      body:JSON.stringify({type:"enable-futures-demo",reason:"user-demo-enable",expectedVersion:2})}));
+    cleanup();vi.restoreAllMocks();
+
+    const demoRun={...automatic,mode:"futures-demo" as const};
+    const resumeFetch=vi.spyOn(globalThis,"fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({run:demoRun}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify(connection),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({command:{id:"cmd_resume"}}),{status:202}));
+    const resumeUser=userEvent.setup();render(<RunDetailPanel runId="run_1" />);
+    await resumeUser.click(await screen.findByRole("button",{name:"啟動 WEEX Demo 自動交易"}));
+    expect(resumeFetch).toHaveBeenLastCalledWith("/api/runs/run_1/commands",expect.objectContaining({
+      body:JSON.stringify({type:"resume-demo",reason:"user-demo-control",expectedVersion:2})}));
+  });
 });
 
 describe("run response parser", () => {
@@ -160,6 +196,6 @@ describe("run response parser", () => {
     expect(parseRunView({ ...run, apiSecret: "must-not-render" })).toBeNull();
     expect(parseRunView({ ...run, positions: [{ symbol: "BTCUSDT" }] })).toBeNull();
     expect(parseRunList({ runs: [run], nextCursor: { id: "run_1" } })).toBeNull();
-    expect(parseRunView({ ...run, evidence: { heartbeatOccurredAt: 100, heartbeatExpectedDeploymentVersion: 1, pnlSource: "heartbeat-positions" }, pnl: "1" })).toBeNull();
+    expect(parseRunView({ ...run, evidence: { heartbeatOccurredAt: 100, heartbeatExpectedDeploymentVersion: 1, pnlSource: "heartbeat-account" }, pnl: "1", realizedPnl:"1",unrealizedPnl:"0" })).toBeNull();
   });
 });

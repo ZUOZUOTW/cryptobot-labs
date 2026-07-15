@@ -1,21 +1,24 @@
 import Link from "next/link";
+import { DemoRunsPanel } from "../../components/runs/DemoRunsPanel";
 import { RunsPanel } from "../../components/runs/RunsPanel";
-import { requireChatGPTUser } from "../chatgpt-auth";
+import { demoModeEnabled } from "../../lib/server/demo-mode";
 
 export const dynamic = "force-dynamic";
 
-export default async function RunsPage() {
-  const user = await requireChatGPTUser("/runs");
+export default function RunsPage() {
+  const demoMode = demoModeEnabled();
   return (
     <div className="runs-page site-container">
       <header className="page-intro runs-page__intro">
         <p className="eyebrow">TRADING CONTROL CENTER</p>
         <h1>運行證據<br />與風險控制</h1>
-        <p>{user.displayName}，所有新運行一律從模擬開始。只有通過本機權限、完整風險上限與再次確認，才可向代理申請實盤。</p>
-        <div className="button-row"><Link className="button button--primary" href="/workshop">準備模擬策略</Link><Link className="button button--ghost" href="/connections">管理本機連線</Link></div>
-        <p className="paper-default-note" role="note"><strong>預設：模擬運行</strong>。網站上的實盤申請不代表已啟用；本機代理必須獨立重新驗證後才可執行。</p>
+        <p>集中查看 Paper／Live 模式、心跳、行情、風險用量、掛單與持倉摘要。所有新運行一律先從 Paper 開始。</p>
+        <div className="button-row"><Link className="button button--primary" href="/workshop">準備模擬策略</Link><Link className="button button--ghost" href="/connections">管理 WEEX 連線</Link></div>
+        <p className="paper-default-note" role="note"><strong>{demoMode ? "展示模式：只允許 Paper" : "正式會員：Paper 優先"}</strong>。{demoMode
+          ? "雲端執行器不會開啟 WEEX 私有 WebSocket，也不會送出真實訂單。"
+          : "Live 仍需通過 WEEX 權限、風險設定、Paper 證據及獨立同意閘門。"}</p>
       </header>
-      <RunsPanel />
+      {demoMode ? <DemoRunsPanel /> : <RunsPanel />}
     </div>
   );
 }

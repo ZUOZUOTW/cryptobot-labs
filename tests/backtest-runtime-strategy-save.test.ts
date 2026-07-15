@@ -4,7 +4,11 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
 import { cloneStrategyBlock } from "../data/strategies";
-import { createProductionTradingHandlers, productionTradingFailure } from "../lib/server/backtest-runtime";
+import {
+  createProductionTradingHandlers,
+  productionTradingFailure,
+  tradingEnvironmentForRequest,
+} from "../lib/server/backtest-runtime";
 import type { BotConfig } from "../lib/types";
 
 class Statement implements ControlPlaneStatement {
@@ -50,6 +54,13 @@ const config = (overrides: Partial<BotConfig> = {}): BotConfig => ({
 });
 
 describe("backtest runtime and strategy save wiring", () => {
+  it("uses Netlify's canonical site URL or the request origin when PUBLIC_ORIGIN is absent", () => {
+    expect(tradingEnvironmentForRequest({ URL: "https://labs.example" }, new Request("https://preview.example/api/strategies")))
+      .toMatchObject({ PUBLIC_ORIGIN: "https://labs.example" });
+    expect(tradingEnvironmentForRequest({}, new Request("https://preview.example/api/strategies")))
+      .toMatchObject({ PUBLIC_ORIGIN: "https://preview.example" });
+  });
+
   it("wires the real detail GET route through fail-closed environment initialization", async () => {
     const route = await import("../app/api/backtests/[id]/route");
     const response = await route.GET(new Request("https://labs.example/api/backtests/job_1"), { params: { id: "job_1" } });

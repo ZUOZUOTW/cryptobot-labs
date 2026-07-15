@@ -13,18 +13,26 @@ const localDate = (value: number | null) => value === null ? "尚無紀錄" : ne
   dateStyle: "medium", timeStyle: "short",
 }).format(value);
 
-export function DeviceCard({ device, observedAt, onRevoke }: {
-  device: ConnectionDevice; observedAt: number; onRevoke: (id: string) => Promise<void>;
+export function DeviceCard({ device, observedAt, onCommand, onRevoke }: {
+  device: ConnectionDevice; observedAt: number;
+  onCommand: (device: ConnectionDevice, type: "revalidate-connection" | "erase-local-credentials") => Promise<void>;
+  onRevoke: (id: string) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [eraseConfirming, setEraseConfirming] = useState(false);
+  const [busy, setBusy] = useState<"revalidate" | "erase" | "revoke" | null>(null);
   const connection = device.connection;
   const heartbeatState = device.lastSeenAt === null ? "尚未回報"
     : observedAt - device.lastSeenAt <= HEARTBEAT_FRESH_MS ? "最近 2 分鐘內有回報" : "已超過 2 分鐘未回報";
   const revoke = async () => {
-    setBusy(true);
+    setBusy("revoke");
     try { await onRevoke(device.id); }
-    finally { setBusy(false); setConfirming(false); }
+    finally { setBusy(null); setConfirming(false); }
+  };
+  const connectionCommand = async (type: "revalidate-connection" | "erase-local-credentials") => {
+    setBusy(type === "revalidate-connection" ? "revalidate" : "erase");
+    try { await onCommand(device, type); }
+    finally { setBusy(null); setEraseConfirming(false); }
   };
 
   return (
@@ -48,15 +56,28 @@ export function DeviceCard({ device, observedAt, onRevoke }: {
         <span className={connection?.permissions.futuresTrade ? "is-allowed" : ""}>合約交易：{connection?.permissions.futuresTrade ? "允許" : "未允許"}</span>
         <span className="is-safe">提領：{connection?.permissions.withdrawal ? "已允許（請移除）" : "未允許"}</span>
       </div>
-      <p className="connection-note" role="note">網站不保存 API Key 或 API Secret。撤銷裝置會阻止它繼續存取控制平面，但不會遠端刪除電腦內的檔案。</p>
+      <p className="connection-note" role="note">網站不保存 API Key 或 API Secret。清除命令會要求代理先暫停交易再刪除本機金鑰；撤銷裝置只會阻止控制平面存取。</p>
       <div className="device-actions">
-        <button className="button button--ghost button--small" disabled title="代理命令通道將於執行控制功能完成後啟用" type="button">重新驗證（尚未啟用）</button>
-        <button className="button button--ghost button--small" disabled title="請先在本機代理中清除憑證" type="button">清除本機憑證（請到代理操作）</button>
+        <button className="button button--ghost button--small" disabled={busy !== null || !device.commandTarget || !connection?.hasLocalCredential}
+          onClick={() => void connectionCommand("revalidate-connection")} title={!device.commandTarget ? "請先建立 Paper 運行" : undefined} type="button">
+          {busy === "revalidate" ? "命令排隊中…" : "重新驗證 WEEX"}</button>
+        {!eraseConfirming ? <button className="button button--ghost button--small"
+          disabled={busy !== null || !device.commandTarget || !connection?.hasLocalCredential}
+          onClick={() => setEraseConfirming(true)} title={!device.commandTarget ? "請先建立 Paper 運行" : undefined}
+          type="button">清除本機憑證</button> : (
+          <div className="device-confirm" role="group" aria-label="確認清除本機憑證">
+            <span>將先暫停交易並永久刪除本機 WEEX 金鑰。</span>
+            <button className="button button--danger button--small" disabled={busy !== null}
+              onClick={() => void connectionCommand("erase-local-credentials")} type="button">
+              {busy === "erase" ? "命令排隊中…" : "確認清除"}</button>
+            <button className="button button--ghost button--small" disabled={busy !== null}
+              onClick={() => setEraseConfirming(false)} type="button">取消</button>
+          </div>)}
         {!confirming ? <button className="button button--danger button--small" onClick={() => setConfirming(true)} type="button">撤銷此裝置</button> : (
           <div className="device-confirm" role="group" aria-label="確認撤銷裝置">
             <span>確定撤銷？</span>
-            <button className="button button--danger button--small" disabled={busy} onClick={() => void revoke()} type="button">{busy ? "撤銷中…" : "確認撤銷"}</button>
-            <button className="button button--ghost button--small" disabled={busy} onClick={() => setConfirming(false)} type="button">取消</button>
+            <button className="button button--danger button--small" disabled={busy !== null} onClick={() => void revoke()} type="button">{busy === "revoke" ? "撤銷中…" : "確認撤銷"}</button>
+            <button className="button button--ghost button--small" disabled={busy !== null} onClick={() => setConfirming(false)} type="button">取消</button>
           </div>
         )}
       </div>

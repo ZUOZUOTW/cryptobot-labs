@@ -33,6 +33,14 @@ describe("API platform identity", () => {
       userRepository:repository,deriveUserId:async()=>"other",now:()=>11});
     expect(conflict.ok).toBe(false); if(!conflict.ok) expect(await conflict.response.text()).not.toContain("secret@example.com");
   });
+  it("uses a verified provider subject instead of deriving a second production user id", async () => {
+    const repository=userRepository(); const deriveUserId=vi.fn(async()=>"should_not_run");
+    const result=await requireApiUser(request("GET"),{identityProvider:{getIdentity:async()=>({
+      subject:"9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783",email:"member@example.com",displayName:"Member"})},
+      userRepository:repository,deriveUserId,now:()=>12});
+    expect(result).toMatchObject({ok:true,user:{id:"9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783"}});
+    expect(deriveUserId).not.toHaveBeenCalled();
+  });
   it("rejects malformed trusted identity",async()=>{const repository=userRepository();const result=await requireApiUser(request("GET"),{
     identityProvider:{getIdentity:async()=>({email:"bad",displayName:"X"})},userRepository:repository,deriveUserId:async()=>"usr",now:()=>1});
     expect(result.ok).toBe(false);expect(repository.upsertIdentity).not.toHaveBeenCalled();});

@@ -102,7 +102,7 @@ export function ActivityTable() {
       <div aria-live="polite">
         {state === "loading" && <p className="activity-empty">正在載入活動紀錄…</p>}
         {state === "error" && <div className="activity-empty"><p>無法載入活動紀錄。</p><button className="button button--secondary button--small" onClick={() => void load()} type="button">重試載入</button></div>}
-        {state === "unauthorized" && <p className="activity-empty">登入狀態已過期。 <Link href="/signin-with-chatgpt?return_to=%2Factivity">使用 ChatGPT 重新登入</Link></p>}
+        {state === "unauthorized" && <p className="activity-empty">登入狀態已過期。 <Link href="/auth?return_to=%2Factivity">重新登入</Link></p>}
         {state === "ready" && visibleItems.length === 0 && <p className="activity-empty">尚無符合條件的活動紀錄。活動會在代理配對、策略運行與風險判斷後出現。</p>}
       </div>
 

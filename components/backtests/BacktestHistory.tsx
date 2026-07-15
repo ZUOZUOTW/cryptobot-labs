@@ -78,7 +78,7 @@ export function BacktestHistory() {
       <div aria-live="polite">
         {state === "loading" && <p className="historical-empty">正在載入你的歷史回測…</p>}
         {state === "error" && <div className="historical-empty"><p>無法載入歷史回測。</p><button className="button button--secondary" onClick={() => void load(null)} type="button" aria-label="重試載入">重試載入</button></div>}
-        {state === "unauthorized" && <p className="historical-empty">登入狀態已過期。 <Link href="/signin-with-chatgpt?return_to=%2Fbacktests">使用 ChatGPT 重新登入</Link></p>}
+        {state === "unauthorized" && <p className="historical-empty">登入狀態已過期。 <Link href="/auth?return_to=%2Fbacktests">重新登入</Link></p>}
         {state === "ready" && items.length === 0 && <p className="historical-empty">尚無歷史回測。先到組裝車間選擇策略，再建立第一份 WEEX 行情證據。</p>}
       </div>
       {state === "ready" && items.length > 0 && (

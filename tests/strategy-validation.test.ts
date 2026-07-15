@@ -61,6 +61,11 @@ describe("strategy catalog", () => {
     ]);
     expect(STRATEGY_PRESETS.every((preset) => validateConfig(preset).valid)).toBe(true);
   });
+
+  it("supports wider fixed exit and risk ranges", () => {
+    expect(cloneBlock("take-profit").parameters[0]).toMatchObject({ min: 0.5, max: 1000, value: 8 });
+    expect(cloneBlock("stop-loss").parameters[0]).toMatchObject({ min: 0.5, max: 100, value: 3 });
+  });
 });
 
 describe("validateConfig", () => {
@@ -89,9 +94,10 @@ describe("validateConfig", () => {
   it("enforces spot and futures leverage limits", () => {
     expect(validateConfig({ ...validConfig, market: "spot", leverage: 2 }).valid).toBe(false);
     expect(validateConfig({ ...validConfig, leverage: 0 }).valid).toBe(false);
-    expect(validateConfig({ ...validConfig, leverage: 21 }).valid).toBe(false);
+    expect(validateConfig({ ...validConfig, leverage: 501 }).valid).toBe(false);
     expect(validateConfig({ ...validConfig, leverage: 1 }).valid).toBe(true);
     expect(validateConfig({ ...validConfig, leverage: 20 }).valid).toBe(true);
+    expect(validateConfig({ ...validConfig, leverage: 400 }).valid).toBe(true);
   });
 
   it("rejects parameter values outside their declared range", () => {

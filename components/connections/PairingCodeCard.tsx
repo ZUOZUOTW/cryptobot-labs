@@ -1,5 +1,6 @@
 "use client";
 
+import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 
 type PairingResponse = { code: string; expiresAt: number };
@@ -12,10 +13,14 @@ const validPairing = (value: unknown): value is PairingResponse => {
     && typeof record.expiresAt === "number" && Number.isSafeInteger(record.expiresAt);
 };
 
-export function PairingCodeCard() {
+const pairingLink = (code: string) => `cryptobot-labs://pair?code=${encodeURIComponent(code)}`;
+
+export function PairingCodeCard({ onPairingIssued }: { onPairingIssued?: () => void } = {}) {
   const [pairing, setPairing] = useState<PairingResponse | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [state, setState] = useState<"idle" | "loading" | "error" | "unauthorized">("idle");
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
     if (!pairing) return;
@@ -23,6 +28,17 @@ export function PairingCodeCard() {
     update();
     const interval = window.setInterval(update, 1_000);
     return () => window.clearInterval(interval);
+  }, [pairing]);
+
+  useEffect(() => {
+    let active = true;
+    if (!pairing) return () => { active = false; };
+    void QRCode.toDataURL(pairingLink(pairing.code), {
+      width: 224, margin: 2, errorCorrectionLevel: "M",
+      color: { dark: "#07101d", light: "#ffffff" },
+    }).then((value) => { if (active) setQrDataUrl(value); })
+      .catch(() => { if (active) setQrDataUrl(""); });
+    return () => { active = false; };
   }, [pairing]);
 
   const issue = async () => {
@@ -34,23 +50,37 @@ export function PairingCodeCard() {
       if (response.status === 401) { setState("unauthorized"); return; }
       const body: unknown = await response.json();
       if (!response.ok || !validPairing(body) || body.expiresAt <= Date.now()) throw new Error("pairing_failed");
-      setPairing(body);
-      setState("idle");
+      setPairing(body); setCopyState("idle"); setState("idle"); onPairingIssued?.();
     } catch { setState("error"); }
+  };
+
+  const copyCode = async () => {
+    if (!pairing || seconds <= 0) return;
+    try { await navigator.clipboard.writeText(pairing.code); setCopyState("copied"); }
+    catch { setCopyState("error"); }
   };
 
   return (
     <section className="connection-card connection-card--pairing" aria-labelledby="pairing-title">
-      <div className="connection-card__heading"><div><p className="eyebrow">SECURE PAIRING</p><h2 id="pairing-title">連結你的裝置</h2></div><span className="connection-step">02</span></div>
-      <p className="connection-card__copy">配對碼只維持五分鐘。請在本機代理中輸入；API Secret 永遠只在本機代理設定。</p>
+      <div className="connection-card__heading"><div><p className="eyebrow">SECURE PAIRING</p><h2 id="pairing-title">掃描 QR Code</h2></div><span className="connection-step">02</span></div>
+      <p className="connection-card__copy">QR Code 只包含五分鐘有效的一次性配對碼，並直接在此裝置產生，不會送到第三方服務。</p>
       {pairing && seconds > 0 ? (
-        <div className="pairing-code" aria-live="polite">
-          <code>{pairing.code}</code>
-          <span>剩餘 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span>
+        <div className="pairing-ready" aria-live="polite">
+          <div className="pairing-qr">
+            {qrDataUrl ? <img alt="供 CryptoBot Labs Agent 掃描的五分鐘配對 QR Code" height="224" src={qrDataUrl} width="224" />
+              : <span>正在本機產生 QR Code…</span>}
+          </div>
+          <div className="pairing-ready__actions">
+            <a className="button button--primary" href={pairingLink(pairing.code)}>在這台電腦開啟 Agent</a>
+            <button className="button button--ghost" onClick={() => void copyCode()} type="button">{copyState === "copied" ? "已複製配對碼" : "複製配對碼"}</button>
+            <code>{pairing.code}</code>
+            <span>剩餘 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span>
+            {copyState === "error" && <small role="alert">無法存取剪貼簿，請手動輸入上方配對碼。</small>}
+          </div>
         </div>
-      ) : <p className="pairing-placeholder">尚未產生配對碼</p>}
+      ) : <p className="pairing-placeholder">尚未產生配對 QR Code</p>}
       <button className="button button--primary pairing-button" disabled={state === "loading"} onClick={() => void issue()} type="button">
-        {state === "loading" ? "正在產生…" : "產生五分鐘配對碼"}
+        {state === "loading" ? "正在產生…" : pairing ? "重新產生五分鐘 QR Code" : "產生五分鐘配對 QR Code"}
       </button>
       {state === "error" && <p className="connection-feedback connection-feedback--error" role="alert">暫時無法產生配對碼，請稍後再試。</p>}
       {state === "unauthorized" && <p className="connection-feedback connection-feedback--error" role="alert">登入狀態已過期，請重新登入。</p>}

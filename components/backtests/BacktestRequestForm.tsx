@@ -6,6 +6,7 @@ import { backtestConfigFingerprint } from "../../lib/backtest";
 import { validateConfig } from "../../lib/strategy-validation";
 import type { BotConfig } from "../../lib/types";
 import { BacktestResultCard } from "./BacktestResultCard";
+import { CreateRunPanel } from "../runs/CreateRunPanel";
 import type { HistoricalBacktestRecord, HistoricalRequest } from "./BacktestResultCard";
 
 const INTERVAL_MS: Readonly<Record<string, number>> = {
@@ -20,6 +21,8 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   invalid_strategy_configuration: "JavaScript 策略格式或輸出不符合安全規範。",
   data_fetch_failed: "目前無法取得 WEEX 公開行情，請稍後重試。",
   backtest_execution_failed: "歷史回測未能完成，請檢查設定後重試。",
+  invalid_economic_parameters: "初始資金、成本或槓桿設定超出歷史回測可計算範圍。",
+  strategy_service_unavailable: "歷史回測儲存服務目前無法連線，請稍後再試。",
 };
 
 const alignedRecentRange = (config: BotConfig): { startTime: number; endTime: number } => {
@@ -115,7 +118,15 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
       if (strategyResponse.status === 401) { setState("unauthorized"); return; }
       const strategyBody = await safeBody(strategyResponse);
       const versionId = strategyVersionId(strategyBody);
-      if (!strategyResponse.ok || versionId === null) throw new Error("strategy_version_failed");
+      if (!strategyResponse.ok) {
+        const strategyCode = strategyBody && typeof strategyBody === "object"
+          ? (strategyBody as { error?: { code?: unknown } }).error?.code
+          : undefined;
+        throw new Error(strategyResponse.status >= 500
+          ? "strategy_service_unavailable"
+          : typeof strategyCode === "string" ? strategyCode : "strategy_version_failed");
+      }
+      if (versionId === null) throw new Error("strategy_version_failed");
       const request: HistoricalRequest = {
         strategyVersionId: versionId, market: config.market, symbol: config.symbol, interval: config.timeframe,
         startTime, endTime, initialCapital, feeRate, slippageRate, leverage: String(config.leverage),
@@ -147,7 +158,7 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
   };
 
   return (
-    <section className={`historical-request glass-panel${compact ? " historical-request--compact" : ""}`} aria-labelledby="historical-request-title">
+    <section className={`historical-request glass-panel${compact ? " historical-request--compact" : ""}`} aria-labelledby="historical-request-title" id="formal-backtest-request">
       <div className="workshop-panel__heading">
         <div><p className="eyebrow">WEEX PUBLIC MARKET DATA</p><h2 id="historical-request-title">WEEX 歷史回測</h2></div>
         <span className="workshop-count">歷史證據</span>
@@ -168,10 +179,10 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
         {state === "ensuring" ? "固定策略版本中…" : state === "running" ? "取得行情並計算中…" : "執行 WEEX 歷史回測"}
       </button>
       <div aria-live="polite">
-        {state === "unauthorized" && <p className="historical-feedback">請先登入，才能保存並查看自己的歷史回測。 <Link href="/signin-with-chatgpt?return_to=%2Fbacktests">使用 ChatGPT 登入</Link></p>}
+        {state === "unauthorized" && <p className="historical-feedback">請先登入，才能保存並查看自己的歷史回測。 <Link href="/auth?return_to=%2Fbacktests">登入</Link></p>}
         {state === "error" && message && <p className="historical-feedback historical-feedback--error">{message}</p>}
       </div>
-      {result && <BacktestResultCard backtest={result} />}
+      {result && <><BacktestResultCard backtest={result} /><CreateRunPanel backtest={result} config={config} /></>}
     </section>
   );
 }

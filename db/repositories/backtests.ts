@@ -260,13 +260,18 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
       const pageSize = limit(options.limit);
       const cursor = options.cursor;
       if (cursor !== undefined) exactInput(cursor, ["createdAt", "id"]);
-      const cursorTime = cursor === undefined ? null : time(cursor.createdAt, "cursor.createdAt");
-      const cursorId = cursor === undefined ? null : id(cursor.id, "cursor.id");
-      const result = await database.prepare(`
-        SELECT ${jobColumns} FROM backtest_jobs
-        WHERE user_id = ? AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?))
-        ORDER BY created_at DESC, id DESC LIMIT ?
-      `).bind(owner, cursorTime, cursorTime, cursorTime, cursorId, pageSize + 1).all<BacktestJobRecord>();
+      const result = cursor === undefined
+        ? await database.prepare(`
+            SELECT ${jobColumns} FROM backtest_jobs
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC LIMIT ?
+          `).bind(owner, pageSize + 1).all<BacktestJobRecord>()
+        : await database.prepare(`
+            SELECT ${jobColumns} FROM backtest_jobs
+            WHERE user_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))
+            ORDER BY created_at DESC, id DESC LIMIT ?
+          `).bind(owner, time(cursor.createdAt, "cursor.createdAt"), time(cursor.createdAt, "cursor.createdAt"),
+            id(cursor.id, "cursor.id"), pageSize + 1).all<BacktestJobRecord>();
       if (!result.success) throw new Error("backtest list failed");
       const more = result.results.length > pageSize;
       const items = result.results.slice(0, pageSize);

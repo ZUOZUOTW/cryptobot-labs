@@ -32,7 +32,8 @@ class SqliteDatabase implements ControlPlaneDatabase {
 const heartbeat = (sequence: number, positions = [{ symbol: "BTCUSDT", side: "long" as const, quantity: "1",
   entryPrice: "100", markPrice: "101", unrealizedPnl: "1", leverage: "1" }]) => ({
   deploymentId: "dep_a", sequence, occurredAt: 1_000 + sequence, mode: "paper" as const,
-  state: "running" as const, health: "healthy" as const, positions,
+  state: "running" as const, health: "healthy" as const, realizedDailyPnl: "2",
+  unrealizedDailyPnl: positions.reduce((total,position)=>String(Number(total)+Number(position.unrealizedPnl)),"0"), positions,
 });
 
 describe("activity repository", () => {

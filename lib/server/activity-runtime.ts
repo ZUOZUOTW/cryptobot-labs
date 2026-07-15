@@ -1,7 +1,7 @@
 import { env } from "./platform-env";
 import { requireControlPlaneDatabase } from "../../db/control-plane";
 import { createActivityRepository, createUserRepository } from "../../db/repositories";
-import { deriveWorkspaceUserId, workspaceIdentityProvider, type PlatformIdentityProvider } from "./auth";
+import { deriveWorkspaceUserId, platformIdentityProvider, type PlatformIdentityProvider } from "./auth";
 import { createActivityHandlers } from "./activity-export";
 import { errorResponse } from "./http";
 
@@ -15,7 +15,7 @@ export function createProductionActivityHandlers(environment: ActivityEnvironmen
   options: { identityProvider?: PlatformIdentityProvider; deriveUserId?: (email: string) => Promise<string>;
     now?: () => number } = {}) {
   const database = requireControlPlaneDatabase(environment.DB); const now = options.now ?? Date.now;
-  const auth = { identityProvider: options.identityProvider ?? workspaceIdentityProvider,
+  const auth = { identityProvider: options.identityProvider ?? platformIdentityProvider,
     userRepository: createUserRepository(database), deriveUserId: options.deriveUserId ?? deriveWorkspaceUserId, now };
   return createActivityHandlers({ auth, activity: createActivityRepository(database) });
 }

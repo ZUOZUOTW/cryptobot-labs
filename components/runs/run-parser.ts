@@ -59,9 +59,9 @@ const evidenceOf = (value: unknown): RunView["evidence"] | null => {
   const heartbeatExpectedDeploymentVersion = item.heartbeatExpectedDeploymentVersion === null ? null : integer(item.heartbeatExpectedDeploymentVersion);
   if ((heartbeatOccurredAt === null) !== (heartbeatExpectedDeploymentVersion === null)
     || (heartbeatExpectedDeploymentVersion !== null && heartbeatExpectedDeploymentVersion < 1)
-    || (item.pnlSource !== null && item.pnlSource !== "heartbeat-positions")
-    || (item.pnlSource === "heartbeat-positions" && heartbeatOccurredAt === null)) return null;
-  return { heartbeatOccurredAt, heartbeatExpectedDeploymentVersion, pnlSource: item.pnlSource as "heartbeat-positions" | null };
+    || (item.pnlSource !== null && item.pnlSource !== "heartbeat-account")
+    || (item.pnlSource === "heartbeat-account" && heartbeatOccurredAt === null)) return null;
+  return { heartbeatOccurredAt, heartbeatExpectedDeploymentVersion, pnlSource: item.pnlSource as "heartbeat-account" | null };
 };
 
 const arrayOf = <T>(value: unknown, parser: (value: unknown) => T | null, maximum: number): T[] | null => {
@@ -70,22 +70,26 @@ const arrayOf = <T>(value: unknown, parser: (value: unknown) => T | null, maximu
 };
 
 export const parseRunView = (value: unknown): RunView | null => {
-  const item = record(value); const keys = ["id", "botName", "market", "mode", "state", "health", "pnl", "positions", "openOrders", "lastSignal", "riskBlocks", "evidence", "device", "strategyVersion", "version", "updatedAt", "riskPolicy"];
+  const item = record(value); const keys = ["id", "botName", "market", "mode", "state", "health", "pnl", "realizedPnl", "unrealizedPnl", "positions", "openOrders", "lastSignal", "riskBlocks", "evidence", "device", "strategyVersion", "version", "updatedAt", "riskPolicy"];
   if (!item || !exact(item, keys) || !["paper", "futures-demo", "live"].includes(String(item.mode))
     || (item.market !== "spot" && item.market !== "futures")
     || !["stopped", "running", "paused", "error"].includes(String(item.state))
     || !(item.health === null || ["healthy", "degraded", "paused"].includes(String(item.health)))) return null;
   const id = identifier(item.id); const botName = text(item.botName, 100); const pnl = item.pnl === null ? null : decimal(item.pnl, true);
+  const realizedPnl=item.realizedPnl===null?null:decimal(item.realizedPnl,true);
+  const unrealizedPnl=item.unrealizedPnl===null?null:decimal(item.unrealizedPnl,true);
   const positions = arrayOf(item.positions, positionOf, 100); const openOrders = arrayOf(item.openOrders, orderOf, 200);
   const lastSignal = item.lastSignal === null ? null : signalOf(item.lastSignal); const riskBlocks = arrayOf(item.riskBlocks, riskBlockOf, 100);
   const evidence = evidenceOf(item.evidence); const device = record(item.device); const strategyVersion = record(item.strategyVersion); const version = integer(item.version); const updatedAt = integer(item.updatedAt); const riskPolicy = riskPolicyOf(item.riskPolicy);
   const deviceId = device && exact(device, ["id"]) ? identifier(device.id) : null; const strategyVersionId = strategyVersion && exact(strategyVersion, ["id"]) ? identifier(strategyVersion.id) : null;
-  if (!id || !botName || (item.pnl !== null && pnl === null) || !positions || !openOrders || (item.lastSignal !== null && !lastSignal) || !riskBlocks || !evidence || !deviceId || !strategyVersionId || version === null || version < 1 || updatedAt === null || !riskPolicy) return null;
+  if (!id || !botName || (item.pnl !== null && pnl === null) || (item.realizedPnl!==null&&realizedPnl===null)
+    || (item.unrealizedPnl!==null&&unrealizedPnl===null) || !positions || !openOrders || (item.lastSignal !== null && !lastSignal) || !riskBlocks || !evidence || !deviceId || !strategyVersionId || version === null || version < 1 || updatedAt === null || !riskPolicy) return null;
   if (evidence.heartbeatExpectedDeploymentVersion !== null && evidence.heartbeatExpectedDeploymentVersion !== version) return null;
   if ((pnl === null) !== (evidence.pnlSource === null)) return null;
+  if ((pnl===null)!==(realizedPnl===null)||(pnl===null)!==(unrealizedPnl===null))return null;
   if (evidence.heartbeatOccurredAt === null && (item.health !== null || positions.length > 0 || pnl !== null)) return null;
   if ((lastSignal && lastSignal.expectedDeploymentVersion !== version) || riskBlocks.some((block) => block.expectedDeploymentVersion !== version)) return null;
-  return { id, botName, market: item.market, mode: item.mode as RunView["mode"], state: item.state as RunView["state"], health: item.health as RunView["health"], pnl, positions, openOrders, lastSignal, riskBlocks, evidence, device: { id: deviceId }, strategyVersion: { id: strategyVersionId }, version, updatedAt, riskPolicy };
+  return { id, botName, market: item.market, mode: item.mode as RunView["mode"], state: item.state as RunView["state"], health: item.health as RunView["health"], pnl, realizedPnl, unrealizedPnl, positions, openOrders, lastSignal, riskBlocks, evidence, device: { id: deviceId }, strategyVersion: { id: strategyVersionId }, version, updatedAt, riskPolicy };
 };
 
 export const parseRunList = (value: unknown): { runs: RunView[]; nextCursor: { createdAt: number; id: string } | null } | null => {

@@ -40,7 +40,7 @@ const connectionOf = (value: unknown): ConnectionSummary | null => {
 
 const deviceOf = (value: unknown): ConnectionDevice | null => {
   const source = record(value);
-  if (!source || !exactKeys(source, ["id", "name", "platform", "deviceStatus", "lastSeenAt", "connection"])) return null;
+  if (!source || !exactKeys(source, ["id", "name", "platform", "deviceStatus", "lastSeenAt", "connection", "commandTarget"])) return null;
   const id = string(source.id);
   if (!id || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) return null;
   if (source.platform !== "macos" && source.platform !== "windows") return null;
@@ -51,8 +51,13 @@ const deviceOf = (value: unknown): ConnectionDevice | null => {
   if (lastSeenAt === undefined) return null;
   const connection = source.connection === null ? null : connectionOf(source.connection);
   if (source.connection !== null && connection === null) return null;
+  const target = source.commandTarget === null ? null : record(source.commandTarget);
+  if (source.commandTarget !== null && (!target || !exactKeys(target, ["deploymentId", "expectedVersion"])
+    || !string(target.deploymentId)?.match(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
+    || !Number.isSafeInteger(target.expectedVersion) || Number(target.expectedVersion) < 1)) return null;
   return { id, name, platform: source.platform, deviceStatus: source.deviceStatus,
-    lastSeenAt, connection };
+    lastSeenAt, connection, commandTarget: target === null ? null : {
+      deploymentId: target.deploymentId as string, expectedVersion: target.expectedVersion as number } };
 };
 
 const itemsOf = (value: unknown): ConnectionDevice[] | null => {
@@ -66,7 +71,7 @@ const itemsOf = (value: unknown): ConnectionDevice[] | null => {
   return parsed as ConnectionDevice[];
 };
 
-export function ConnectionsPanel() {
+export function ConnectionsPanel({ onSnapshot }: { onSnapshot?: (items: ConnectionDevice[]) => void } = {}) {
   const [items, setItems] = useState<ConnectionDevice[]>([]);
   const [observedAt, setObservedAt] = useState(0);
   const [state, setState] = useState<"loading" | "ready" | "error" | "unauthorized">("loading");
@@ -79,9 +84,9 @@ export function ConnectionsPanel() {
       const body: unknown = await response.json();
       const parsed = itemsOf(body);
       if (!response.ok || parsed === null) throw new Error("connections_failed");
-      setItems(parsed); setObservedAt(Date.now()); setState("ready");
+      setItems(parsed); onSnapshot?.(parsed); setObservedAt(Date.now()); setState("ready");
     } catch { setState("error"); }
-  }, []);
+  }, [onSnapshot]);
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
 
@@ -90,9 +95,26 @@ export function ConnectionsPanel() {
     try {
       const response = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE", cache: "no-store", headers: { Accept: "application/json" } });
       if (!response.ok) throw new Error("revoke_failed");
-      setItems((current) => current.filter((item) => item.id !== id));
+      setItems((current) => { const next = current.filter((item) => item.id !== id); onSnapshot?.(next); return next; });
       setFeedback("裝置已撤銷。請在該電腦的本機代理中另行清除 API 憑證。");
     } catch { setFeedback("無法撤銷此裝置，請重新整理後再試。"); }
+  };
+  const command = async (device: ConnectionDevice, type: "revalidate-connection" | "erase-local-credentials") => {
+    setFeedback("");
+    if (!device.commandTarget) { setFeedback("此裝置尚無可用部署。請先建立一個 Paper 運行，再送出連線維護命令。"); return; }
+    try {
+      const key = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? `connection-${crypto.randomUUID()}` : `connection-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const response = await fetch(`/api/runs/${encodeURIComponent(device.commandTarget.deploymentId)}/commands`, {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+        body: JSON.stringify({ type, expectedVersion: device.commandTarget.expectedVersion,
+          ...(type === "erase-local-credentials" ? { reason: "user-requested-from-connections" } : {}) }),
+      });
+      if (!response.ok) throw new Error("connection_command_failed");
+      setFeedback(type === "revalidate-connection"
+        ? "重新驗證命令已排隊；本機代理完成 WEEX 權限檢查後，請重新整理查看最新證據。"
+        : "清除命令已排隊；代理會先暫停交易，再刪除本機金鑰並回報結果。");
+    } catch { setFeedback("命令未被接受；部署版本可能已更新，請重新整理後再試。"); }
   };
 
   return (
@@ -101,11 +123,11 @@ export function ConnectionsPanel() {
       <div aria-live="polite">
         {state === "loading" && <p className="connections-empty">正在載入裝置與連線狀態…</p>}
         {state === "error" && <div className="connections-empty"><p>無法載入裝置。</p><button className="button button--secondary button--small" onClick={() => void load()} type="button">重試載入</button></div>}
-        {state === "unauthorized" && <p className="connections-empty">登入狀態已過期。 <Link href="/signin-with-chatgpt?return_to=%2Fconnections">使用 ChatGPT 重新登入</Link></p>}
+        {state === "unauthorized" && <p className="connections-empty">登入狀態已過期。 <Link href="/auth?return_to=%2Fconnections">重新登入</Link></p>}
         {feedback && <p className="connection-feedback" role="status">{feedback}</p>}
       </div>
       {state === "ready" && items.length === 0 && <p className="connections-empty">尚無已配對裝置。請先安裝本機代理，再使用上方配對碼。</p>}
-      {state === "ready" && items.length > 0 && <ul className="device-list" aria-label="我的代理裝置">{items.map((device) => <li key={device.id}><DeviceCard device={device} observedAt={observedAt} onRevoke={revoke} /></li>)}</ul>}
+      {state === "ready" && items.length > 0 && <ul className="device-list" aria-label="我的代理裝置">{items.map((device) => <li key={device.id}><DeviceCard device={device} observedAt={observedAt} onCommand={command} onRevoke={revoke} /></li>)}</ul>}
     </section>
   );
 }

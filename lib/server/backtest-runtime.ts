@@ -1,12 +1,18 @@
 import { requireControlPlaneDatabase } from "../../db/control-plane";
 import { createBacktestRepository, createStrategyVersionRepository, createUserRepository } from "../../db/repositories";
 import { createFetchTransport, WeexPublicClient } from "../../packages/weex-client/src";
-import { deriveWorkspaceUserId, workspaceIdentityProvider, type PlatformIdentityProvider } from "./auth";
+import { deriveWorkspaceUserId, platformIdentityProvider, type PlatformIdentityProvider } from "./auth";
 import { createHistoricalBacktestHandlers, createHistoricalBacktestService } from "./backtests";
 import { errorResponse } from "./http";
 import { createStrategySaveHandler, createStrategySaveService } from "./strategies";
 
-export interface TradingEnvironment { DB?: unknown; PUBLIC_ORIGIN?: unknown }
+export interface TradingEnvironment {
+  DB?: unknown;
+  PUBLIC_ORIGIN?: unknown;
+  URL?: unknown;
+  SUPABASE_DATABASE_URL?: unknown;
+  DATABASE_URL?: unknown;
+}
 export interface TradingRuntimeOptions {
   fetchImpl?: typeof fetch;
   identityProvider?: PlatformIdentityProvider;
@@ -16,7 +22,26 @@ export interface TradingRuntimeOptions {
 }
 
 export function productionTradingFailure(error: unknown): Response {
+  const message = error instanceof Error
+    ? error.message.replace(/postgres(?:ql)?:\/\/\S+/gi, "[database-url-redacted]")
+    : "Unknown trading runtime error";
+  console.error("[trading-runtime] initialization failed", {
+    name: error instanceof Error ? error.name : "Error",
+    message,
+  });
   return errorResponse(error, { status: 500, code: "internal" });
+}
+
+export function tradingEnvironmentForRequest(
+  environment: TradingEnvironment,
+  request: Request,
+): TradingEnvironment {
+  return {
+    DB: environment.DB,
+    PUBLIC_ORIGIN: environment.PUBLIC_ORIGIN ?? environment.URL ?? new URL(request.url).origin,
+    SUPABASE_DATABASE_URL: environment.SUPABASE_DATABASE_URL,
+    DATABASE_URL: environment.DATABASE_URL,
+  };
 }
 
 export function createProductionTradingHandlers(
@@ -36,11 +61,14 @@ export function createProductionTradingHandlers(
     || configuredOrigin.search || configuredOrigin.hash || configuredOrigin.origin !== environment.PUBLIC_ORIGIN.replace(/\/$/, "")) {
     throw new Error("PUBLIC_ORIGIN deployment binding is invalid");
   }
-  const database = requireControlPlaneDatabase(environment.DB);
+  const database = requireControlPlaneDatabase(
+    environment.DB,
+    environment.SUPABASE_DATABASE_URL ?? environment.DATABASE_URL,
+  );
   const strategies = createStrategyVersionRepository(database);
   const now = options.now ?? Date.now;
   const idFactory = options.newId ?? ((prefix: string) => `${prefix}_${crypto.randomUUID()}`);
-  const auth = { identityProvider: options.identityProvider ?? workspaceIdentityProvider,
+  const auth = { identityProvider: options.identityProvider ?? platformIdentityProvider,
     userRepository: createUserRepository(database), deriveUserId: options.deriveUserId ?? deriveWorkspaceUserId, now };
   const originPolicy = { publicOrigin: configuredOrigin.origin };
   const marketData = new WeexPublicClient(createFetchTransport({ fetchImpl: options.fetchImpl,

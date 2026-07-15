@@ -26,18 +26,18 @@ async function allUserVisibleSource() {
   return sources.join("\n");
 }
 
-describe("softened WEEX product copy", () => {
-  it("removes exclusivity language without claiming other exchanges", async () => {
+describe("WEEX-only product copy", () => {
+  it("removes WEEX-only badges without claiming other exchanges", async () => {
     const source = await allUserVisibleSource();
 
-    expect(source).not.toMatch(/WEEX ONLY|只為 WEEX 而生|WEEX 專屬|只支援 WEEX|僅支援 WEEX|固定為 WEEX/i);
-    expect(source).toMatch(/推薦使用 WEEX API|WEEX API · 推薦/);
+    expect(source).not.toMatch(/WEEX ONLY|WEEX 專用|WEEX 專屬/i);
+    expect(source).toContain("WEEX 官方 OAuth");
     expect(source).not.toMatch(/支援 Binance|支援多交易所/i);
   });
 
   it("explains the currently implemented live connection without weakening its adapter boundary", async () => {
     const source = await allUserVisibleSource();
 
-    expect(source).toContain("目前可用的實盤連線為 WEEX API");
+    expect(source).toContain("正式版透過 WEEX 官方 OAuth 授權");
   });
 });
