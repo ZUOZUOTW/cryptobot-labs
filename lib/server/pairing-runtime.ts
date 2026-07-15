@@ -1,7 +1,7 @@
 import { env } from "./platform-env";
 import { createControlPlaneDatabase } from "../../db";
 import { createDeviceRepository, createUserRepository } from "../../db/repositories";
-import { deriveWorkspaceUserId, workspaceIdentityProvider } from "./auth";
+import { deriveWorkspaceUserId, platformIdentityProvider } from "./auth";
 import { createBootstrapProofVerifier } from "./device-signature";
 import { errorResponse } from "./http";
 import {
@@ -31,7 +31,7 @@ export function createProductionPairingHandlers(environment: PairingEnvironment 
   const deviceRepository = createDeviceRepository(database);
   const pairingService = createPairingService({ database, verifyBootstrapProof: createBootstrapProofVerifier() });
   const now = Date.now;
-  const auth = { identityProvider: workspaceIdentityProvider, userRepository, deriveUserId: deriveWorkspaceUserId, now };
+  const auth = { identityProvider: platformIdentityProvider, userRepository, deriveUserId: deriveWorkspaceUserId, now };
   const originPolicy = { publicOrigin: environment.PUBLIC_ORIGIN };
   return {
     issue: createIssuePairingCodeHandler({ auth, originPolicy, pairingService, now }),

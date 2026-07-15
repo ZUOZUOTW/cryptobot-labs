@@ -56,7 +56,8 @@ export class VisualExecutionRuntime {
     try {
       const outcome = await this.#dependencies.coordinator.propose(signal, request.context);
       if (!this.#current(deployment, epoch)) return { status: "discarded", reason: "stale" };
-      await this.#audit(deployment, request.now, "signal-proposed", `${signal.reason}:${outcome.status}`);
+      await this.#audit(deployment, request.now, "signal-proposed", `${signal.reason}:${outcome.status}`,
+        { signal, outcome, symbol: request.input.symbol });
       return { status: "proposed", outcome };
     } catch { return this.#pause(deployment, request.now, "execution-coordinator-fault"); }
   }
@@ -70,9 +71,10 @@ export class VisualExecutionRuntime {
     await this.#audit(deployment, at, "strategy-paused", reason); return { status: "paused", reason };
   }
 
-  async #audit(deployment: RuntimeDeployment, at: number, type: RuntimeAuditEvent["type"], reason: string): Promise<void> {
+  async #audit(deployment: RuntimeDeployment, at: number, type: RuntimeAuditEvent["type"], reason: string,
+    details: Pick<RuntimeAuditEvent, "signal" | "outcome" | "symbol"> = {}): Promise<void> {
     try { await this.#dependencies.audit({ type, deploymentId: deployment.deploymentId,
       configurationVersion: deployment.configurationVersion, scriptHash: deployment.scriptHash,
-      at, reason: reason.slice(0, 256) }); } catch { /* Audit transport cannot alter trading state. */ }
+      at, reason: reason.slice(0, 256), ...details }); } catch { /* Audit transport cannot alter trading state. */ }
   }
 }

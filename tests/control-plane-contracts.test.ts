@@ -26,7 +26,9 @@ describe("control-plane vocabulary", () => {
       "deploy",
       "pause",
       "resume-paper",
+      "resume-demo",
       "resume-live",
+      "enable-futures-demo",
       "request-live-unlock",
       "stop-new-orders",
       "cancel-open-orders",
@@ -77,6 +79,8 @@ describe("strict control-plane DTO parsers", () => {
       mode: "paper",
       state: "running",
       health: "healthy",
+      realizedDailyPnl: "2",
+      unrealizedDailyPnl: "10",
       positions: [{ symbol: "BTCUSDT", side: "long", quantity: "0.01", entryPrice: "64000",
         markPrice: "65000", unrealizedPnl: "10", leverage: "1" }],
     })).toMatchObject({ sequence: 7, health: "healthy" });
@@ -232,6 +236,8 @@ describe("strict control-plane DTO parsers", () => {
       mode: "paper",
       state: "running",
       health: "healthy",
+      realizedDailyPnl: "0",
+      unrealizedDailyPnl: "0",
       positions: Array.from({ length: 101 }, () => ({ symbol: "BTCUSDT", side: "long", quantity: "1",
         entryPrice: "1", markPrice: "1", unrealizedPnl: "0", leverage: "1" })),
     })).toThrow(/陣列/);

@@ -28,15 +28,19 @@ export interface VaultWeexExecutionClientOptions {
   readonly now?: () => number;
 }
 
-function liveTarget(target: ExecutionTarget): void {
-  if (target.mode !== "live") throw new Error("Vault WEEX execution only supports live targets");
+function privateTarget(target: ExecutionTarget): void {
+  if (target.mode !== "live" && !(target.market === "futures" && target.mode === "futures-demo")) {
+    throw new Error("Vault WEEX execution only supports private exchange targets");
+  }
 }
 
 function safe(summary: VerifiedAccountSummary, target: ExecutionTarget): void {
-  if (summary.market !== target.market || summary.mode !== "live" || summary.canTrade !== true
-    || summary.readPermission !== true || summary.withdrawalPermission !== "absent"
-    || (target.market === "futures" && summary.positionMode !== "hedge")) {
-    throw new Error("WEEX live account verification is unsafe");
+  const exactTarget = summary.market === target.market && summary.mode === target.mode && summary.readPermission === true;
+  const safeLive = target.mode !== "live" || (summary.canTrade === true
+    && summary.withdrawalPermission === "absent"
+    && (target.market !== "futures" || summary.positionMode === "hedge"));
+  if (!exactTarget || !safeLive) {
+    throw new Error("WEEX private account verification is unsafe");
   }
 }
 
@@ -46,7 +50,7 @@ export function createVaultWeexExecutionClient(options: VaultWeexExecutionClient
   const now = options.now ?? Date.now;
   const withClient = async <Result>(target: ExecutionTarget,
     operation: (client: WeexPrivateClient) => Promise<Result>): Promise<Result> => {
-    liveTarget(target);
+    privateTarget(target);
     const sentAt = now();
     if (!Number.isSafeInteger(sentAt) || sentAt < 0) throw new Error("Invalid WEEX clock probe start");
     const probe = await transport.send({ method: "GET", url: CLOCK_PROBE_URL, headers: {} });
@@ -75,6 +79,9 @@ export function createVaultWeexExecutionClient(options: VaultWeexExecutionClient
       return withClient(query.target, (client) => client.findOrderByClientOrderId(query));
     },
     cancelOrder(query: ExchangeOrderQuery): Promise<CancelOutcome> {
+      if (query.target.mode === "futures-demo") {
+        return Promise.resolve({ status: "rejected", reason: "unsupported-demo-cancel" });
+      }
       return withClient(query.target, (client) => client.cancelOrder(query));
     },
   });

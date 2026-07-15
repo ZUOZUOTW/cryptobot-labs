@@ -66,6 +66,16 @@ export type ExchangeOrderStatus =
   | "CANCELED"
   | "REJECTED";
 
+export interface ExchangeFillSnapshot {
+  readonly exchangeFillId: string;
+  readonly price: string;
+  readonly quantity: string;
+  readonly fee: string;
+  readonly feeCurrency: string;
+  readonly realizedPnl?: string;
+  readonly filledAt: number;
+}
+
 export interface ExchangeOrderSnapshot {
   readonly clientOrderId: string;
   readonly exchangeOrderId: string;
@@ -76,6 +86,7 @@ export interface ExchangeOrderSnapshot {
   readonly cumulativeFilledQuantity: string;
   readonly averageFillPrice?: string;
   readonly fees?: string;
+  readonly fills?: readonly ExchangeFillSnapshot[];
 }
 
 export interface OrderQuery {

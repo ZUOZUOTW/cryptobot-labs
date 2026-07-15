@@ -12,6 +12,8 @@ export interface RunEvidence {
   positions: Array<{symbol:string;side:"long"|"short";quantity:string;entryPrice:string;markPrice:string;unrealizedPnl:string;leverage:string}>;
   openOrders: Array<{id:string;symbol:string;side:"buy"|"sell";state:string;quantity:string;price:string|null}>;
   pnl: string | null;
+  realizedPnl: string | null;
+  unrealizedPnl: string | null;
   heartbeatOccurredAt: number | null;
   heartbeatExpectedDeploymentVersion: number | null;
   lastSignal: { action: "enter" | "exit" | "hold"; reason: string; occurredAt: number; expectedDeploymentVersion: number } | null;
@@ -74,6 +76,7 @@ export function createLiveDataRepository(database: ControlPlaneDatabase) {
         ORDER BY h.sequence DESC LIMIT 1`).bind(owner,target,expectedDeploymentVersion).first<HeartbeatRow>();
       let positions: RunEvidence["positions"]=[];
       let heartbeatState:RunEvidence["state"]=null;
+      let realizedPnl:string|null=null,unrealizedPnl:string|null=null;
       if (heartbeat) {
         ledger(heartbeat.payloadJson,expectedDeploymentVersion);
         if(!["running","paused","stopped","error"].includes(heartbeat.state))throw new Error("stored heartbeat state is invalid");
@@ -81,7 +84,11 @@ export function createLiveDataRepository(database: ControlPlaneDatabase) {
         const parsed=JSON.parse(heartbeat.summaryJson) as unknown;
         if (!parsed || typeof parsed!=="object" || Array.isArray(parsed)
           || !Array.isArray((parsed as {positions?:unknown}).positions)) throw new Error("stored heartbeat summary is invalid");
-        const raw=(parsed as {positions:unknown[]}).positions;if(raw.length>100)throw new Error("stored position summary is too large");positions=raw.map(position);
+        const summary=parsed as {positions:unknown[];realizedDailyPnl?:unknown;unrealizedDailyPnl?:unknown};
+        if(typeof summary.realizedDailyPnl!=="string"||!SIGNED.test(summary.realizedDailyPnl)
+          ||typeof summary.unrealizedDailyPnl!=="string"||!SIGNED.test(summary.unrealizedDailyPnl))throw new Error("stored heartbeat PnL is invalid");
+        realizedPnl=summary.realizedDailyPnl;unrealizedPnl=summary.unrealizedDailyPnl;
+        const raw=summary.positions;if(raw.length>100)throw new Error("stored position summary is too large");positions=raw.map(position);
       }
       const orders=await database.prepare(`SELECT id,symbol,side,state,quantity,price
         FROM orders o WHERE user_id=? AND deployment_id=? AND state IN ('proposed','submitting','acknowledged','partially-filled','cancel-pending','unknown','reconciled')
@@ -104,7 +111,8 @@ export function createLiveDataRepository(database: ControlPlaneDatabase) {
         ORDER BY a.occurred_at DESC,a.id DESC LIMIT 20`).bind(owner,target,expectedDeploymentVersion).all<AuditRow>();
       if(!riskRows.success)throw new Error("run risk evidence query failed");
       return { state:heartbeatState, health: heartbeat?.health ?? null, positions, openOrders: orders.results.map(order),
-        pnl:heartbeat?addSignedDecimals(positions.map(item=>item.unrealizedPnl)):null,
+        pnl:heartbeat&&realizedPnl!==null&&unrealizedPnl!==null?addSignedDecimals([realizedPnl,unrealizedPnl]):null,
+        realizedPnl,unrealizedPnl,
         heartbeatOccurredAt:heartbeat?.occurredAt??null,
         heartbeatExpectedDeploymentVersion:heartbeat?expectedDeploymentVersion:null,
         lastSignal:lastSignalRow?signal(lastSignalRow,expectedDeploymentVersion):null,

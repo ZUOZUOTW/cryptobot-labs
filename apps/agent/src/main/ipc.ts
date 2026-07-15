@@ -2,6 +2,7 @@ import {
   IPC_CHANNELS,
   assertNoArguments,
   parseAgentStatus,
+  parseAgentUpdateStatus,
   parseBoolean,
   parseCredentialInput,
   parseCredentialMetadata,
@@ -9,6 +10,7 @@ import {
   parsePairingResult,
   parseVerifiedConnection,
   type AgentStatus,
+  type AgentUpdateStatus,
   type CredentialInput,
   type CredentialMetadata,
   type PairingInput,
@@ -24,6 +26,9 @@ export interface AgentShellServices {
   pair(input: PairingInput): Promise<PairingResult>;
   setStartAtLogin(enabled: boolean): Promise<void>;
   emergencyStop(): Promise<void>;
+  getUpdateStatus(): Promise<AgentUpdateStatus>;
+  checkForUpdates(): Promise<AgentUpdateStatus>;
+  installUpdate(): Promise<void>;
 }
 
 export interface IpcMainLike {
@@ -108,6 +113,18 @@ export function registerAgentIpc(
     [IPC_CHANNELS.emergencyStop]: async (...args) => {
       assertNoArguments(args);
       assertVoidResult(await callService("emergency stop", () => services.emergencyStop()));
+    },
+    [IPC_CHANNELS.getUpdateStatus]: async (...args) => {
+      assertNoArguments(args);
+      return parseAgentUpdateStatus(await callService("get update status", () => services.getUpdateStatus()));
+    },
+    [IPC_CHANNELS.checkForUpdates]: async (...args) => {
+      assertNoArguments(args);
+      return parseAgentUpdateStatus(await callService("check for updates", () => services.checkForUpdates()));
+    },
+    [IPC_CHANNELS.installUpdate]: async (...args) => {
+      assertNoArguments(args);
+      assertVoidResult(await callService("install update", () => services.installUpdate()));
     },
   };
 

@@ -426,7 +426,7 @@ describe("historical backtest", () => {
     await expect(runHistoricalBacktest(request({
       dataset: { ...dataset(fixedCandles as Candle[]), validation: { duplicates: Array(4).fill(1), ordered: true, gaps: [], incompleteCount: 0 } },
     }))).rejects.toThrow(/oversized/i);
-    await expect(runHistoricalBacktest(request({ dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "21" }))).rejects.toThrow(/20/);
+    await expect(runHistoricalBacktest(request({ dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "501" }))).rejects.toThrow(/500/);
     await expect(runHistoricalBacktest(request({ maintenanceMarginRate: "0.02" }))).rejects.toThrow(/spot/i);
     await expect(runHistoricalBacktest(request({
       dataset: dataset(fixedCandles as Candle[], "futures"), leverage: "2", maintenanceMarginRate: "1",
@@ -442,7 +442,7 @@ describe("historical backtest", () => {
       } },
     }));
     expect(result.trades[0]!.exitReason).toBe("end-of-data");
-    expect(result.provenance.liquidationModel).toMatchObject({ maintenanceMarginRate: "0.02", maximumSupportedLeverage: "20" });
+    expect(result.provenance.liquidationModel).toMatchObject({ maintenanceMarginRate: "0.02", maximumSupportedLeverage: "500" });
   });
 
   it("rejects unsafe candle timestamps at the engine boundary", async () => {

@@ -238,13 +238,13 @@ export function evaluateOrderRisk(
     if (!isSafeNonnegativeInteger(context.lastSignalAt) || context.lastSignalAt > context.now) {
       return reject("invalid-last-signal-at");
     }
-    if (context.now - context.lastSignalAt < policy.minimumSignalCooldownMs) {
+    if (increasesRisk && context.now - context.lastSignalAt < policy.minimumSignalCooldownMs) {
       return reject("signal-cooldown-active");
     }
   }
 
   if (!isSafeNonnegativeInteger(context.consecutiveFailures)) return reject("invalid-consecutive-failures");
-  if (context.consecutiveFailures >= policy.maximumConsecutiveFailures) {
+  if (increasesRisk && context.consecutiveFailures >= policy.maximumConsecutiveFailures) {
     return reject("maximum-consecutive-failures-reached");
   }
 

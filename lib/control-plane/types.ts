@@ -15,7 +15,9 @@ export const COMMAND_TYPES = [
   "deploy",
   "pause",
   "resume-paper",
+  "resume-demo",
   "resume-live",
+  "enable-futures-demo",
   "request-live-unlock",
   "stop-new-orders",
   "cancel-open-orders",
@@ -67,6 +69,8 @@ export interface HeartbeatDto {
   mode: RunMode;
   state: "running" | "paused" | "stopped" | "error";
   health: "healthy" | "degraded" | "paused";
+  realizedDailyPnl: string;
+  unrealizedDailyPnl: string;
   positions: HeartbeatPositionDto[];
 }
 

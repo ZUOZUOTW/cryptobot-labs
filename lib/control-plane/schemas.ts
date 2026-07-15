@@ -231,7 +231,8 @@ const parsePosition = (value: unknown): HeartbeatPositionDto => {
 
 export function parseHeartbeatDto(value: unknown): HeartbeatDto {
   const record = asRecord(jsonValue(value, "heartbeat", 65_536), "heartbeat");
-  assertExactKeys(record, ["deploymentId", "sequence", "occurredAt", "mode", "state", "health", "positions"]);
+  assertExactKeys(record, ["deploymentId", "sequence", "occurredAt", "mode", "state", "health",
+    "realizedDailyPnl", "unrealizedDailyPnl", "positions"]);
   if (typeof record.mode !== "string" || !RUN_MODES.includes(record.mode as RunMode)) {
     throw new Error("mode 不是支援的運行模式");
   }
@@ -250,6 +251,8 @@ export function parseHeartbeatDto(value: unknown): HeartbeatDto {
     mode: record.mode as RunMode,
     state: record.state,
     health: record.health,
+    realizedDailyPnl: decimal(record.realizedDailyPnl, "realizedDailyPnl", true),
+    unrealizedDailyPnl: decimal(record.unrealizedDailyPnl, "unrealizedDailyPnl", true),
     positions: record.positions.map(parsePosition),
   };
 }

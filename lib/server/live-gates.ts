@@ -148,7 +148,9 @@ export async function createLiveRevalidationEnvelope(context: LiveGateContext, i
 }
 
 export type RunCommand = {
-  type: "resume-paper" | "resume-live" | "pause" | "stop-new-orders" | "cancel-open-orders" | "close-positions";
+  type: "resume-paper" | "resume-demo" | "resume-live" | "enable-futures-demo" | "pause"
+    | "stop-new-orders" | "cancel-open-orders" | "close-positions"
+    | "revalidate-connection" | "erase-local-credentials";
   expectedVersion: number;
   payload: JsonObject;
   confirmedAt?: number;
@@ -156,9 +158,19 @@ export type RunCommand = {
 
 export function parseRunCommand(value: unknown, now: number): RunCommand {
   const record = plainRecord(value, "command");
-  if (record.type === "resume-paper" || record.type === "resume-live" || record.type === "pause") {
+  if (record.type === "resume-paper" || record.type === "resume-demo" || record.type === "resume-live"
+    || record.type === "enable-futures-demo" || record.type === "pause") {
     exact(record, ["type", "expectedVersion", "reason"], "lifecycle command");
     return { type: record.type, expectedVersion: positiveVersion(record.expectedVersion),
+      payload: { reason: boundedText(record.reason, "reason") } };
+  }
+  if (record.type === "revalidate-connection") {
+    exact(record, ["type", "expectedVersion"], "connection revalidation command");
+    return { type: "revalidate-connection", expectedVersion: positiveVersion(record.expectedVersion), payload: {} };
+  }
+  if (record.type === "erase-local-credentials") {
+    exact(record, ["type", "expectedVersion", "reason"], "credential erasure command");
+    return { type: "erase-local-credentials", expectedVersion: positiveVersion(record.expectedVersion),
       payload: { reason: boundedText(record.reason, "reason") } };
   }
   if (record.type === "stop-new-orders") {

@@ -6,7 +6,12 @@ export const IPC_CHANNELS = {
   pair: "agent:pair",
   setStartAtLogin: "agent:set-start-at-login",
   emergencyStop: "agent:emergency-stop",
+  getUpdateStatus: "agent:get-update-status",
+  checkForUpdates: "agent:check-for-updates",
+  installUpdate: "agent:install-update",
 } as const;
+
+export const IPC_EVENTS = { pairingSuggestion: "agent:pairing-suggestion" } as const;
 
 export interface CredentialInput {
   apiKey: string;
@@ -49,6 +54,12 @@ export interface AgentStatus {
   startAtLogin: boolean;
 }
 
+export interface AgentUpdateStatus {
+  state: "disabled" | "idle" | "checking" | "downloading" | "downloaded" | "not-available" | "blocked" | "error";
+  version: string | null;
+  reason: "not-packaged" | "origin-unavailable" | "unsupported-platform" | "squirrel-first-run" | "live-running" | null;
+}
+
 export interface AgentRendererApi {
   getStatus(): Promise<AgentStatus>;
   saveCredentials(input: CredentialInput): Promise<CredentialMetadata>;
@@ -57,6 +68,10 @@ export interface AgentRendererApi {
   pair(input: PairingInput): Promise<PairingResult>;
   setStartAtLogin(enabled: boolean): Promise<void>;
   emergencyStop(): Promise<void>;
+  getUpdateStatus(): Promise<AgentUpdateStatus>;
+  checkForUpdates(): Promise<AgentUpdateStatus>;
+  installUpdate(): Promise<void>;
+  onPairingSuggestion(listener: (code: string) => void): () => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,6 +85,23 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 
 function boundedString(value: unknown, min: number, max: number): value is string {
   return typeof value === "string" && value.length >= min && value.length <= max && value.trim() === value;
+}
+
+export function parseAgentUpdateStatus(value: unknown): AgentUpdateStatus {
+  if (!isRecord(value) || !hasExactKeys(value, ["state", "version", "reason"])) {
+    throw new TypeError("Invalid Agent update status");
+  }
+  const states: AgentUpdateStatus["state"][] = ["disabled", "idle", "checking", "downloading", "downloaded",
+    "not-available", "blocked", "error"];
+  const reasons: Exclude<AgentUpdateStatus["reason"], null>[] = ["not-packaged", "origin-unavailable",
+    "unsupported-platform", "squirrel-first-run", "live-running"];
+  if (!states.includes(value.state as AgentUpdateStatus["state"])
+    || (value.version !== null && (typeof value.version !== "string" || !/^\d+\.\d+\.\d+$/.test(value.version)))
+    || (value.reason !== null && !reasons.includes(value.reason as Exclude<AgentUpdateStatus["reason"], null>))) {
+    throw new TypeError("Invalid Agent update status");
+  }
+  return { state: value.state as AgentUpdateStatus["state"], version: value.version as string | null,
+    reason: value.reason as AgentUpdateStatus["reason"] };
 }
 
 export function parseCredentialInput(value: unknown): CredentialInput {
@@ -88,6 +120,11 @@ export function parsePairingInput(value: unknown): PairingInput {
     throw new TypeError("Invalid pairing input");
   }
   return { code: value.code, deviceName: value.deviceName };
+}
+
+export function parsePairingSuggestion(value: unknown): string {
+  if (typeof value !== "string" || !/^CBL-[A-Za-z0-9_-]{22}$/.test(value)) throw new TypeError("Invalid pairing suggestion");
+  return value;
 }
 
 export function parseBoolean(value: unknown): boolean {

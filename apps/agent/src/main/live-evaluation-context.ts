@@ -6,7 +6,7 @@ import type { MarketQuote } from "./market-stream";
 import type { PublicMarketSnapshot } from "./public-market-service";
 import type { RunEvaluationRequest } from "./run-manager";
 
-/** Binds public market data and credential-isolated account evidence into one live risk request. */
+/** Binds public market data and credential-isolated account evidence into one private-exchange risk request. */
 export function buildLiveEvaluationRequest(input: {
   readonly bundle: DeploymentBundle;
   readonly market: PublicMarketSnapshot;
@@ -16,8 +16,10 @@ export function buildLiveEvaluationRequest(input: {
 }): RunEvaluationRequest {
   if (!Number.isSafeInteger(input.signalSequence) || input.signalSequence < 1) throw new TypeError("Invalid signal sequence");
   const risk = input.bundle.risk;
-  if (input.bundle.deployment.mode !== "live" || risk === null || input.bundle.strategy.config === null) {
-    throw new TypeError("Live evaluation requires a complete live deployment");
+  const mode = input.bundle.deployment.mode;
+  const supportedMode = mode === "live" || (mode === "futures-demo" && input.bundle.strategy.market === "futures");
+  if (!supportedMode || risk === null || input.bundle.strategy.config === null) {
+    throw new TypeError("Private evaluation requires a complete supported deployment");
   }
   const stored = input.bundle.strategy.config as VisualBotConfig & { source?: unknown };
   if ((input.bundle.strategy.source === null && stored.source !== undefined)
@@ -40,7 +42,7 @@ export function buildLiveEvaluationRequest(input: {
   }
   const context: ExecutionContext = Object.freeze({ deploymentId: input.bundle.deployment.id,
     configurationVersion: `v${input.bundle.deployment.version}`, signalSequence: input.signalSequence,
-    market: config.market, mode: "live", referencePrice: input.quote.last, now, instrumentRules: rules,
+    market: config.market, mode, referencePrice: input.quote.last, now, instrumentRules: rules,
     riskPolicy: Object.freeze({ allowedSymbols: Object.freeze([...risk.allowedSymbols]),
       maximumOrderNotional: risk.maxOrderNotional, maximumPositionNotional: risk.maxPositionNotional,
       maximumTotalExposure: risk.maxTotalExposure, maximumSimultaneousPositions: risk.maxSimultaneousPositions,

@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import { createHash } from "node:crypto";
 
-import type { Market, StrategyPositionSnapshot, TrackedOrder } from "@cryptobot-labs/trading-core";
+import type { ExchangeFillSnapshot, Market, StrategyPositionSnapshot, TrackedOrder } from "@cryptobot-labs/trading-core";
 
 import type { AsyncSafeStorage, VaultFileStore } from "./vault";
 
@@ -13,9 +13,10 @@ const MAX_BYTES = 512 * 1024;
 const MAX_PROCESSED = 1_024;
 
 interface State {
-  schemaVersion: 1;
+  schemaVersion: 2;
   recordVersion: number;
   deploymentId: string;
+  mode: "live" | "futures-demo";
   market: Market;
   symbol: string;
   dayStartEquity: string;
@@ -72,16 +73,22 @@ function parse(raw: string): State {
   try { value = JSON.parse(raw); } catch { throw new Error("Live state is corrupt"); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Live state is corrupt");
   const item = value as Record<string, unknown>;
-  const keys = ["schemaVersion","recordVersion","deploymentId","market","symbol","dayStartEquity","utcDay","position",
+  const baseKeys = ["schemaVersion","recordVersion","deploymentId","market","symbol","dayStartEquity","utcDay","position",
     "lastMarkPrice","lastMarkAt","lastSignalAt","realizedDailyPnl","consecutiveFailures","signalSequence",
     "lastEvaluatedCloseTime","processedOrderIds","updatedAt"];
-  if (Object.keys(item).sort().join() !== keys.sort().join() || item.schemaVersion !== 1 || !ID.test(String(item.deploymentId))
+  const legacy = item.schemaVersion === 1;
+  const keys = legacy ? baseKeys : [...baseKeys, "mode"];
+  const mode = legacy ? "live" : item.mode;
+  if (Object.keys(item).sort().join() !== keys.sort().join() || (!legacy && item.schemaVersion !== 2)
+    || (mode !== "live" && mode !== "futures-demo") || !ID.test(String(item.deploymentId))
     || (item.market !== "spot" && item.market !== "futures") || typeof item.symbol !== "string"
+    || (mode === "futures-demo" && item.market !== "futures")
     || !/^[A-Z0-9]{4,34}$/.test(item.symbol) || typeof item.utcDay !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(item.utcDay)
     || !Array.isArray(item.processedOrderIds) || item.processedOrderIds.length > MAX_PROCESSED
     || item.processedOrderIds.some((id) => typeof id !== "string" || !PROCESSED.test(id))
     || new Set(item.processedOrderIds).size !== item.processedOrderIds.length) throw new Error("Live state is corrupt");
-  return { schemaVersion: 1, recordVersion: integer(item.recordVersion, 1), deploymentId: String(item.deploymentId), market: item.market,
+  return { schemaVersion: 2, recordVersion: integer(item.recordVersion, 1), deploymentId: String(item.deploymentId), mode,
+    market: item.market,
     symbol: item.symbol, dayStartEquity: decimal(item.dayStartEquity, true), utcDay: item.utcDay,
     position: position(item.position), lastMarkPrice: decimal(item.lastMarkPrice, true), lastMarkAt: integer(item.lastMarkAt),
     lastSignalAt: item.lastSignalAt === null ? null : integer(item.lastSignalAt),
@@ -125,18 +132,22 @@ export class DurableLiveState {
     const result = this.#tail.then(work, work); this.#tail = result.then(() => undefined, () => undefined); return result;
   }
 
-  initialize(input: { deploymentId: string; market: Market; symbol: string; dayStartEquity: string; now: number }): Promise<void> {
+  initialize(input: { deploymentId: string; mode: "live" | "futures-demo"; market: Market;
+    symbol: string; dayStartEquity: string; now: number }): Promise<void> {
     return this.#exclusive(async () => {
+      if (input.mode === "futures-demo" && input.market !== "futures") throw new Error("Live state deployment fence failed");
       const existing = await decrypt(this.#storage, this.#file);
       if (existing) {
-        if (existing.deploymentId !== input.deploymentId || existing.market !== input.market || existing.symbol !== input.symbol) {
+        if (existing.deploymentId !== input.deploymentId || existing.mode !== input.mode
+          || existing.market !== input.market || existing.symbol !== input.symbol) {
           throw new Error("Live state deployment fence failed");
         }
         return;
       }
       const now = integer(input.now);
-      await encrypt(this.#storage, this.#file, { schemaVersion: 1, recordVersion: 1, deploymentId: input.deploymentId,
-        market: input.market, symbol: input.symbol, dayStartEquity: decimal(input.dayStartEquity, true), utcDay: day(now),
+      await encrypt(this.#storage, this.#file, { schemaVersion: 2, recordVersion: 1, deploymentId: input.deploymentId,
+        mode: input.mode, market: input.market, symbol: input.symbol,
+        dayStartEquity: decimal(input.dayStartEquity, true), utcDay: day(now),
         position: null, lastMarkPrice: "1", lastMarkAt: now, lastSignalAt: null, realizedDailyPnl: "0",
         consecutiveFailures: 0, signalSequence: 0, lastEvaluatedCloseTime: null, processedOrderIds: [], updatedAt: now });
     });
@@ -174,15 +185,30 @@ export class DurableLiveState {
     });
   }
 
-  applyFill(order: TrackedOrder, atValue: number): Promise<void> {
+  applyFill(order: TrackedOrder, atValue: number, fills: readonly ExchangeFillSnapshot[] = []): Promise<void> {
     return this.#exclusive(async () => {
       const state = await this.#required(); const at = integer(atValue);
-      if (order.deploymentId !== state.deploymentId || order.executionTarget.mode !== "live"
+      if (order.deploymentId !== state.deploymentId || order.executionTarget.mode !== state.mode
         || order.executionTarget.market !== state.market || order.approvedIntent.symbol !== state.symbol
         || (order.status !== "filled" && order.status !== "cancelled") || order.cumulativeFilledQuantity === "0"
         || !order.averageFillPrice || order.fees === undefined) throw new Error("Invalid live fill");
+      if (state.market === "futures" && state.mode === "live" && fills.length === 0) {
+        throw new Error("Authoritative futures fills are required");
+      }
+      let fillQuantity = new Exact(0); let fillFees = new Exact(0); let exchangeRealized = new Exact(0);
+      for (const fill of fills) {
+        if (!fill || !/^\d{1,32}$/.test(fill.exchangeFillId) || !DECIMAL.test(fill.quantity) || !new Exact(fill.quantity).isPositive()
+          || !DECIMAL.test(fill.fee) || new Exact(fill.fee).isNegative() || (state.market === "futures" && state.mode === "live"
+            && (typeof fill.realizedPnl !== "string" || !DECIMAL.test(fill.realizedPnl)))) throw new Error("Invalid authoritative live fill");
+        fillQuantity = fillQuantity.add(fill.quantity); fillFees = fillFees.add(fill.fee);
+        if (state.market === "futures" && state.mode === "live") exchangeRealized = exchangeRealized.add(fill.realizedPnl!);
+      }
+      if (fills.length && (!fillQuantity.eq(order.cumulativeFilledQuantity) || !fillFees.eq(order.fees))) {
+        throw new Error("Authoritative live fills do not match the order");
+      }
       const fingerprint = `${order.clientOrderId}:${createHash("sha256").update(JSON.stringify({ exchangeOrderId: order.exchangeOrderId,
-        quantity: order.cumulativeFilledQuantity, price: order.averageFillPrice, fees: order.fees })).digest("hex")}`;
+        quantity: order.cumulativeFilledQuantity, price: order.averageFillPrice, fees: order.fees,
+        fills: fills.map(({ exchangeFillId, quantity, fee, realizedPnl }) => ({ exchangeFillId, quantity, fee, realizedPnl })) })).digest("hex")}`;
       const replay = state.processedOrderIds.find((value) => value.startsWith(`${order.clientOrderId}:`));
       if (replay) { if (replay === fingerprint) return; throw new Error("Live fill replay conflict"); }
       if (state.processedOrderIds.length >= MAX_PROCESSED || at < state.updatedAt) throw new Error("Live fill cannot be applied");
@@ -190,7 +216,8 @@ export class DurableLiveState {
       const quantity = new Exact(decimal(order.cumulativeFilledQuantity, true));
       const fees = new Exact(decimal(order.fees));
       const direction = order.approvedIntent.side === "buy" ? "long" : "short";
-      let realized = fees.neg(); const current = state.position;
+      let realized = state.market === "futures" && state.mode === "live" ? exchangeRealized.sub(fillFees) : fees.neg();
+      const current = state.position;
       if (!current) {
         if (order.approvedIntent.reduceOnly || (state.market === "spot" && direction === "short")) throw new Error("Invalid live opening fill");
         state.position = Object.freeze({ side: direction, quantity: quantity.toFixed(), entryPrice: price.toFixed(),
@@ -204,8 +231,11 @@ export class DurableLiveState {
           layerCount: current.layerCount + 1 });
       } else {
         if (!order.approvedIntent.reduceOnly || quantity.gt(current.quantity)) throw new Error("Invalid live reduction fill");
-        const pnl = current.side === "long" ? price.sub(current.entryPrice) : new Exact(current.entryPrice).sub(price);
-        realized = realized.add(pnl.mul(quantity)); const remaining = new Exact(current.quantity).sub(quantity);
+        if (state.market === "spot" || state.mode === "futures-demo") {
+          const pnl = current.side === "long" ? price.sub(current.entryPrice) : new Exact(current.entryPrice).sub(price);
+          realized = realized.add(pnl.mul(quantity));
+        }
+        const remaining = new Exact(current.quantity).sub(quantity);
         state.position = remaining.isZero() ? null : Object.freeze({ ...current, quantity: remaining.toFixed() });
       }
       state.realizedDailyPnl = new Exact(state.realizedDailyPnl).add(realized).toFixed();

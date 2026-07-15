@@ -28,7 +28,8 @@ const seed = (database: Database) => database.raw.exec(`
   INSERT INTO deployments (id,user_id,device_id,strategy_version_id,name,mode,state,version,configuration_hash,created_at,updated_at) VALUES ('dep_1','usr_1','dev_1','version_1','A','paper','running',2,'${"b".repeat(64)}',1,1);
 `);
 const heartbeat = (database: Database, id: string, sequence: number, version: number, occurredAt: number, pnl: string) => {
-  const summary = JSON.stringify({ health: "healthy", mode: "paper", positions: [position(pnl)], state: "running" });
+  const summary = JSON.stringify({ health: "healthy", mode: "paper", realizedDailyPnl:"2",
+    unrealizedDailyPnl:pnl,positions: [position(pnl)], state: "running" });
   database.raw.prepare("INSERT INTO audit_events (id,user_id,actor_type,actor_id,device_id,deployment_id,type,correlation_id,payload_json,occurred_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
     .run(id, "usr_1", "device", "dev_1", "dev_1", "dep_1", "heartbeat", `corr_${id}`, ledger(version, { heartbeat: { deploymentId: "dep_1" } }), occurredAt, occurredAt);
   database.raw.prepare("INSERT INTO run_heartbeats (id,user_id,deployment_id,device_id,sequence,mode,state,health,summary_json,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
@@ -47,7 +48,8 @@ describe("current run evidence", () => {
     audit(database, "risk_current", "risk-block", 2, 220, { code: "LIMIT", symbol: "BTCUSDT", message: "blocked" });
     const repository = createLiveDataRepository(database);
     await expect(repository.getEvidenceForUser("usr_1", "dep_1", 2)).resolves.toMatchObject({
-      health: "healthy", pnl: "3.5", heartbeatOccurredAt: 200, heartbeatExpectedDeploymentVersion: 2,
+      health: "healthy", pnl: "5.5", realizedPnl:"2",unrealizedPnl:"3.50",
+      heartbeatOccurredAt: 200, heartbeatExpectedDeploymentVersion: 2,
       lastSignal: { action: "hold", reason: "current", occurredAt: 210, expectedDeploymentVersion: 2 },
       riskBlocks: [{ code: "LIMIT", reason: "blocked", occurredAt: 220, expectedDeploymentVersion: 2 }],
     });

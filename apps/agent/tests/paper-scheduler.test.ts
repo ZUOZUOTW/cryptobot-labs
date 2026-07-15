@@ -30,12 +30,16 @@ describe("paper scheduler", () => {
     const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined),
       evaluate: vi.fn(async () => ({ status: "discarded" as const, reason: "hold" as const })) };
     let scheduled: (() => void) | null = null;
+    const onHeartbeat=vi.fn();
     const scheduler = new PaperScheduler({ collector, market, account: () => account, runner, onFault: vi.fn(),
+      onHeartbeat,
       schedule: (work) => { scheduled = work; return 1; }, cancel: vi.fn() });
     await scheduler.resume(bundle); expect(runner.evaluate).not.toHaveBeenCalled();
     await scheduler.activate(); expect(runner.evaluate).toHaveBeenCalledOnce(); expect(account.completeEvaluation).toHaveBeenCalledOnce();
     (scheduled as (() => void) | null)?.(); await vi.waitFor(() => expect(collector.collect).toHaveBeenCalledTimes(2));
     expect(runner.evaluate).toHaveBeenCalledOnce();
+    await vi.waitFor(()=>expect(onHeartbeat).toHaveBeenCalledTimes(2));
+    expect(onHeartbeat.mock.calls.map((call)=>call[5])).toEqual([NOW*1_000,NOW*1_000+1]);
     await scheduler.pause(); expect(runner.pause).toHaveBeenCalledOnce();
   });
 });

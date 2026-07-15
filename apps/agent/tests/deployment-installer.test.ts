@@ -119,10 +119,52 @@ describe("deployment installer", () => {
     expect(liveRunner.pause).toHaveBeenCalledOnce();
   });
 
+  it("stages and starts a futures Demo run only after the server acknowledges the mode transition",async()=>{
+    const store=memoryStore();const liveRunner={resume:vi.fn(async()=>undefined),activate:vi.fn(async()=>undefined),
+      pause:vi.fn(async()=>undefined),stopNewOrders:vi.fn(),cancelOpenOrders:vi.fn(),
+      closePositions:vi.fn(async()=>({closed:1 as const}))};
+    let current:DeploymentBundle={...bundle(),strategy:{...bundle().strategy,market:"futures",symbol:"BTCUSDT"}};
+    const installer=new DeploymentInstaller({deployments:{fetchBundle:async()=>current},store,liveRunner,now:()=>850});
+    await installer.execute(command());
+    await expect(installer.execute(command({type:"enable-futures-demo",payload:{reason:"operator"}})))
+      .resolves.toEqual({status:"ok",code:"demo_enabled"});
+    expect(store.saved.at(-1)).toMatchObject({definition:{mode:"futures-demo",market:"futures"},status:"paused",
+      pausedReason:"demo-enable-pending"});
+    current={...current,deployment:{...current.deployment,mode:"futures-demo",state:"paused"}};
+    await expect(installer.execute(command({type:"resume-demo",payload:{reason:"operator"}})))
+      .resolves.toEqual({status:"ok",code:"demo_resumed"});
+    expect(liveRunner.resume).toHaveBeenCalledWith(current);expect(liveRunner.activate).toHaveBeenCalledOnce();
+    await expect(installer.execute(command({type:"stop-new-orders",payload:{reason:"emergency"}})))
+      .resolves.toEqual({status:"ok",code:"new_orders_stopped"});
+    await expect(installer.execute(command({type:"cancel-open-orders",payload:{scope:"deployment",reason:"emergency"}})))
+      .resolves.toEqual({status:"rejected",code:"demo_cancel_unsupported"});
+    expect(liveRunner.cancelOpenOrders).not.toHaveBeenCalled();
+    await expect(installer.execute(command({type:"close-positions",payload:{scope:"all",symbol:null}})))
+      .resolves.toEqual({status:"ok",code:"close_submitted"});
+    await expect(installer.execute(command({type:"pause",payload:{reason:"operator"}})))
+      .resolves.toEqual({status:"ok",code:"paused"});
+    expect(liveRunner.pause).toHaveBeenCalledOnce();
+  });
+
+  it("refuses live start while an update owns the restart gate", async () => {
+    const store = memoryStore(); const liveRunner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined) };
+    const prepare = vi.fn(async () => ({ deploymentId: "dep_1", configurationVersion: "v2",
+      scriptHash: "b".repeat(64), mode: "live" as const, market: "spot" as const, symbol: "BTCUSDT" }));
+    let current = bundle();
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => current }, store, liveRunner,
+      liveUnlock: { prepare }, beginLiveStart: () => null });
+    await installer.execute(command()); await installer.execute(command({ type: "request-live-unlock", payload: { revalidate: {} } }));
+    current = bundle({ mode: "live", state: "paused" });
+    await expect(installer.execute(command({ type: "resume-live", payload: { reason: "operator" } })))
+      .resolves.toEqual({ status: "rejected", code: "update_pending" });
+    expect(liveRunner.resume).not.toHaveBeenCalled();
+  });
+
   it("routes independent live stop and cancel commands without treating them as position close", async () => {
     const store = memoryStore();
     const liveRunner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined),
-      stopNewOrders: vi.fn(), cancelOpenOrders: vi.fn(async () => ({ cancelled: 2, rejected: 0, unresolved: 0 })) };
+      stopNewOrders: vi.fn(), cancelOpenOrders: vi.fn(async () => ({ cancelled: 2, rejected: 0, unresolved: 0 })),
+      closePositions: vi.fn(async () => ({ closed: 1 as const })) };
     const prepare = vi.fn(async () => ({ deploymentId: "dep_1", configurationVersion: "v2",
       scriptHash: "b".repeat(64), mode: "live" as const, market: "spot" as const, symbol: "BTCUSDT" }));
     let current = bundle();
@@ -137,7 +179,28 @@ describe("deployment installer", () => {
     await expect(installer.execute(command({ type: "cancel-open-orders", payload: { scope: "deployment", reason: "emergency" } })))
       .resolves.toEqual({ status: "ok", code: "open_orders_cancelled" });
     await expect(installer.execute(command({ type: "close-positions", payload: { scope: "all", symbol: null } })))
-      .resolves.toEqual({ status: "rejected", code: "close_positions_not_ready" });
+      .resolves.toEqual({ status: "ok", code: "close_submitted" });
     expect(liveRunner.stopNewOrders).toHaveBeenCalledOnce(); expect(liveRunner.cancelOpenOrders).toHaveBeenCalledOnce();
+    expect(liveRunner.closePositions).toHaveBeenCalledWith("dep_1", null, "cmd_1");
+  });
+
+  it("revalidates a fenced connection and pauses execution before credential erasure", async () => {
+    const store = memoryStore();
+    const runner = { resume: vi.fn(async () => undefined), pause: vi.fn(async () => undefined) };
+    const connectionControl = { revalidate: vi.fn(async () => undefined), erase: vi.fn(async () => undefined) };
+    const installer = new DeploymentInstaller({ deployments: { fetchBundle: async () => bundle() }, store,
+      runner, connectionControl, now: () => 900 });
+    await installer.execute(command());
+    await installer.execute(command({ type: "resume-paper", payload: { reason: "operator" } }));
+
+    await expect(installer.execute(command({ type: "revalidate-connection", payload: {} })))
+      .resolves.toEqual({ status: "ok", code: "connection_revalidated" });
+    await expect(installer.execute(command({ type: "erase-local-credentials", payload: { reason: "operator" } })))
+      .resolves.toEqual({ status: "ok", code: "credentials_erased" });
+    expect(connectionControl.revalidate).toHaveBeenCalledOnce();
+    expect(runner.pause).toHaveBeenCalledOnce();
+    expect(store.saved.at(-1)).toMatchObject({ status: "paused", pausedReason: "credentials-erased" });
+    expect(connectionControl.erase).toHaveBeenCalledOnce();
+    expect(runner.pause.mock.invocationCallOrder[0]).toBeLessThan(connectionControl.erase.mock.invocationCallOrder[0]);
   });
 });

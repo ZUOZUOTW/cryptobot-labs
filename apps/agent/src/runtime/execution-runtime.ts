@@ -2,6 +2,7 @@ import type {
   ExecutionContext,
   ExecutionCoordinator,
   ExecutionOutcome,
+  StrategySignal,
   StrategyInput,
 } from "@cryptobot-labs/trading-core";
 import {
@@ -31,6 +32,9 @@ export type RuntimeAuditEvent = Readonly<{
   scriptHash: string;
   at: number;
   reason: string;
+  signal?: Readonly<StrategySignal>;
+  outcome?: ExecutionOutcome;
+  symbol?: string;
 }>;
 
 export type RuntimeEvaluationOutcome =
@@ -167,6 +171,7 @@ export class ExecutionRuntime {
         request.now,
         "signal-proposed",
         `${result.signal.reason}:${outcome.status}`.slice(0, 256),
+        { signal: result.signal, outcome, symbol: request.input.symbol },
       );
       return { status: "proposed", outcome };
     } catch {
@@ -206,6 +211,7 @@ export class ExecutionRuntime {
     at: number,
     type: RuntimeAuditEvent["type"],
     reason: string,
+    details: Pick<RuntimeAuditEvent, "signal" | "outcome" | "symbol"> = {},
   ): Promise<void> {
     try {
       await this.#audit({
@@ -215,6 +221,7 @@ export class ExecutionRuntime {
         scriptHash: deployment.scriptHash,
         at,
         reason: reason.slice(0, 256),
+        ...details,
       });
     } catch {
       // Audit transport cannot cause an unreviewed retry or bypass the coordinator.

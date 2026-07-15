@@ -60,9 +60,13 @@ function balance(snapshot: WeexAccountSnapshot, asset: string) {
   return matches[0]!;
 }
 
-function exactTarget(target: ExecutionTarget): asserts target is { market: "spot" | "futures"; mode: "live" } {
-  if (!target || target.mode !== "live" || (target.market !== "spot" && target.market !== "futures")) {
-    throw new Error("Live account evidence requires a live WEEX target");
+function exactTarget(target: ExecutionTarget): asserts target is
+  | { market: "spot" | "futures"; mode: "live" }
+  | { market: "futures"; mode: "futures-demo" } {
+  const supported = target?.mode === "live"
+    || (target?.market === "futures" && target.mode === "futures-demo");
+  if (!supported || (target.market !== "spot" && target.market !== "futures")) {
+    throw new Error("Account evidence requires a supported private WEEX target");
   }
 }
 
@@ -124,9 +128,13 @@ export function createLiveAccountService(options: LiveAccountServiceOptions) {
           credentials: new WeexCredentials(stored.apiKey, stored.secretKey, stored.passphrase), clock,
           now: () => Math.floor(clock.now()) });
         const verified = await client.verifyAccount(input.target);
-        if (verified.canTrade !== true || verified.withdrawalPermission !== "absent"
-          || (input.target.market === "futures" && verified.positionMode !== "hedge")) {
-          throw new Error("WEEX account permissions are unsafe for live evidence");
+        const verifiedTarget = verified.market === input.target.market && verified.mode === input.target.mode
+          && verified.readPermission === true;
+        const safeLive = input.target.mode !== "live"
+          || (verified.canTrade === true && verified.withdrawalPermission === "absent"
+            && (input.target.market !== "futures" || verified.positionMode === "hedge"));
+        if (!verifiedTarget || !safeLive) {
+          throw new Error("WEEX account permissions are unsafe for private account evidence");
         }
         const snapshot = await client.getAccountSnapshot(input.target);
         if (input.priceTimestamp > snapshot.observedAt) throw new Error("Reference price is newer than account evidence");

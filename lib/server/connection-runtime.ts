@@ -1,7 +1,7 @@
 import { env } from "./platform-env";
 import { createControlPlaneDatabase } from "../../db";
 import { createConnectionRepository, createUserRepository } from "../../db/repositories";
-import { deriveWorkspaceUserId, workspaceIdentityProvider, type PlatformIdentityProvider } from "./auth";
+import { deriveWorkspaceUserId, platformIdentityProvider, type PlatformIdentityProvider } from "./auth";
 import { createListConnectionsHandler } from "./connections";
 import { errorResponse } from "./http";
 
@@ -12,7 +12,7 @@ export function productionConnectionFailure(error: unknown): Response {
 export function createProductionConnectionHandlers(environment: ConnectionEnvironment=env as unknown as ConnectionEnvironment,
   options: {identityProvider?:PlatformIdentityProvider;now?:()=>number;deriveUserId?:(email:string)=>Promise<string>}={}) {
   const database=createControlPlaneDatabase(environment.DB); const now=options.now??Date.now;
-  const auth={identityProvider:options.identityProvider??workspaceIdentityProvider,userRepository:createUserRepository(database),
+  const auth={identityProvider:options.identityProvider??platformIdentityProvider,userRepository:createUserRepository(database),
     deriveUserId:options.deriveUserId??deriveWorkspaceUserId,now};
   return {list:createListConnectionsHandler({auth,connections:createConnectionRepository(database)})};
 }

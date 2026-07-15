@@ -1,4 +1,5 @@
 import { env } from "../lib/server/platform-env";
+import { createPostgresControlPlaneDatabase } from "../lib/server/postgres-database";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
@@ -26,11 +27,14 @@ export function createDb(binding: D1Binding) {
 }
 
 /** Narrows a real D1 binding to the intentionally small repository surface. */
-export function createControlPlaneDatabase(binding: unknown): ControlPlaneDatabase {
+export function createControlPlaneDatabase(
+  binding: unknown,
+  databaseUrl: unknown = env.SUPABASE_DATABASE_URL ?? env.DATABASE_URL,
+): ControlPlaneDatabase {
   if (binding === null || typeof binding !== "object"
     || typeof (binding as { prepare?: unknown }).prepare !== "function"
     || typeof (binding as { batch?: unknown }).batch !== "function") {
-    throw new Error("A D1-compatible control-plane binding is required");
+    return createPostgresControlPlaneDatabase(databaseUrl);
   }
   return binding as ControlPlaneDatabase;
 }

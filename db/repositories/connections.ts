@@ -29,6 +29,7 @@ export interface SafeConnectionDevice {
   deviceStatus: "active";
   lastSeenAt: number | null;
   connection: SafeConnectionSummary | null;
+  commandTarget: { deploymentId: string; expectedVersion: number } | null;
 }
 
 interface ConnectionListRow {
@@ -43,6 +44,8 @@ interface ConnectionListRow {
   verifiedAt: number | null;
   status: ConnectionStatus | null;
   hasLocalCredential: number | boolean | null;
+  commandDeploymentId: string | null;
+  commandDeploymentVersion: number | null;
 }
 
 const columns = `device_id AS deviceId,user_id AS userId,provider,masked_api_key_suffix AS maskedApiKeySuffix,
@@ -87,8 +90,13 @@ const safeDevice = (row: ConnectionListRow): SafeConnectionDevice => {
       permissions: parsePermissions(row.permissionsJson), verifiedAt: row.verifiedAt, status: row.status,
       hasLocalCredential: Boolean(row.hasLocalCredential) };
   }
+  const commandTarget = row.commandDeploymentId === null && row.commandDeploymentVersion === null ? null
+    : row.commandDeploymentId !== null && row.commandDeploymentVersion !== null
+      ? { deploymentId: id(row.commandDeploymentId, "deploymentId"),
+        expectedVersion: positiveVersion(row.commandDeploymentVersion, "deployment version") }
+      : (() => { throw new Error("stored command target is invalid"); })();
   return { id: id(row.deviceId, "deviceId"), name: displayName(row.deviceName, "device name"),
-    platform: row.devicePlatform, deviceStatus: "active", lastSeenAt, connection };
+    platform: row.devicePlatform, deviceStatus: "active", lastSeenAt, connection, commandTarget };
 };
 
 interface ConnectionEventInput {
@@ -116,8 +124,12 @@ export function createConnectionRepository(database: ControlPlaneDatabase) {
       const rows = await database.prepare(`SELECT d.id AS deviceId,d.name AS deviceName,d.platform AS devicePlatform,
         d.status AS deviceStatus,d.last_seen_at AS lastSeenAt,c.provider,
         c.masked_api_key_suffix AS maskedApiKeySuffix,c.permissions_json AS permissionsJson,
-        c.verified_at AS verifiedAt,c.status,c.has_local_credential AS hasLocalCredential
+        c.verified_at AS verifiedAt,c.status,c.has_local_credential AS hasLocalCredential,
+        target.id AS commandDeploymentId,target.version AS commandDeploymentVersion
         FROM devices d LEFT JOIN device_connections c ON c.device_id=d.id AND c.user_id=d.user_id
+        LEFT JOIN deployments target ON target.id=(SELECT candidate.id FROM deployments candidate
+          WHERE candidate.user_id=d.user_id AND candidate.device_id=d.id
+          ORDER BY candidate.updated_at DESC,candidate.id DESC LIMIT 1)
         WHERE d.user_id=? AND d.status='active' AND (? IS NULL OR d.id>?) ORDER BY d.id ASC LIMIT ?`)
         .bind(owner, cursor, cursor, pageSize + 1).all<ConnectionListRow>();
       if (!rows.success) throw new Error("connection list failed");

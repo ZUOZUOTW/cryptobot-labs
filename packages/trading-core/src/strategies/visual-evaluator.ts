@@ -38,7 +38,7 @@ function validateConfig(candidate: unknown): asserts candidate is VisualBotConfi
     throw new TypeError("Invalid visual BotConfig shape");
   }
   if (candidate.source !== undefined) throw new TypeError("Custom JavaScript requires the QuickJS sandbox");
-  if (candidate.market === "spot" ? candidate.leverage !== 1 : candidate.leverage < 1 || candidate.leverage > 20) {
+  if (candidate.market === "spot" ? candidate.leverage !== 1 : candidate.leverage < 1 || candidate.leverage > 500) {
     throw new RangeError("Invalid leverage for visual strategy market");
   }
 

@@ -64,10 +64,12 @@ function setup(transport:Transport){
   const client=createVaultWeexExecutionClient({vault,transport,now:()=>NOW,rulesProvider:async()=>({rules,verifiedAt:NOW})});
   const sandbox={evaluate:vi.fn(async()=>({signal:{id:"signal-live",action:"buy" as const,reason:"sandbox-buy",allocationRate:0.1,createdAt:NOW},
     scriptHash:"c".repeat(64),durationMs:1})),dispose:vi.fn(async()=>undefined)} satisfies StrategySandboxLike;
+  const onReconciledOrder=vi.fn();
   const runner=new LiveRunRunner({repository,client,market,clock,connection,instruments:{requireFresh:()=>rules},runtimeAudit:vi.fn(),runAudit:vi.fn(),
+    onReconciledOrder,
     createStrategyWorker:()=>new StrategyWorker(async()=>sandbox,1_000),now:()=>NOW});
   const request=buildLiveEvaluationRequest({bundle,market:marketSnapshot,quote,account:evidence,signalSequence:1});
-  return{repository,runner,request,sandbox,client};
+  return{repository,runner,request,sandbox,client,onReconciledOrder};
 }
 
 describe("live run runner",()=>{
@@ -75,13 +77,16 @@ describe("live run runner",()=>{
     let clientOrderId="";
     const transport=new Transport([probe(),account(),(request)=>{const body=JSON.parse(request.body??"{}");clientOrderId=body.newClientOrderId;
       return ok({orderId:"42",clientOrderId});},probe(),account(),()=>ok({orderId:"42",clientOrderId,symbol:"BTCUSDT",side:"BUY",origQty:"0.102",
-        executedQty:"0.102",avgPrice:"98",status:"FILLED"}),ok([{symbol:"BTCUSDT",commission:"0.01"}])]);
-    const {runner,request,repository}=setup(transport);await runner.resume(bundle);
+        executedQty:"0.102",avgPrice:"98",status:"FILLED"}),ok([{id:"1",orderId:"42",symbol:"BTCUSDT",price:"98",qty:"0.102",
+          commission:"0.01",commissionAsset:"USDT",time:NOW}])]);
+    const {runner,request,repository,onReconciledOrder}=setup(transport);await runner.resume(bundle);
     await expect(runner.evaluate(request)).resolves.toMatchObject({status:"proposed",outcome:{status:"submitted",order:{status:"acknowledged"}}});
     const reconciled=await runner.evaluate(request);
     expect(reconciled).toMatchObject({status:"proposed",outcome:{status:"idempotent",order:{status:"filled"}}});
     expect(transport.requests.filter(({method})=>method==="POST")).toHaveLength(1);
     expect([...repository.orders.values()][0]).toMatchObject({status:"filled",exchangeOrderId:"42"});
+    expect(onReconciledOrder).toHaveBeenCalledWith(expect.objectContaining({status:"filled"}),expect.objectContaining({fills:[
+      expect.objectContaining({exchangeFillId:"1",quantity:"0.102",fee:"0.01",feeCurrency:"USDT",filledAt:NOW})]}));
     await runner.pause();
   });
 
@@ -91,6 +96,57 @@ describe("live run runner",()=>{
     await expect(runner.evaluate(request)).resolves.toEqual({status:"paused",reason:"ambiguous-order"});
     await expect(runner.evaluate(request)).resolves.toEqual({status:"paused",reason:"ambiguous-order"});
     expect(transport.requests.filter(({method})=>method==="POST")).toHaveLength(1);
+    await runner.pause();
+  });
+
+  it("keeps the normal coordinator stopped while a manual close still passes the risk engine",async()=>{
+    let submitted:Record<string,unknown>={};
+    const transport=new Transport([probe(),account(),(request)=>{submitted=JSON.parse(request.body??"{}");
+      return ok({orderId:"close-42",clientOrderId:submitted.newClientOrderId});}]);
+    const {runner}=setup(transport);await runner.resume(bundle);runner.stopNewOrders();
+    const closeEvidence={...evidence,portfolio:{...evidence.portfolio,position:{side:"long" as const,quantity:"0.102",entryPrice:"90",
+      peakPrice:"100",troughPrice:"89",usedMargin:"9.996",layerCount:1}},risk:{...evidence.risk,openPositions:1,
+      positionSide:"long" as const,currentPositionQuantity:"0.102",currentPositionNotional:"9.996",totalExposure:"9.996"}};
+    const closeRequest=buildLiveEvaluationRequest({bundle,market:marketSnapshot,quote,account:closeEvidence,signalSequence:2});
+    await expect(runner.closePosition(closeRequest.context,"manual-close-1")).resolves.toMatchObject({status:"submitted",
+      order:{status:"acknowledged",approvedIntent:{side:"sell",reduceOnly:true,quantity:"0.102"}}});
+    expect(submitted).toMatchObject({side:"SELL",quantity:"0.102"});
+    expect(transport.requests.filter(({method})=>method==="POST")).toHaveLength(1);
+    await runner.pause();
+  });
+
+  it("runs a futures Demo strategy through the trusted runner and simulated market-order route",async()=>{
+    const demoRules={...rules,market:"futures" as const,symbol:"BTCSUSDT",quoteAsset:"SUSDT",maximumLeverage:"100"};
+    const demoConfig={...config,id:"demo-1",name:"Demo",market:"futures" as const,symbol:"BTCSUSDT",leverage:5};
+    const demoBundle:DeploymentBundle={...bundle,
+      deployment:{...bundle.deployment,id:"dep-demo",mode:"futures-demo",strategyVersionId:"sv-demo"},
+      strategy:{...bundle.strategy,market:"futures",symbol:"BTCSUSDT",config:demoConfig},
+      risk:{...bundle.risk!,id:"risk-demo",allowedSymbols:["BTCSUSDT"],maxLeverage:"5"}};
+    const demoQuote={...quote,market:"futures" as const,symbol:"BTCSUSDT"};
+    const demoEvidence={...evidence,
+      risk:{...evidence.risk,market:"futures" as const,symbol:"BTCSUSDT",leverage:"5"}};
+    const repository=new MemoryRepository();const market=new MarketStreamState();market.record(demoQuote);
+    const clock=new ClockFreshnessGuard();clock.record({synchronizedAt:NOW,driftMs:0});
+    const connection=new ConnectionRegistry();connection.record({verifiedAt:NOW,apiKeySuffix:"1234",canTrade:true,
+      withdrawalPermission:"unknown",permissions:{read:true,spot:false,futures:true}});
+    const balances=[{asset:"SUSDT",balance:"1000",availableBalance:"1000",frozen:"0",unrealizePnl:"0"}];
+    const transport=new Transport([probe(),ok(balances),(request)=>ok({orderId:"demo-42",
+      clientOrderId:JSON.parse(request.body??"{}").newClientOrderId})]);
+    const client=createVaultWeexExecutionClient({vault,transport,now:()=>NOW,
+      rulesProvider:async()=>({rules:demoRules,verifiedAt:NOW})});
+    const sandbox={evaluate:vi.fn(async()=>({signal:{id:"signal-demo",action:"buy" as const,reason:"sandbox-buy",
+      allocationRate:0.1,createdAt:NOW},scriptHash:"c".repeat(64),durationMs:1})),dispose:vi.fn(async()=>undefined)} satisfies StrategySandboxLike;
+    const runner=new LiveRunRunner({repository,client,market,clock,connection,instruments:{requireFresh:()=>demoRules},
+      runtimeAudit:vi.fn(),runAudit:vi.fn(),createStrategyWorker:()=>new StrategyWorker(async()=>sandbox,1_000),now:()=>NOW});
+    const request=buildLiveEvaluationRequest({bundle:demoBundle,market:{...marketSnapshot,rules:demoRules},quote:demoQuote,
+      account:demoEvidence,signalSequence:1});
+
+    await runner.resume(demoBundle);
+    await expect(runner.evaluate(request)).resolves.toMatchObject({status:"proposed",outcome:{status:"submitted",
+      order:{executionTarget:{market:"futures",mode:"futures-demo"},status:"acknowledged"}}});
+    const posted=transport.requests.find(({method})=>method==="POST");
+    expect(posted?.url).toBe("https://api-contract.weex.com/capi/v3/sim/order");
+    expect(JSON.parse(posted?.body??"{}")).toMatchObject({type:"MARKET",symbol:"BTCSUSDT"});
     await runner.pause();
   });
 });

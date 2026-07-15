@@ -166,6 +166,16 @@ describe("deployment, risk, and command repositories", () => {
       .resolves.toMatchObject({ idempotent: true });
   });
 
+  it("changes a futures paper run to Demo only after the assigned Agent acknowledges",async()=>{
+    database.raw.exec("UPDATE strategies SET market='futures' WHERE id='strategy_a'");
+    await create();
+    await commands.enqueue({id:"cmd_demo",userId:"usr_a",deploymentId:"dep_a",type:"enable-futures-demo",version:1,
+      correlationId:"corr_demo",expectedDeploymentVersion:1,payload:{reason:"operator"},now:200,expiresAt:500});
+    await expect(commands.ack({id:"ack_demo",deviceId:"dev_a",commandId:"cmd_demo",deploymentId:"dep_a",
+      expectedDeploymentVersion:1,status:"ok",payload:{applied:true},now:250})).resolves.toMatchObject({idempotent:false});
+    await expect(deployments.getForUser("usr_a","dep_a")).resolves.toMatchObject({mode:"futures-demo",state:"paused",updatedAt:250});
+  });
+
   it("accepts a bounded late durable outcome against the original command fence", async () => {
     await create();
     const base = { userId: "usr_a", deploymentId: "dep_a", type: "pause" as const, version: 1,

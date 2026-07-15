@@ -45,6 +45,26 @@ describe("live account service",()=>{
     expect(transport.requests.at(-1)?.url).toBe("https://api-contract.weex.com/capi/v3/account/position/allPosition");
   });
 
+  it("collects credential-free futures Demo evidence from simulated balance and position routes",async()=>{
+    const balances=[{asset:"SUSDT",balance:"5000",availableBalance:"4900",frozen:"100",unrealizePnl:"0"}];
+    const transport=new Transport([response({symbol:"BTCUSDT",price:"50000"},{date:new Date(NOW).toUTCString()}),
+      response(balances),response(balances),response([])]);
+    const evidence=await createLiveAccountService({vault,transport,now:()=>NOW}).collect({
+      target:{market:"futures",mode:"futures-demo"},
+      rules:{...spotRules,market:"futures",symbol:"BTCSUSDT",quoteAsset:"SUSDT",maximumLeverage:"100"},
+      referencePrice:"50000",priceTimestamp:NOW,configuredLeverage:"5",
+      local:{lastSignalAt:null,realizedDailyPnl:"0",consecutiveFailures:0,dayStartEquity:"5000"},
+    });
+    expect(evidence).toMatchObject({portfolio:{equity:"5000",availableEquity:"4900",dayStartEquity:"5000"},
+      risk:{market:"futures",symbol:"BTCSUSDT",openPositions:0,positionSide:"flat",leverage:"5"}});
+    expect(transport.requests.map(({url})=>url).slice(1)).toEqual([
+      "https://api-contract.weex.com/capi/v3/sim/balance",
+      "https://api-contract.weex.com/capi/v3/sim/balance",
+      "https://api-contract.weex.com/capi/v3/sim/position/allPosition",
+    ]);
+    expect(JSON.stringify(evidence)).not.toMatch(/api-key|secret-key|passphrase/i);
+  });
+
   it("fails closed when an exchange position is not owned by local deployment state",async()=>{
     const balances=[{asset:"USDT",balance:"1000",availableBalance:"700",frozen:"100",unrealizePnl:"25"}];
     const config={canTrade:true,canDeposit:true,canWithdraw:false,dualSidePosition:true,updateTime:NOW};

@@ -11,7 +11,7 @@ const base=(type:string,payload:unknown)=>({version:1,id:"evt_1",type,deployment
 class Statement implements ControlPlaneStatement { constructor(private raw:StatementSync,private values:unknown[]=[]){ } bind(...values:unknown[]){return new Statement(this.raw,values);} async first<T>(){return(this.raw.get(...this.values as Parameters<StatementSync["get"]>) as T|undefined)??null;} async all<T>(){return{results:this.raw.all(...this.values as Parameters<StatementSync["all"]>) as T[],success:true};} async run(){const result=this.raw.run(...this.values as Parameters<StatementSync["run"]>);return{success:true,meta:{changes:Number(result.changes)}};} }
 class Database implements ControlPlaneDatabase { readonly raw=new DatabaseSync(":memory:"); constructor(){this.raw.exec("PRAGMA foreign_keys=ON");const file=readdirSync(resolve("drizzle")).find(name=>name.endsWith(".sql"))!;for(const sql of readFileSync(resolve("drizzle",file),"utf8").split("--> statement-breakpoint"))if(sql.trim())this.raw.exec(sql);} prepare(sql:string){return new Statement(this.raw.prepare(sql));} async batch<T extends readonly ControlPlaneStatement[]>(items:T):Promise<ControlPlaneRunResult[]>{this.raw.exec("BEGIN IMMEDIATE");try{const out=[];for(const item of items)out.push(await item.run());this.raw.exec("COMMIT");return out;}catch(error){this.raw.exec("ROLLBACK");throw error;}} }
 const seed=(database:Database)=>database.raw.exec(`INSERT INTO users VALUES ('usr_1','a@example.com','A',1,1);INSERT INTO devices VALUES ('dev_1','usr_1','A','macos','{}','active',1,NULL,NULL,1,1);INSERT INTO strategies VALUES ('strategy_1','usr_1','A','spot','BTCUSDT',1,1);INSERT INTO strategy_versions VALUES ('version_1','usr_1','strategy_1',1,'${"a".repeat(64)}',NULL,'{}',NULL,1);INSERT INTO deployments VALUES ('dep_1','usr_1','dev_1','version_1','A','paper','running',2,'${"b".repeat(64)}',1,1,1,NULL);`);
-const heartbeatEvent=()=>base("heartbeat",{heartbeat:{deploymentId:"dep_1",sequence:1,occurredAt:100,mode:"paper",state:"running",health:"healthy",positions:[]},positionIds:[]});
+const heartbeatEvent=()=>base("heartbeat",{heartbeat:{deploymentId:"dep_1",sequence:1,occurredAt:100,mode:"paper",state:"running",health:"healthy",realizedDailyPnl:"0",unrealizedDailyPnl:"0",positions:[]},positionIds:[]});
 const fillEvent=()=>({...base("fill",{mode:"paper",deploymentState:"running",order:{id:"order_1",deploymentId:"dep_1",clientOrderId:"client_1",exchangeOrderId:"exchange_1",market:"spot",symbol:"BTCUSDT",side:"buy",positionSide:"net",orderType:"market",state:"filled",price:null,quantity:"1",filledQuantity:"1",averageFillPrice:"100",notional:"100",correlationId:"corr_fill",createdAt:90,updatedAt:100},fills:[{id:"fill_1",exchangeFillId:"exchange_fill_1",price:"100",quantity:"1",fee:"0.1",feeCurrency:"USDT",realizedPnl:null,filledAt:100}]}),id:"evt_fill",correlationId:"corr_fill"});
 
 describe("device event boundary",()=>{
@@ -35,7 +35,7 @@ describe("device event boundary",()=>{
     expect(()=>parseDeviceEvent(base("agent-error",{code:"E",message,retryable:false}))).toThrow(/credential/i);
   });
   it("requires coherent envelope, heartbeat, order, and fill identities and times",()=>{
-    const heartbeat={deploymentId:"dep_1",sequence:1,occurredAt:99,mode:"paper",state:"running",health:"healthy",positions:[]};
+    const heartbeat={deploymentId:"dep_1",sequence:1,occurredAt:99,mode:"paper",state:"running",health:"healthy",realizedDailyPnl:"0",unrealizedDailyPnl:"0",positions:[]};
     expect(()=>parseDeviceEvent(base("heartbeat",{heartbeat,positionIds:[]}))).toThrow(/timestamps/i);
     const order={id:"order_1",deploymentId:"dep_1",clientOrderId:"client_1",exchangeOrderId:"exchange_1",market:"spot",symbol:"BTCUSDT",side:"buy",positionSide:"net",orderType:"market",state:"filled",price:null,quantity:"1",filledQuantity:"1",averageFillPrice:"100",notional:"100",correlationId:"corr_wrong",createdAt:90,updatedAt:100};
     const fill={id:"fill_1",exchangeFillId:"exchange_fill_1",price:"100",quantity:"1",fee:"0.1",feeCurrency:"USDT",realizedPnl:null,filledAt:100};
@@ -44,7 +44,7 @@ describe("device event boundary",()=>{
     expect(()=>parseDeviceEvent(base("fill",{mode:"paper",deploymentState:"running",order:{...order,correlationId:"corr_1"},fills:[{...fill,filledAt:99}]}))).toThrow(/fill timestamps/i);
   });
   it("does not trust nested deployment identity and dispatches verified device identity",async()=>{
-    expect(()=>parseDeviceEvent(base("heartbeat",{heartbeat:{deploymentId:"dep_other",sequence:1,occurredAt:100,mode:"paper",state:"running",health:"healthy",positions:[]},positionIds:[]}))).toThrow(/fence/i);
+    expect(()=>parseDeviceEvent(base("heartbeat",{heartbeat:{deploymentId:"dep_other",sequence:1,occurredAt:100,mode:"paper",state:"running",health:"healthy",realizedDailyPnl:"0",unrealizedDailyPnl:"0",positions:[]},positionIds:[]}))).toThrow(/fence/i);
     const activity={getDeviceAuditByEventId:vi.fn().mockResolvedValue(null),appendDeviceAudit:vi.fn().mockResolvedValue({event:{id:"evt_1"},idempotent:false})};
     const deployments={getForDevice:vi.fn().mockResolvedValue({id:"dep_1",deviceId:"dev_verified",version:2})};
     const service=createDeviceEventService(activity as never,{deployments:deployments as never,now:()=>101});

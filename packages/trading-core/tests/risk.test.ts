@@ -167,6 +167,12 @@ describe("evaluateOrderRisk", () => {
     ).toBe("spot-short-not-supported");
   });
 
+  it("allows a valid risk-reducing close despite entry cooldown and failure latches", () => {
+    expect(reason({ context: { positionSide: "long", currentPositionQuantity: "0.1", currentPositionNotional: "100",
+      totalExposure: "100", lastSignalAt: context.now, consecutiveFailures: policy.maximumConsecutiveFailures },
+    intent: { side: "sell", quantity: "0.1", reduceOnly: true } })).toBe("allowed");
+  });
+
   it("projects reductions from held quantity at lower and higher execution prices", () => {
     const held = {
       ...context,

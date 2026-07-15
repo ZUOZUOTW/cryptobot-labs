@@ -1,12 +1,15 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, Tray, utilityProcess } from "electron";
+import { app, autoUpdater, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, Tray, utilityProcess } from "electron";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createControlClient, createEncryptedCommandOutcomeStore, ControlClientRevokedError } from "./control-client";
 import { ConnectionRegistry } from "./connections";
+import { createConnectionControl } from "./connection-control";
+import { createConnectionVersionStore } from "./connection-version-store";
 import { DeploymentInstaller } from "./deployment-installer";
 import { createDeploymentClient } from "./deployment-client";
 import { registerAgentIpc, type AgentShellServices } from "./ipc";
+import { createLiveHeartbeatTelemetry, createPaperHeartbeatTelemetry } from "./heartbeat-telemetry";
 import { createDeviceIdentityVault } from "./device-identity";
 import { createStartAtLoginController } from "./login-item";
 import { createLiveAccountService } from "./live-account-service";
@@ -24,15 +27,21 @@ import { PaperRunRunner } from "./paper-run-runner";
 import { PaperScheduler } from "./paper-scheduler";
 import { InstrumentRuleState, PublicMarketService } from "./public-market-service";
 import { createRuntimeSupervisor } from "./runtime-supervisor";
+import { createRuntimeTelemetry } from "./runtime-telemetry";
 import type { RunAuditEvent } from "./run-manager";
 import { createDurableRunStore, createNodeRunFileStore } from "./run-store";
 import { createNodeTelemetryFileStore, createTelemetryBuffer } from "./telemetry-buffer";
+import { createAgentUpdateService, isSquirrelLifecycleInvocation, type AutoUpdaterAdapter } from "./update-service";
 import { createCredentialVault, createNodeVaultFileStore, type AsyncSafeStorage } from "./vault";
 import { createVaultWeexExecutionClient } from "./vault-weex-execution-client";
 import { createWeexConnectionVerifier } from "./weex-connection-verifier";
 import { createMainWindow, TrayWindowLifecycle, type BrowserWindowLike } from "./windows";
 import type { RuntimeAuditEvent } from "../runtime/execution-runtime";
+import { pairingCodeFromArguments, pairingCodeFromDeepLink } from "../shared/pairing-deep-link";
+import { IPC_EVENTS } from "../shared/ipc-contract";
 export { createStartAtLoginController } from "./login-item";
+
+declare const __CBL_CONTROL_PLANE_ORIGIN__: string;
 
 function trustedDevelopmentUrl(value: string): string {
   const url = new URL(value);
@@ -65,7 +74,24 @@ export async function startAgentShell(services: AgentShellServices): Promise<Bro
 }
 
 export async function bootstrapAgent(): Promise<void> {
+  let agentWindow: BrowserWindowLike | null = null;
+  let pendingPairingCode = pairingCodeFromArguments(process.argv);
+  const offerPairingCode = (code: string | null): void => {
+    if (!code) return;
+    pendingPairingCode = code;
+    if (!agentWindow || agentWindow.isDestroyed()) return;
+    (agentWindow.webContents as unknown as { send(channel: string, value: unknown): void })
+      .send(IPC_EVENTS.pairingSuggestion, code);
+    agentWindow.show();
+  };
+  if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  app.on("second-instance", (_event, argv) => offerPairingCode(pairingCodeFromArguments(argv)));
+  app.on("open-url", (event, url) => { event.preventDefault(); offerPairingCode(pairingCodeFromDeepLink(url)); });
   await app.whenReady();
+  if (process.platform === "darwin" || process.platform === "win32") {
+    app.setAsDefaultProtocolClient("cryptobot-labs");
+  }
+  if (process.platform === "win32") app.setAppUserModelId("com.squirrel.cryptobot_labs_agent.CryptoBot Labs Agent");
   const currentDirectory = __dirname;
   const osStorage: AsyncSafeStorage = {
     isAsyncEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -96,6 +122,9 @@ export async function bootstrapAgent(): Promise<void> {
   const instrumentState = new InstrumentRuleState();
   const publicMarket = new PublicMarketService({ market: marketState, clock: clockState, instruments: instrumentState });
   const connectionRegistry = new ConnectionRegistry();
+  const connectionVersions = createConnectionVersionStore(
+    osStorage, createNodeVaultFileStore(join(vaultDirectory, "connection-version.bin")),
+  );
   const orderRepository = createDurableOrderRepository(
     osStorage,
     createNodeVaultFileStore(join(vaultDirectory, "orders.bin")),
@@ -105,7 +134,10 @@ export async function bootstrapAgent(): Promise<void> {
     catch (error) { if (!(error instanceof Error) || !/ID collision/i.test(error.message)) throw error; }
   };
   const runtimeAudit = async (event: RuntimeAuditEvent): Promise<void> => {
-    if (event.type !== "strategy-paused") return;
+    if (event.type !== "strategy-paused") {
+      for (const telemetryEvent of createRuntimeTelemetry(event)) await enqueueTelemetrySafely(telemetryEvent);
+      return;
+    }
     const version = Number(event.configurationVersion.replace(/^v/, ""));
     if (!Number.isSafeInteger(version) || version < 1) return;
     const occurredAt = event.at > 0 ? event.at : Date.now();
@@ -138,37 +170,73 @@ export async function bootstrapAgent(): Promise<void> {
     vault,
     rulesProvider: async (target, symbol) => instrumentState.requireFreshSnapshot(target.market, symbol, Date.now()),
   });
+  const liveStates = new Map<string, DurableLiveState>();
+  const liveStateFor = (deploymentId: string): DurableLiveState => {
+    const existing = liveStates.get(deploymentId); if (existing) return existing;
+    const created = new DurableLiveState(osStorage,
+      createNodeVaultFileStore(join(vaultDirectory, "live-states", `${deploymentId}.bin`)));
+    liveStates.set(deploymentId, created); return created;
+  };
   const liveRunner = new LiveRunRunner({ repository: orderRepository, client: liveExecutionClient,
     market: marketState, clock: clockState, connection: connectionRegistry, instruments: instrumentState,
-    runtimeAudit, runAudit });
+    runtimeAudit, runAudit,
+    onReconciledOrder: async (order, snapshot) => {
+      const restored = await runStore.restore();
+      if (!restored || restored.definition.deploymentId !== order.deploymentId
+        || (restored.definition.mode !== "live" && restored.definition.mode !== "futures-demo")
+        || restored.definition.mode !== order.executionTarget.mode) return;
+      const expectedDeploymentVersion = Number(restored.definition.configurationVersion.replace(/^v/, ""));
+      if (!Number.isSafeInteger(expectedDeploymentVersion) || expectedDeploymentVersion < 1) return;
+      await enqueueTelemetrySafely(createOrderStateTelemetry({ order, expectedDeploymentVersion,
+        deploymentState: restored.status === "running" ? "running" : "paused",
+        ...(snapshot.fills?.length ? { fills: snapshot.fills } : {}) }), "high");
+      if (snapshot.fills?.length
+        && (order.status === "filled" || (order.status === "cancelled" && order.cumulativeFilledQuantity !== "0"))) {
+        await liveStateFor(order.deploymentId).applyFill(order,
+          Math.max(order.updatedAt, ...snapshot.fills.map(({ filledAt }) => filledAt)), snapshot.fills);
+      }
+    } });
   const liveScheduler = new LiveScheduler({ collector: publicMarket, market: marketState,
     account: createLiveAccountService({ vault }), connection: connectionRegistry, orders: orderRepository,
-    state: (deploymentId) => new DurableLiveState(osStorage,
-      createNodeVaultFileStore(join(vaultDirectory, "live-states", `${deploymentId}.bin`))),
+    state: liveStateFor,
     runner: liveRunner,
     onActivated: async (bundle) => {
       const occurredAt = Date.now();
       const id = `live-start-${createHash("sha256").update(`${bundle.deployment.id}:${bundle.deployment.version}:${occurredAt}`).digest("hex").slice(0, 40)}`;
       await enqueueTelemetrySafely({ version: 1, id, type: "deployment-state", deploymentId: bundle.deployment.id,
         expectedDeploymentVersion: bundle.deployment.version, correlationId: id, occurredAt,
-        payload: { state: "running", reason: "live-scheduler-activated" } }, "high");
+        payload: { state: "running", reason: bundle.deployment.mode === "futures-demo"
+          ? "demo-scheduler-activated" : "live-scheduler-activated" } }, "high");
     },
     onOrder: async (order, bundle) => {
+      if (order.cumulativeFilledQuantity !== "0") return;
       await enqueueTelemetrySafely(createOrderStateTelemetry({ order,
         expectedDeploymentVersion: bundle.deployment.version, deploymentState: "running" }));
+    },
+    onHeartbeat: async (evidence, markPrice, bundle, sequence, health) => {
+      await enqueueTelemetrySafely(createLiveHeartbeatTelemetry({ evidence, markPrice, bundle, sequence, health }));
     },
     onFault: async (reason, bundle) => {
       const occurredAt = Date.now();
       const id = `live-fault-${createHash("sha256").update(`${bundle.deployment.id}:${reason}:${occurredAt}`).digest("hex").slice(0, 40)}`;
       await enqueueTelemetrySafely({ version: 1, id, type: "agent-error", deploymentId: bundle.deployment.id,
         expectedDeploymentVersion: bundle.deployment.version, correlationId: id, occurredAt,
-        payload: { code: reason, message: "Live evaluation paused locally", retryable: false } }, "high");
+        payload: { code: reason, message: bundle.deployment.mode === "futures-demo"
+          ? "Demo evaluation paused locally" : "Live evaluation paused locally", retryable: false } }, "high");
     },
   });
   const paperScheduler = new PaperScheduler({ collector: publicMarket, market: marketState,
     account: (deploymentId) => new DurablePaperAccount(osStorage,
       createNodeVaultFileStore(join(vaultDirectory, "paper-accounts", `${deploymentId}.bin`))),
     runner: paperRunner,
+    onHeartbeat: async (account, markPrice, leverage, observedAt, bundle, sequence) => {
+      await enqueueTelemetrySafely(createPaperHeartbeatTelemetry({ account, markPrice, leverage,
+        observedAt, bundle, sequence }));
+    },
+    onOrder: async (order, bundle) => {
+      await enqueueTelemetrySafely(createOrderStateTelemetry({ order,
+        expectedDeploymentVersion: bundle.deployment.version, deploymentState: "running" }));
+    },
     onFault: async (reason, bundle) => {
       const occurredAt = Date.now();
       const id = `paper-fault-${createHash("sha256").update(`${bundle.deployment.id}:${reason}:${occurredAt}`).digest("hex").slice(0, 40)}`;
@@ -193,7 +261,20 @@ export async function bootstrapAgent(): Promise<void> {
     },
   });
   const login = createStartAtLoginController(app);
-  const controlPlaneOrigin = process.env.CBL_CONTROL_PLANE_ORIGIN;
+  const controlPlaneOrigin = __CBL_CONTROL_PLANE_ORIGIN__ || process.env.CBL_CONTROL_PLANE_ORIGIN;
+  const updaterAdapter: AutoUpdaterAdapter = {
+  setFeedURL: (options) => autoUpdater.setFeedURL(options),
+  checkForUpdates: () => autoUpdater.checkForUpdates(),
+  quitAndInstall: () => autoUpdater.quitAndInstall(),
+  on: (event, listener) => (autoUpdater as unknown as { on(name: string, callback: (...args: unknown[]) => void): unknown })
+    .on(event, listener),
+  removeListener: (event, listener) => (autoUpdater as unknown as {
+    removeListener(name: string, callback: (...args: unknown[]) => void): unknown
+  }).removeListener(event, listener),
+  };
+  const updateService = createAgentUpdateService({ updater: updaterAdapter, runStore, packaged: app.isPackaged,
+    platform: process.platform, arch: process.arch, currentVersion: app.getVersion(), controlPlaneOrigin,
+    squirrelFirstRun: process.argv.includes("--squirrel-firstrun") });
   let pairingClient: ReturnType<typeof createPairingClient> | null = null;
   let deploymentInstaller: DeploymentInstaller | null = null;
   if (controlPlaneOrigin) {
@@ -257,8 +338,11 @@ export async function bootstrapAgent(): Promise<void> {
       });
       const liveUnlock = createLiveUnlockService({ deployments, verifier: connectionVerifier,
         connection: connectionRegistry, market: publicMarket });
+      const connectionControl = createConnectionControl({ verifier: connectionVerifier, registry: connectionRegistry,
+        vault, versions: connectionVersions, enqueue: (event) => telemetry.enqueue(event, { priority: "critical" }) });
       deploymentInstaller = new DeploymentInstaller({ deployments, store: runStore, runner: paperScheduler,
-        liveRunner: liveScheduler, liveUnlock });
+        liveRunner: liveScheduler, liveUnlock, connectionControl,
+        beginLiveStart: () => updateService.beginLiveStart() });
       await deploymentInstaller.initialize();
     }
     const installer = deploymentInstaller;
@@ -304,14 +388,16 @@ export async function bootstrapAgent(): Promise<void> {
 
     void (async () => {
       let backoff = 500;
+      let idleDelay = 2_000;
       try {
         while (!controller.signal.aborted) {
           try {
-            await client.uploadOnce(telemetry);
-            await client.pollOnce();
+            const uploaded = await client.uploadOnce(telemetry);
+            const commands = await client.pollOnce();
             if (controlAbort === controller) controlOnline = true;
             backoff = 500;
-            await waitForControlRetry(2_000, controller.signal);
+            idleDelay = uploaded > 0 || commands > 0 ? 500 : Math.min(10_000, Math.ceil(idleDelay * 1.6));
+            await waitForControlRetry(idleDelay, controller.signal);
           } catch (error) {
             if (controlAbort === controller) controlOnline = false;
             if (error instanceof ControlClientRevokedError || controller.signal.aborted) break;
@@ -375,8 +461,15 @@ export async function bootstrapAgent(): Promise<void> {
     },
     setStartAtLogin: (enabled) => login.set(enabled),
     emergencyStop: async () => { await Promise.all([runtime.emergencyStop(), paperScheduler.pause(), liveScheduler.pause()]); },
+    getUpdateStatus: async () => updateService.status(),
+    checkForUpdates: () => updateService.check(),
+    installUpdate: () => updateService.install(),
   };
   const window = await startAgentShell(services);
+  agentWindow = window;
+  if (pendingPairingCode) setTimeout(() => offerPairingCode(pendingPairingCode), 0);
+  const updateTimer = setTimeout(() => { void updateService.check(); },
+    process.argv.includes("--squirrel-firstrun") ? 10_000 : 3_000);
   await ensureControlPlane().catch(() => undefined);
   const trayImage = nativeImage.createFromDataURL("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLJ4QAAAABJRU5ErkJggg==");
   const tray = new Tray(trayImage.resize({ width: 16, height: 16 }));
@@ -393,6 +486,8 @@ export async function bootstrapAgent(): Promise<void> {
   ]);
   lifecycle.install(menu);
   app.once("before-quit", () => {
+    clearTimeout(updateTimer);
+    updateService.dispose();
     controlAbort?.abort();
     expiryGuard.cancel();
     lifecycle.prepareToQuit();
@@ -400,7 +495,8 @@ export async function bootstrapAgent(): Promise<void> {
 }
 
 if (process.type === "browser") {
-  void bootstrapAgent().catch(() => {
+  if (process.platform === "win32" && isSquirrelLifecycleInvocation(process.argv)) app.quit();
+  else void bootstrapAgent().catch(() => {
     process.stderr.write("CryptoBot Labs Agent failed to start safely.\n");
     app.quit();
   });

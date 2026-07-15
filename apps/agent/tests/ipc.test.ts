@@ -3,7 +3,7 @@ import { registerAgentIpc, type AgentShellServices, type IpcMainLike, type Trust
 import { createStartAtLoginController } from "../src/main/login-item";
 import { AGENT_CSP, TrayWindowLifecycle, createMainWindow, hardenWebContents, secureWindowOptions, type BrowserWindowLike } from "../src/main/windows";
 import { createAgentRendererApi } from "../src/preload/api";
-import { IPC_CHANNELS, type AgentStatus, type VerifiedConnection } from "../src/shared/ipc-contract";
+import { IPC_CHANNELS, IPC_EVENTS, type AgentStatus, type AgentUpdateStatus, type VerifiedConnection } from "../src/shared/ipc-contract";
 
 function createIpcHarness() {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -37,14 +37,28 @@ function services(): AgentShellServices {
     pair: vi.fn(async () => ({ paired: true, deviceId: "device-1" })),
     setStartAtLogin: vi.fn(async () => undefined),
     emergencyStop: vi.fn(async () => undefined),
+    getUpdateStatus: vi.fn(async (): Promise<AgentUpdateStatus> => ({ state: "idle", version: null, reason: null })),
+    checkForUpdates: vi.fn(async (): Promise<AgentUpdateStatus> => ({ state: "checking", version: null, reason: null })),
+    installUpdate: vi.fn(async () => undefined),
   };
 }
 
 describe("secure IPC allowlist", () => {
-  it("exposes exactly the seven approved methods and no secret reader", () => {
+  it("exposes exactly the approved methods and no secret reader", () => {
     const api = createAgentRendererApi(async () => undefined);
-    expect(Object.keys(api).sort()).toEqual(Object.keys(IPC_CHANNELS).sort());
+    expect(Object.keys(api).sort()).toEqual([...Object.keys(IPC_CHANNELS), "onPairingSuggestion"].sort());
     expect(Object.keys(api)).not.toContain("readCredentials");
+  });
+
+  it("validates pairing suggestions before exposing them to the renderer", () => {
+    let relay: ((value: unknown) => void) | undefined;
+    const api = createAgentRendererApi(async () => undefined, (channel, listener) => {
+      expect(channel).toBe(IPC_EVENTS.pairingSuggestion); relay = listener; return () => undefined;
+    });
+    const listener = vi.fn(); api.onPairingSuggestion(listener);
+    relay?.(`CBL-${"A".repeat(22)}`);
+    expect(listener).toHaveBeenCalledWith(`CBL-${"A".repeat(22)}`);
+    expect(() => relay?.("unsafe")).toThrow("Invalid pairing suggestion");
   });
 
   it("validates inputs in both preload and main before calling services", async () => {

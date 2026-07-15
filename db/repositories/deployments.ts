@@ -27,13 +27,13 @@ export interface RiskPolicyRecord {
   createdAt: number; updatedAt: number;
 }
 
-export interface CommandRecord {
+export interface CommandRecord extends Record<string, unknown> {
   id: string; userId: string; deploymentId: string; deviceId: string; type: CommandType; version: number;
   correlationId: string; expectedDeploymentVersion: number; payloadJson: string;
   status: "pending" | "acknowledged"; createdAt: number; expiresAt: number;
 }
 
-export interface CommandAcknowledgementRecord {
+export interface CommandAcknowledgementRecord extends Record<string, unknown> {
   id: string; commandId: string; userId: string; deviceId: string;
   status: "ok" | "rejected" | "failed"; payloadJson: string; acknowledgedAt: number;
 }
@@ -181,12 +181,16 @@ export function createDeploymentRepository(database: ControlPlaneDatabase) {
       exactInput(options, ["limit", "cursor"]);
       const pageSize = limit(options.limit);
       if (options.cursor) exactInput(options.cursor, ["createdAt", "id"]);
-      const cursorTime = options.cursor ? time(options.cursor.createdAt, "cursor.createdAt") : null;
-      const cursorId = options.cursor ? id(options.cursor.id, "cursor.id") : null;
-      const rows = await database.prepare(`SELECT ${deploymentColumns} FROM deployments
-        WHERE user_id = ? AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?))
-        ORDER BY created_at DESC, id DESC LIMIT ?`)
-        .bind(id(userId, "userId"), cursorTime, cursorTime, cursorTime, cursorId, pageSize + 1).all<DeploymentRecord>();
+      const owner = id(userId, "userId");
+      const rows = options.cursor
+        ? await database.prepare(`SELECT ${deploymentColumns} FROM deployments
+            WHERE user_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))
+            ORDER BY created_at DESC, id DESC LIMIT ?`)
+          .bind(owner, time(options.cursor.createdAt, "cursor.createdAt"), time(options.cursor.createdAt, "cursor.createdAt"),
+            id(options.cursor.id, "cursor.id"), pageSize + 1).all<DeploymentRecord>()
+        : await database.prepare(`SELECT ${deploymentColumns} FROM deployments
+            WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`)
+          .bind(owner, pageSize + 1).all<DeploymentRecord>();
       if (!rows.success) throw new Error("deployment list failed");
       const items = rows.results.slice(0, pageSize);
       const last = items.at(-1);
@@ -350,7 +354,9 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
         AND expected_deployment_version=? AND status='pending'`).bind(commandId, deviceId, deploymentId, expected)
         .first<{ type: CommandType }>();
       if (!command) return null;
-      const unlock = command.type === "request-live-unlock" && input.status === "ok";
+      const transitionMode = command.type === "request-live-unlock" ? "live"
+        : command.type === "enable-futures-demo" ? "futures-demo" : null;
+      const unlock = transitionMode !== null && input.status === "ok";
       let results: ControlPlaneRunResult[];
       try {
         const statements = [
@@ -359,14 +365,21 @@ export function createCommandRepository(database: ControlPlaneDatabase) {
             SELECT ?,c.id,c.user_id,c.device_id,?,?,? FROM commands c
             WHERE c.id=? AND c.device_id=? AND c.deployment_id=? AND c.expected_deployment_version=?
               AND c.status='pending' AND c.expires_at>?
-              AND (?=0 OR (c.type='request-live-unlock' AND EXISTS (SELECT 1 FROM deployments d
+              AND (?=0 OR (c.type=? AND EXISTS (SELECT 1 FROM deployments d
                 WHERE d.id=c.deployment_id AND d.user_id=c.user_id AND d.device_id=c.device_id
-                  AND d.version=c.expected_deployment_version AND d.mode='paper' AND d.state IN ('stopped','paused'))))`)
-            .bind(ackId, input.status, payloadJson, now, commandId, deviceId, deploymentId, expected, lateCutoff, unlock ? 1 : 0),
-          ...(unlock ? [database.prepare(`UPDATE deployments SET mode='live',state='paused',updated_at=?
+                  AND d.version=c.expected_deployment_version AND d.mode='paper' AND d.state IN ('stopped','paused')
+                  AND (?<>'futures-demo' OR EXISTS (SELECT 1 FROM strategy_versions sv JOIN strategies s
+                    ON s.id=sv.strategy_id AND s.user_id=sv.user_id WHERE sv.id=d.strategy_version_id
+                      AND sv.user_id=d.user_id AND s.market='futures')))))`)
+            .bind(ackId, input.status, payloadJson, now, commandId, deviceId, deploymentId, expected, lateCutoff,
+              unlock ? 1 : 0, command.type, transitionMode ?? ""),
+          ...(unlock ? [database.prepare(`UPDATE deployments SET mode=?,state='paused',updated_at=?
             WHERE id=? AND device_id=? AND version=? AND mode='paper' AND state IN ('stopped','paused')
+              AND (?<>'futures-demo' OR EXISTS (SELECT 1 FROM strategy_versions sv JOIN strategies s
+                ON s.id=sv.strategy_id AND s.user_id=sv.user_id WHERE sv.id=deployments.strategy_version_id
+                  AND sv.user_id=deployments.user_id AND s.market='futures'))
               AND EXISTS (SELECT 1 FROM command_acknowledgements a WHERE a.id=? AND a.command_id=?)`)
-            .bind(now, deploymentId, deviceId, expected, ackId, commandId)] : []),
+            .bind(transitionMode, now, deploymentId, deviceId, expected, transitionMode, ackId, commandId)] : []),
           database.prepare(`UPDATE commands SET status='acknowledged' WHERE id=? AND device_id=?
             AND EXISTS (SELECT 1 FROM command_acknowledgements WHERE command_id=?)`)
             .bind(commandId, deviceId, commandId),

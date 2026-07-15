@@ -63,6 +63,20 @@ describe("run control service",()=>{
     await expect(service.command("usr_1","run_1","request-paper-2",{type:"pause",expectedVersion:3,reason:"user-paper-control",scope:"all"})).rejects.toMatchObject({status:400});
   });
 
+  it("queues exact version-fenced connection maintenance commands",async()=>{
+    const enqueue=vi.fn().mockResolvedValue({command:{id:"cmd_connection",deploymentId:"run_1",type:"revalidate-connection",
+      version:1,correlationId:"request-connection-1",expectedDeploymentVersion:3,status:"pending",createdAt:400_000,
+      expiresAt:700_000},idempotent:false});
+    const service=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue(deployment)} as never,
+      liveData:{} as never,commands:{enqueue} as never,now:()=>400_000});
+    await service.command("usr_1","run_1","request-connection-1",{type:"revalidate-connection",expectedVersion:3});
+    expect(enqueue).toHaveBeenLastCalledWith("usr_1",expect.objectContaining({type:"revalidate-connection",payload:{}}));
+    await service.command("usr_1","run_1","request-connection-2",{type:"erase-local-credentials",expectedVersion:3,
+      reason:"user-requested-from-connections"});
+    expect(enqueue).toHaveBeenLastCalledWith("usr_1",expect.objectContaining({type:"erase-local-credentials",
+      payload:{reason:"user-requested-from-connections"}}));
+  });
+
   it("queues live resume only for an unlocked live deployment",async()=>{
     const enqueue=vi.fn().mockResolvedValue({command:{id:"cmd_live",deploymentId:"run_1",type:"resume-live",version:1,
       correlationId:"request-live-resume-1",expectedDeploymentVersion:3,status:"pending",createdAt:400_000,expiresAt:700_000},idempotent:false});
@@ -73,6 +87,24 @@ describe("run control service",()=>{
       {type:"resume-live",expectedVersion:3,reason:"user-live-control"});
     expect(enqueue).toHaveBeenCalledWith("usr_1",expect.objectContaining({type:"resume-live",expectedDeploymentVersion:3,
       payload:{reason:"user-live-control"}}));
+  });
+
+  it("queues Demo enable and resume only for a verified futures deployment",async()=>{
+    const enqueue=vi.fn().mockResolvedValue({command:{id:"cmd_demo",deploymentId:"run_1",type:"enable-futures-demo",
+      version:1,correlationId:"request-demo-1",expectedDeploymentVersion:3,status:"pending",createdAt:400_000,
+      expiresAt:700_000},idempotent:false});
+    const liveData={getMarketForUser:vi.fn().mockResolvedValue("futures"),getConnectionForUser:vi.fn().mockResolvedValue({
+      status:"verified",hasLocalCredential:true,permissions:{read:true,spotTrade:false,futuresTrade:true,withdrawal:false}})};
+    const paper=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue({...deployment,state:"paused"})} as never,
+      liveData:liveData as never,commands:{enqueue} as never,now:()=>400_000});
+    await paper.command("usr_1","run_1","request-demo-1",{type:"enable-futures-demo",expectedVersion:3,reason:"user-demo-enable"});
+    expect(enqueue).toHaveBeenLastCalledWith("usr_1",expect.objectContaining({type:"enable-futures-demo",
+      payload:{reason:"user-demo-enable"}}));
+    const demo=createRunService({deployments:{getForUser:vi.fn().mockResolvedValue({...deployment,mode:"futures-demo",state:"paused"})} as never,
+      liveData:{} as never,commands:{enqueue} as never,now:()=>400_000});
+    await demo.command("usr_1","run_1","request-demo-2",{type:"resume-demo",expectedVersion:3,reason:"user-demo-control"});
+    expect(enqueue).toHaveBeenLastCalledWith("usr_1",expect.objectContaining({type:"resume-demo",
+      payload:{reason:"user-demo-control"}}));
   });
 
   it("rejects resume commands for the wrong deployment mode",async()=>{

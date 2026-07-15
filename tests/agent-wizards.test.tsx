@@ -9,7 +9,7 @@ import type { AgentRendererApi } from "../apps/agent/src/shared/ipc-contract";
 afterEach(cleanup);
 
 function api(overrides: Partial<AgentRendererApi> = {}): AgentRendererApi {
-  return {
+  const defaults: AgentRendererApi = {
     getStatus: vi.fn(async () => ({ state: "unconfigured", credential: { configured: false, apiKeySuffix: "" }, paired: false, pairingState: "unpaired", startAtLogin: false })),
     saveCredentials: vi.fn(async () => ({ configured: true, apiKeySuffix: "1234" })),
     verifyCredentials: vi.fn(async () => ({ provider: "WEEX", apiKeySuffix: "1234", verifiedAt: "2026-07-12T00:00:00.000Z",
@@ -18,8 +18,12 @@ function api(overrides: Partial<AgentRendererApi> = {}): AgentRendererApi {
     pair: vi.fn(async () => ({ paired: true, deviceId: "device-1" })),
     setStartAtLogin: vi.fn(async () => undefined),
     emergencyStop: vi.fn(async () => undefined),
-    ...overrides,
+    getUpdateStatus: vi.fn(async () => ({ state: "idle", version: null, reason: null })),
+    checkForUpdates: vi.fn(async () => ({ state: "checking", version: null, reason: null })),
+    installUpdate: vi.fn(async () => undefined),
+    onPairingSuggestion: vi.fn(() => () => undefined),
   };
+  return { ...defaults, ...overrides };
 }
 
 describe("agent setup wizards", () => {
@@ -40,6 +44,17 @@ describe("agent setup wizards", () => {
     await waitFor(() => expect(agentApi.pair).toHaveBeenCalledWith({ code: "CBL-abcdefghijklmnopqrstuv", deviceName: "我的 Mac" }));
     expect(onChanged).toHaveBeenCalledOnce();
     expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("配對完成"));
+  });
+
+  it("prefills a code from the website deep link and keeps a safe fallback when camera scanning is unavailable", async () => {
+    const user = userEvent.setup();
+    const suggestedCode = `CBL-${"Q".repeat(22)}`;
+    render(<PairingWizard api={api()} paired={false} startAtLogin={false} suggestedCode={suggestedCode}
+      onChanged={vi.fn(async () => undefined)} onMessage={vi.fn()} />);
+    expect(screen.getByLabelText("配對碼")).toHaveValue(suggestedCode);
+    await user.click(screen.getByRole("button", { name: "用相機掃描 QR Code" }));
+    expect(await screen.findByText(/不支援相機掃描/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "關閉 QR 掃描" })).toBeInTheDocument();
   });
 
   it("keeps credential entry locked until pairing and clears every secret field after submission", async () => {

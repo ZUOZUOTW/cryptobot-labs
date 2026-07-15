@@ -41,7 +41,7 @@ export const MAX_HISTORICAL_CANDLES = 10_000;
 export const MAX_DECIMAL_STRING_LENGTH = 128;
 export const MAX_HISTORICAL_FUNDING_EVENTS = MAX_HISTORICAL_CANDLES * 4;
 export const MAX_VALIDATION_ENTRIES = MAX_HISTORICAL_CANDLES;
-export const MAX_HISTORICAL_LEVERAGE = 20;
+export const MAX_HISTORICAL_LEVERAGE = 500;
 const DEFAULT_MAINTENANCE_MARGIN_RATE = "0.02";
 
 function numeric(value: string, label: string, options: { positive?: boolean; belowOne?: boolean; signed?: boolean } = {}): Decimal {
@@ -543,7 +543,7 @@ export async function runHistoricalBacktest(
       },
       liquidationModel: {
         maintenanceMarginRate: decimalString(maintenanceMarginRate),
-        maximumSupportedLeverage: "20",
+        maximumSupportedLeverage: String(MAX_HISTORICAL_LEVERAGE) as "500",
         check: "funding-event-mark-immediately-then-candle-low-long-high-short",
         orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme",
         model: "fixed-conservative-not-weex-tier-exact",
