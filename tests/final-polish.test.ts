@@ -5,8 +5,8 @@ import { buildSiteMetadata, requestOrigin } from "../lib/site-metadata";
 
 const readProjectFile = (path: string) => readFile(resolve(process.cwd(), path), "utf8");
 const EXPECTED_TITLE = "CryptoBot Labs｜WEEX 自動交易策略實驗室";
-const EXPECTED_DESCRIPTION = "探索、比較並組裝自動交易策略，透過可重現的模擬回測安全驗證交易想法；推薦使用 WEEX API。";
-const EXPECTED_IMAGE_ALT = "CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦";
+const EXPECTED_DESCRIPTION = "探索、組裝與分享 WEEX 自動交易策略；先用公開歷史資料回測與 Paper 模擬，再透過 WEEX OAuth 安全準備雲端執行。";
+const EXPECTED_IMAGE_ALT = "CryptoBot Labs：把交易想法，組成能先模擬的 WEEX 自動策略。";
 
 describe("production metadata", () => {
   const rawHeaders = (host: string | null, forwardedHost: string | null = null, forwardedProto: string | null = null) => ({
@@ -99,7 +99,7 @@ describe("production metadata", () => {
 });
 
 describe("final responsive and maintenance contracts", () => {
-  it("gives each compact interaction surface an exact 44px minimum target", async () => {
+  it("keeps compact interaction surfaces at or above a 44px minimum target", async () => {
     const [globalStyles, workshopStyles] = await Promise.all([
       readProjectFile("app/globals.css"),
       readProjectFile("app/workshop.css"),
@@ -109,10 +109,10 @@ describe("final responsive and maintenance contracts", () => {
     expect(globalStyles).toMatch(/\.menu-button\s*\{[^}]*width: 2\.75rem;/s);
     expect(globalStyles).toMatch(/\.button--small\s*\{\s*min-height: 2\.75rem;/);
     expect(globalStyles).toMatch(/\.period-switcher__button\s*\{\s*min-height: 2\.75rem;/);
-    expect(globalStyles).toMatch(/\.risk-return-panel__point > a\s*\{[^}]*width: 2\.75rem;[^}]*height: 2\.75rem;/s);
-    expect(workshopStyles).toMatch(/\.strategy-option__add\s*\{\s*width: 2\.75rem;/);
+    expect(globalStyles).toMatch(/\.risk-return-panel__point > a\s*\{[^}]*width: 3rem;[^}]*height: 3rem;/s);
+    expect(workshopStyles).toMatch(/\.strategy-option__add\s*\{\s*width: 3rem;/);
     expect(workshopStyles).toMatch(/\.selected-strategies__actions button\s*\{\s*width: 2\.75rem;/);
-    expect(workshopStyles).toMatch(/\.market-controls select\s*\{\s*min-height: 2\.75rem;/);
+    expect(workshopStyles).toMatch(/\.market-controls select\s*\{\s*min-height: 3rem;/);
   });
 
   it("uses exact mobile single-column and sticky workshop action rules", async () => {
@@ -152,7 +152,7 @@ describe("final responsive and maintenance contracts", () => {
     expect(metadataSource).toContain("export const SITE_DESCRIPTION");
     expect(metadataSource).toContain("export const SOCIAL_IMAGE_ALT");
     expect(metadataSource.match(/CryptoBot Labs｜WEEX 自動交易策略實驗室/g)).toHaveLength(1);
-    expect(metadataSource.match(/CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦/g)).toHaveLength(1);
+    expect(metadataSource.match(/CryptoBot Labs：把交易想法，組成能先模擬的 WEEX 自動策略。/g)).toHaveLength(1);
   });
 
   it("documents the repository's pnpm workflow", async () => {

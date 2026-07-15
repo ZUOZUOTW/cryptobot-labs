@@ -223,7 +223,7 @@ describe("historical backtest API", () => {
       ["huge-capital", { initialCapital: "100000001" }],
       ["fee-cap", { feeRate: "0.051" }],
       ["slippage-cap", { slippageRate: "0.101" }],
-      ["leverage-cap", { leverage: "21" }],
+      ["leverage-cap", { leverage: "501" }],
       ["long-decimal", { feeRate: `0.${"0".repeat(40)}1` }],
     ] as const) {
       await expect(service.create("usr_a", key, request(overrides)))
@@ -233,11 +233,11 @@ describe("historical backtest API", () => {
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_jobs").get()).toEqual({ count: 0 });
   });
 
-  it("accepts the product 20x ceiling and rejects only values above it before fetch", async () => {
-    const value = config({ leverage: 20 });
+  it("accepts a WEEX high-leverage product within the 500x engine boundary", async () => {
+    const value = config({ leverage: 400 });
     database.raw.prepare("UPDATE strategy_versions SET config_hash=?,config_json=? WHERE id='version_a'")
       .run(await digest(value), JSON.stringify(value));
-    await expect(service.create("usr_a", "twenty-x", request({ leverage: "20" })))
+    await expect(service.create("usr_a", "four-hundred-x", request({ leverage: "400" })))
       .resolves.toMatchObject({ job: { status: "succeeded" } });
     expect(collectCandles).toHaveBeenCalledTimes(1);
   });

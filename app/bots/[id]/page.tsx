@@ -1,14 +1,27 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BotDownloadButton } from "../../../components/BotCard";
+import { StrategyShareActions } from "../../../components/StrategyShareActions";
 import { MetricCard } from "../../../components/MetricCard";
 import { PerformanceChart } from "../../../components/PerformanceChart";
 import { BOT_CATALOG } from "../../../data/bots";
 import { benchmarkSeries } from "../../../lib/benchmark-series";
 import type { BotDefinition } from "../../../lib/types";
+import { activePromoter, DEFAULT_PROMOTER_SLUG } from "../../../data/demo-platform";
 
 interface BotDetailPageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ via?: string | string[] }>;
+}
+
+export async function generateMetadata({ params }: Pick<BotDetailPageProps, "params">): Promise<Metadata> {
+  const { id } = await params;
+  const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
+  if (!bot) return {};
+  const title = `${bot.name}｜公開 WEEX 策略`;
+  const description = `${bot.description}。${bot.market === "spot" ? "現貨" : "合約"} ${bot.timeframe}，${bot.risk}風險；查看模擬績效、最大回撤與策略規則。`;
+  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: "/og.png", width: 1672, height: 941, alt: `${bot.name} 公開策略預覽` }] }, twitter: { card: "summary_large_image", title, description, images: ["/og.png"] } };
 }
 
 export function generateStaticParams() {
@@ -23,11 +36,15 @@ const monthlyReturns = (bot: BotDefinition) => bot.equityCurve.map((point, index
   return { ...point, change };
 });
 
-export default async function BotDetailPage({ params }: BotDetailPageProps) {
+export default async function BotDetailPage({ params, searchParams }: BotDetailPageProps) {
   const { id } = await params;
+  const query = await searchParams;
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
 
   if (!bot) notFound();
+  const requestedVia = Array.isArray(query?.via) ? query?.via[0] : query?.via;
+  const promoter = activePromoter(requestedVia) ?? activePromoter(DEFAULT_PROMOTER_SLUG)!;
+  const workshopHref = `/workshop?bot=${encodeURIComponent(bot.id)}&version=1&via=${encodeURIComponent(promoter.slug)}`;
 
   const metrics = bot.metrics;
   const monthly = monthlyReturns(bot);
@@ -43,20 +60,21 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
         <div className="bot-detail-hero__content">
           <div>
             <div className="tag-row">
-              <span className="exchange-badge">WEEX API · 推薦</span>
               <span className="market-badge">{marketLabel(bot)} · {bot.timeframe}</span>
               <span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span>
             </div>
-            <p className="eyebrow">OFFICIAL STRATEGY / {bot.id.toUpperCase()}</p>
+            <p className="eyebrow">PUBLIC STRATEGY / {bot.id.toUpperCase()} / V1</p>
             <h1>{bot.name}</h1>
             <p className="bot-detail-hero__lead">{bot.description}</p>
             <div className="tag-row">{bot.tags.map((tag) => <span className="strategy-tag" key={tag}>{tag}</span>)}</div>
           </div>
           <div className="bot-detail-hero__actions">
-            <Link className="button button--primary" href={`/workshop?bot=${bot.id}`}>複製到組裝車間</Link>
-            <BotDownloadButton bot={bot} className="button button--secondary" />
+            <Link className="button button--primary" href={workshopHref}>套用此策略</Link>
+            <StrategyShareActions botId={bot.id} botName={bot.name} via={promoter.slug} />
+            <details className="legacy-package"><summary>下載策略檔案</summary><BotDownloadButton bot={bot} className="button button--secondary" /></details>
           </div>
         </div>
+        <div className="strategy-publisher"><span>發布者</span><strong>CryptoBot Labs 研究團隊</strong><span>公開版本 v1 · 允許複製 · Email 不公開</span></div>
         <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
       </header>
 
@@ -123,9 +141,10 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
       </section>
 
       <section className="detail-section detail-cta site-container glass-panel">
-        <div><p className="eyebrow">CUSTOMIZE OR DOWNLOAD</p><h2>把官方策略變成你的版本。</h2><p>先複製到組裝車間調整參數，或下載目前適用 WEEX 的官方策略包。</p></div>
-        <div className="button-row"><Link className="button button--primary" href={`/workshop?bot=${bot.id}`}>複製到組裝車間</Link><BotDownloadButton bot={bot} className="button button--secondary" /></div>
+        <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始 Paper；原分享版本不會因後續修改而改變。</p></div>
+        <div className="button-row"><Link className="button button--primary" href={workshopHref}>套用此策略</Link><StrategyShareActions botId={bot.id} botName={bot.name} via={promoter.slug} /></div>
       </section>
+      <p className="affiliate-inline-disclosure site-container">此頁推廣來源為 {promoter.displayName}。建立 WEEX 帳戶的連結可能包含推薦關係，您的使用費用不因此增加；實際推薦歸屬以 WEEX 確認為準。<Link href="/disclosures/affiliate">查看完整揭露</Link></p>
     </article>
   );
 }

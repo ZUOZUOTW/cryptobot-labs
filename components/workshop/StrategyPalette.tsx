@@ -82,7 +82,12 @@ export function StrategyPalette({ selected, onPreset, onAdd, onRemove, onMove }:
                   const conflictId = conflict ? `strategy-conflict-${block.id}` : undefined;
 
                   return (
-                    <li className="strategy-option" data-status={conflict ? "conflict" : "compatible"} key={block.id}>
+                    <li
+                      className="strategy-option"
+                      data-selected={isSelected ? "true" : "false"}
+                      data-status={conflict ? "conflict" : "compatible"}
+                      key={block.id}
+                    >
                       <div>
                         <strong>{strategyDisplayName(block)}</strong>
                         <p>{block.description}</p>
@@ -90,16 +95,25 @@ export function StrategyPalette({ selected, onPreset, onAdd, onRemove, onMove }:
                       </div>
                       <button
                         aria-describedby={conflictId}
-                        aria-disabled={conflict || isSelected}
-                        aria-label={`加入 ${strategyDisplayName(block)}`}
+                        aria-disabled={conflict}
+                        aria-label={isSelected
+                          ? `取消選取 ${strategyDisplayName(block)}`
+                          : `加入 ${strategyDisplayName(block)}`}
+                        aria-pressed={isSelected}
                         className="strategy-option__add"
-                        disabled={conflict || isSelected}
+                        disabled={conflict}
                         onClick={() => {
-                          if (!conflict && !isSelected) onAdd(block);
+                          if (conflict) return;
+                          if (isSelected) {
+                            const index = selected.findIndex((selectedBlock) => selectedBlock.id === block.id);
+                            if (index >= 0) onRemove(index);
+                          } else {
+                            onAdd(block);
+                          }
                         }}
                         type="button"
                       >
-                        {isSelected ? "已加入" : "+"}
+                        <span aria-hidden="true">{isSelected ? "✓" : "+"}</span>
                       </button>
                     </li>
                   );

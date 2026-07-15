@@ -18,6 +18,7 @@ describe("BOT_CATALOG", () => {
       expect(bot.metrics.maxDrawdown).toBeLessThanOrEqual(0);
       expect(bot.metrics.winRate).toBeGreaterThanOrEqual(0);
       expect(bot.metrics.winRate).toBeLessThanOrEqual(100);
+      expect(bot.metrics.trades).toBeGreaterThan(0);
       expect(bot.disclaimer).toBe("模擬回測資料，不代表未來績效");
     }
   });

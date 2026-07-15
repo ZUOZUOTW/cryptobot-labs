@@ -1,176 +1,172 @@
 import { readFileSync } from "node:fs";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LeaderboardPage from "../app/leaderboard/page";
-import { projectMetrics } from "../components/LeaderboardTable";
 import { BOT_CATALOG } from "../data/bots";
+import type { WeexHistoricalPerformance } from "../lib/types";
 
-afterEach(cleanup);
+const REAL_RETURNS: Record<string, number> = {
+  "momentum-forge": 15.4,
+  "orbit-dca": 0.5,
+  "grid-navigator": 0.4,
+  "golden-cross": 0.1,
+  "bollinger-pulse": 0,
+  "rsi-rebound": -0.5,
+  "dual-side-ranger": -3.6,
+  "atr-sentinel": -5.1,
+  "leverage-guardian": -19.5,
+  "breakout-hunter": -24.9,
+};
 
-function renderLeaderboard() {
-  return render(<LeaderboardPage />);
+const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id, {
+  metrics: { ...bot.metrics, totalReturn: REAL_RETURNS[bot.id] },
+  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + ((point.value - 100) * 0.1) + (REAL_RETURNS[bot.id] * index / Math.max(bot.equityCurve.length - 1, 1)) })),
+  generatedAt: "2026-07-13T12:00:00.000Z",
+  disclaimer: "WEEX 歷史行情回測，不代表未來績效",
+  evidence: {
+    level: "historical",
+    provider: "WEEX",
+    market: bot.market,
+    symbol: bot.symbol,
+    interval: bot.timeframe,
+    startTime: 1_751_846_400_000,
+    endTime: 1_754_438_400_000,
+    collectedAt: 1_754_438_400_000,
+    candleCount: bot.market === "spot" ? 180 : 720,
+    complete: true,
+    feeRate: "0.001",
+    slippageRate: "0.0005",
+    fundingIncluded: false,
+    datasetDigest: `${bot.id}-digest`,
+    engineVersion: "test",
+  },
+}]));
+
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({
+    performances: performanceFixture(),
+    updatedAt: "2026-07-13T12:00:00.000Z",
+  }), { status: 200 }));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+async function renderReady() {
+  render(<LeaderboardPage />);
+  return await screen.findByRole("table", { name: "完整機器人績效排名" });
 }
 
-function rowFor(name: string) {
-  return screen.getByRole("row", { name: new RegExp(name) });
+function rankedIds() {
+  return within(screen.getByRole("table", { name: "完整機器人績效排名" }))
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.getAttribute("data-bot-id"));
 }
 
-describe("dynamic leaderboard", () => {
-  it("projects total return for the 30, 90, and 365 day periods with fixed factors", async () => {
+describe("WEEX historical leaderboard", () => {
+  it("waits for WEEX results and never presents the old projected static returns", async () => {
+    render(<LeaderboardPage />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在計算近期績效");
+    expect(screen.queryByText("+142.8%")).not.toBeInTheDocument();
+
+    const table = await screen.findByRole("table", { name: "完整機器人績效排名" });
+    expect(within(table).getByRole("row", { name: /突破獵手/ })).toHaveTextContent("-24.9%");
+    expect(within(table).getByRole("row", { name: /動能鍛造者/ })).toHaveTextContent("+15.4%");
+    expect(screen.queryByText("+142.8%")).not.toBeInTheDocument();
+  });
+
+  it("uses the truthful 30-day interval instead of synthetic 90-day and annual projections", async () => {
+    await renderReady();
+    expect(screen.getByText("近 30 天")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "90 天" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "1 年" })).not.toBeInTheDocument();
+  });
+
+  it("sorts every leaderboard surface from the loaded historical metrics", async () => {
     const user = userEvent.setup();
-    renderLeaderboard();
+    await renderReady();
+    expect(rankedIds()[0]).toBe("momentum-forge");
+    expect(rankedIds().at(-1)).toBe("breakout-hunter");
+    const sortControls = screen.getByRole("group", { name: "戰況排序" });
+    const returnButton = within(sortControls).getByRole("button", { name: "累積收益" });
+    const stabilityButton = within(sortControls).getByRole("button", { name: "穩定度" });
+    expect(returnButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("combobox", { name: "排序指標" })).not.toBeInTheDocument();
 
-    const table = screen.getByRole("table", { name: "完整機器人績效排名" });
-    expect(within(rowFor("Breakout Hunter")).getByText("+142.8%")).toBeInTheDocument();
+    await user.click(stabilityButton);
+    expect(rankedIds()[0]).toBe("orbit-dca");
+    expect(stabilityButton).toHaveAttribute("aria-pressed", "true");
+    expect(returnButton).toHaveAttribute("aria-pressed", "false");
 
-    await user.click(screen.getByRole("button", { name: "30 天" }));
-    expect(within(rowFor("Breakout Hunter")).getByText("+20.0%")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "90 天" }));
-    expect(within(rowFor("Breakout Hunter")).getByText("+52.8%")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "1 年" }));
-    expect(within(rowFor("Breakout Hunter")).getByText("+142.8%")).toBeInTheDocument();
-    expect(table).toBeInTheDocument();
+    await user.click(within(sortControls).getByRole("button", { name: "低回撤" }));
+    expect(rankedIds()[0]).toBe("orbit-dca");
   });
 
-  it("sorts by return, stability, lowest absolute drawdown, and Sharpe", async () => {
-    const user = userEvent.setup();
-    renderLeaderboard();
-    const sort = screen.getByRole("combobox", { name: "排序指標" });
-
-    const rankedIds = () => within(screen.getByRole("table", { name: "完整機器人績效排名" }))
-      .getAllByRole("row")
-      .slice(1)
-      .map((row) => row.getAttribute("data-bot-id"));
-
-    expect(rankedIds()).toEqual([
-      "breakout-hunter", "momentum-forge", "dual-side-ranger", "atr-sentinel", "bollinger-pulse",
-      "leverage-guardian", "golden-cross", "grid-navigator", "rsi-rebound", "orbit-dca",
-    ]);
-
-    await user.selectOptions(sort, "stability");
-    expect(rankedIds()).toEqual([
-      "orbit-dca", "leverage-guardian", "grid-navigator", "rsi-rebound", "atr-sentinel",
-      "golden-cross", "bollinger-pulse", "momentum-forge", "dual-side-ranger", "breakout-hunter",
-    ]);
-
-    await user.selectOptions(sort, "drawdown");
-    expect(rankedIds()).toEqual([
-      "orbit-dca", "rsi-rebound", "leverage-guardian", "grid-navigator", "golden-cross",
-      "bollinger-pulse", "atr-sentinel", "momentum-forge", "dual-side-ranger", "breakout-hunter",
-    ]);
-    expect(screen.getByRole("heading", { name: "最大回撤比較（越短越好）" })).toBeInTheDocument();
-
-    await user.selectOptions(sort, "sharpe");
-    expect(rankedIds()).toEqual([
-      "leverage-guardian", "atr-sentinel", "momentum-forge", "breakout-hunter", "grid-navigator",
-      "bollinger-pulse", "rsi-rebound", "dual-side-ranger", "golden-cross", "orbit-dca",
-    ]);
+  it("renders an animated, clickable multi-line trading battle chart", async () => {
+    await renderReady();
+    const battle = screen.getByRole("region", { name: "機器人交易戰況" });
+    expect(within(battle).getByRole("heading", { name: "機器人交易戰況" })).toBeInTheDocument();
+    expect(within(battle).queryByText("累積收益比較")).not.toBeInTheDocument();
+    const lines = battle.querySelectorAll(".battle-chart__line");
+    const hitAreas = battle.querySelectorAll(".battle-chart__hit");
+    const endLabels = battle.querySelectorAll(".battle-chart__end-label");
+    const endCards = battle.querySelectorAll(".battle-chart__end-card");
+    const axisLabels = battle.querySelectorAll(".battle-chart__axis-label");
+    expect(lines).toHaveLength(BOT_CATALOG.length);
+    expect(hitAreas).toHaveLength(BOT_CATALOG.length);
+    expect(endLabels).toHaveLength(BOT_CATALOG.length);
+    expect(endCards).toHaveLength(BOT_CATALOG.length);
+    expect(axisLabels.length).toBeGreaterThanOrEqual(10);
+    const labelPositions = [...endLabels].map((label) => Number(label.getAttribute("y"))).sort((a, b) => a - b);
+    expect(Math.min(...labelPositions)).toBeGreaterThanOrEqual(30);
+    expect(Math.max(...labelPositions)).toBeLessThanOrEqual(440);
+    expect(labelPositions.slice(1).every((position, index) => position - labelPositions[index]! >= 40)).toBe(true);
+    expect([...lines].every((line) => line.getAttribute("fill") === "none" && Boolean(line.getAttribute("stroke")))).toBe(true);
+    expect([...hitAreas].every((line) => line.getAttribute("fill") === "none" && line.getAttribute("stroke") === "transparent")).toBe(true);
+    expect(within(battle).getByRole("link", { name: /查看 動能鍛造者/ })).toHaveAttribute("href", "/bots/momentum-forge");
+    expect(within(battle).getByRole("link", { name: /動能鍛造者\+15\.4%/ })).toHaveAttribute("href", "/bots/momentum-forge");
+    const orbitColor = battle.querySelector('[data-bot-id="orbit-dca"] .battle-chart__line')?.getAttribute("stroke");
+    await userEvent.click(within(battle).getByRole("button", { name: "穩定度" }));
+    expect(battle.querySelector('[data-bot-id="orbit-dca"] .battle-chart__line')?.getAttribute("stroke")).toBe(orbitColor);
   });
 
-  it("does not mutate the shared bot catalog while projecting and sorting", async () => {
-    const before = JSON.stringify(BOT_CATALOG);
-    const user = userEvent.setup();
-    renderLeaderboard();
-
-    await user.click(screen.getByRole("button", { name: "30 天" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "排序指標" }), "drawdown");
-
-    expect(JSON.stringify(BOT_CATALOG)).toBe(before);
+  it("keeps the historical-data explanation to one compact footer note", async () => {
+    await renderReady();
+    expect(screen.getAllByText(/資料說明：近 30 天 WEEX 公開歷史 K 線/)).toHaveLength(1);
+    expect(screen.queryByText(/WEEX 歷史績效更新/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/根 K 線/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/整體上升|整體下降|整體持平/)).not.toBeInTheDocument();
   });
 
-  it("renders all ten bots in an accessible complete table", async () => {
-    renderLeaderboard();
-
-    const table = screen.getByRole("table", { name: "完整機器人績效排名" });
-    expect(within(table).getAllByRole("row")).toHaveLength(BOT_CATALOG.length + 1);
-    for (const bot of BOT_CATALOG) {
-      expect(within(table).getByRole("row", { name: new RegExp(bot.name) })).toHaveAttribute("data-bot-id", bot.id);
-    }
+  it("shows no substitute ranking if the historical endpoint fails", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error("offline"));
+    render(<LeaderboardPage />);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("近期績效暫時無法取得"));
+    expect(screen.queryByRole("table", { name: "完整機器人績效排名" })).not.toBeInTheDocument();
+    expect(screen.queryByText("+142.8%")).not.toBeInTheDocument();
   });
 
-  it("labels controls and performance surfaces and repeats the exact simulation disclosure", async () => {
-    renderLeaderboard();
-
-    expect(screen.getByRole("group", { name: "績效期間" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "排序指標" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "前三名頒獎台" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "機器人績效比較" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "風險與收益分布" })).toBeInTheDocument();
-    expect(screen.getAllByText("模擬回測資料，不代表未來績效").length).toBeGreaterThanOrEqual(5);
-  });
-
-  it("leaves the root layout as the only main landmark", () => {
-    const { container } = renderLeaderboard();
-
-    expect(container.querySelector("main")).toBeNull();
-  });
-
-  it("keeps risk and return data points exposed as native links", () => {
-    renderLeaderboard();
-
+  it("renders native links for all risk and return points", async () => {
+    await renderReady();
+    expect(screen.queryByText("LEADER CURVE")).not.toBeInTheDocument();
+    expect(screen.queryByText(/收益軌跡/)).not.toBeInTheDocument();
     const panel = screen.getByRole("region", { name: "風險與收益分布" });
     expect(within(panel).getAllByRole("link")).toHaveLength(BOT_CATALOG.length);
     expect(within(panel).getAllByRole("listitem")).toHaveLength(BOT_CATALOG.length);
   });
 
-  it("places right-edge risk and return labels leftward while keeping interior labels readable", () => {
-    renderLeaderboard();
-
-    const panel = screen.getByRole("region", { name: "風險與收益分布" });
-    const edgeLink = within(panel).getByRole("link", { name: /Breakout Hunter/ });
-    const interiorLink = within(panel).getByRole("link", { name: /Orbit DCA/ });
-
-    expect(edgeLink.closest('[role="listitem"]')).toHaveAttribute("data-label-placement", "left");
-    expect(interiorLink.closest('[role="listitem"]')).toHaveAttribute("data-label-placement", "right");
-    expect(edgeLink).toHaveTextContent("Breakout Hunter");
-    expect(interiorLink).toHaveTextContent("Orbit DCA");
-  });
-
-  it("uses exact projected values and relative day labels for both short periods", async () => {
-    const user = userEvent.setup();
-    renderLeaderboard();
-
-    await user.click(screen.getByRole("button", { name: "30 天" }));
-    const thirtyDayChart = screen.getByRole("figure", { name: /30 天收益曲線/ });
-    expect(within(thirtyDayChart).getByRole("listitem", { name: "第 1 天：100，持平" })).toBeInTheDocument();
-    expect(within(thirtyDayChart).getByRole("listitem", { name: "第 30 天：119.992，上升" })).toBeInTheDocument();
-    expect(within(thirtyDayChart).queryByRole("listitem", { name: /7月/ })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "90 天" }));
-    const ninetyDayChart = screen.getByRole("figure", { name: /90 天收益曲線/ });
-    expect(within(ninetyDayChart).getByRole("listitem", { name: "第 1 天：100，持平" })).toBeInTheDocument();
-    expect(within(ninetyDayChart).getByRole("listitem", { name: "第 90 天：152.836，上升" })).toBeInTheDocument();
-    expect(within(ninetyDayChart).queryByRole("listitem", { name: /7月/ })).not.toBeInTheDocument();
-  });
-
-  it("projects drawdown with the exact 30-day and 90-day factors", () => {
-    const breakout = BOT_CATALOG.find((bot) => bot.id === "breakout-hunter")!;
-
-    expect(projectMetrics(breakout.metrics, "30").maxDrawdown).toBeCloseTo(-5.096, 10);
-    expect(projectMetrics(breakout.metrics, "90").maxDrawdown).toBeCloseTo(-13.468, 10);
-  });
-
-  it("pins mobile comparison values beside names and bars beneath them", () => {
-    renderLeaderboard();
-
-    const comparison = screen.getByRole("region", { name: "機器人績效比較" });
-    const firstItem = within(comparison).getAllByRole("listitem")[0];
-    expect(within(firstItem).getByRole("link")).toHaveClass("comparison-bars__name");
-    expect(firstItem.querySelector("strong")).toHaveClass("comparison-bars__value");
-
+  it("uses fast motion timings and respects reduced motion", () => {
     const css = readFileSync("app/globals.css", "utf8");
-    const mobileStyles = css.slice(
-      css.indexOf("@media (max-width: 52rem)"),
-      css.indexOf("@media (max-width: 38rem)"),
-    );
-
-    expect(mobileStyles).toMatch(/\.comparison-bars li \{ grid-template-columns: 2rem minmax\(0, 1fr\) auto; gap: 0\.65rem; \}/);
-    expect(mobileStyles).toMatch(/\.comparison-bars__rank \{ grid-column: 1; grid-row: 1; \}/);
-    expect(mobileStyles).toMatch(/\.comparison-bars__name \{ grid-column: 2; grid-row: 1; min-width: 0; \}/);
-    expect(mobileStyles).toMatch(/\.comparison-bars__value \{ grid-column: 3; grid-row: 1; \}/);
-    expect(mobileStyles).toMatch(/\.comparison-bars__track \{ grid-column: 2 \/ 4; grid-row: 2; \}/);
+    const battleCss = readFileSync("components/LeaderboardTable.module.css", "utf8");
+    expect(battleCss).toMatch(/battleLineDraw 460ms/);
+    expect(battleCss).toMatch(/\.plot[^}]*fill: none/);
+    expect(battleCss).toMatch(/\.legend[^}]*display: flex/);
+    expect(css).toMatch(/trend-line-draw 480ms/);
+    expect(css).toMatch(/arena-trend-draw 440ms/);
+    expect(battleCss).toMatch(/prefers-reduced-motion:[\s\S]*\.line/);
   });
 });

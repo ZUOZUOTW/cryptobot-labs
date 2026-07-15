@@ -43,6 +43,29 @@ const seededRandom = (seed: number): (() => number) => {
 
 const round = (value: number): number => Number(value.toFixed(2));
 
+const parameterValue = (config: BotConfig, blockId: string, key: string): number | undefined => (
+  config.blocks.find((block) => block.id === blockId)
+    ?.parameters.find((parameter) => parameter.key === key)?.value
+);
+
+const clamp = (value: number, minimum: number, maximum: number): number => (
+  Math.max(minimum, Math.min(maximum, value))
+);
+
+const positionFraction = (config: BotConfig): number => {
+  const fixedPosition = parameterValue(config, "fixed-position", "positionSize");
+  if (fixedPosition !== undefined) return clamp(fixedPosition / 100, 0.01, 1);
+
+  const riskPerTrade = parameterValue(config, "atr-sizing", "riskPerTrade");
+  if (riskPerTrade !== undefined) {
+    const riskDistance = parameterValue(config, "stop-loss", "stopLoss")
+      ?? parameterValue(config, "trailing-stop", "trailingDistance")
+      ?? 4;
+    return clamp(riskPerTrade / riskDistance, 0.02, 1);
+  }
+  return 0.25;
+};
+
 const maximumDrawdown = (curve: number[]): number => {
   let peak = 100;
   let drawdown = 0;
@@ -87,19 +110,49 @@ export const runBacktest = (config: BotConfig): BacktestReport => {
 
   const hash = hashString(backtestConfigFingerprint(config));
   const seed = hash.toString(16).padStart(8, "0");
-  const random = seededRandom(hash);
+  // Keep the synthetic market path stable when users compare parameter changes.
+  const marketSeed = hashString(stableStringify({
+    market: config.market,
+    symbol: config.symbol,
+    timeframe: config.timeframe,
+  }));
+  const random = seededRandom(marketSeed);
   const strategyCount = config.blocks.length;
   const riskCount = config.blocks.filter((strategy) => strategy.group === "risk").length;
-  const leverage = config.leverage;
-  const monthlyDrift = 0.0035 + strategyCount * 0.0006 + leverage * 0.0012 - riskCount * 0.0003;
-  const monthlyVolatility = ((0.028 + strategyCount * 0.0015) * (0.75 + leverage * 0.25)) / (1 + riskCount * 0.18);
+  const entryCount = config.blocks.filter((strategy) => strategy.group === "entry").length;
+  const confirmCount = config.blocks.filter((strategy) => strategy.group === "confirm").length;
+  const leverage = config.market === "spot" ? 1 : config.leverage;
+  const allocation = positionFraction(config);
+  const effectiveExposure = leverage * allocation;
+  const simulatedExposure = Math.min(12, effectiveExposure);
+  const monthlyTrades = 2 + entryCount * 2 + confirmCount + (config.logicMode === "any" ? 2 : 0);
+  const strategyEdge = (entryCount > 0 ? 0.001 : -0.002)
+    + confirmCount * 0.0008 + riskCount * 0.0004
+    - Math.max(0, entryCount - 1) * 0.0006;
+  const exposureDrag = Math.pow(Math.max(0, effectiveExposure - 1), 1.12) * 0.0035;
+  const stopLoss = parameterValue(config, "stop-loss", "stopLoss");
+  const trailingStop = parameterValue(config, "trailing-stop", "trailingDistance");
+  const dailyLoss = parameterValue(config, "maximum-daily-loss", "maximumDailyLoss");
+  const takeProfit = parameterValue(config, "take-profit", "takeProfit");
+  const lossCaps = [
+    stopLoss === undefined ? undefined : stopLoss * Math.sqrt(monthlyTrades) / 100,
+    trailingStop === undefined ? undefined : trailingStop * Math.sqrt(monthlyTrades) / 100,
+    dailyLoss === undefined ? undefined : dailyLoss * Math.sqrt(20) / 100,
+  ].filter((value): value is number => value !== undefined);
+  const maximumMonthlyLoss = Math.min(0.95, lossCaps.length > 0 ? Math.min(...lossCaps) : 0.95);
+  const maximumMonthlyGain = Math.min(0.8,
+    takeProfit === undefined ? 0.8 : takeProfit * Math.sqrt(monthlyTrades) / 100);
+  const marketRegime = [-0.018, 0.012, 0.025, -0.01, 0.008, -0.055, 0.02, 0.004, -0.025, 0.03, -0.012, 0.015];
   const returns: number[] = [];
   const equityValues: number[] = [];
   let equity = 100;
 
   for (let month = 0; month < MONTHS; month += 1) {
     const centeredNoise = (random() + random() + random() - 1.5) / 1.5;
-    const monthlyReturn = Math.max(-0.45, Math.min(0.45, monthlyDrift + centeredNoise * monthlyVolatility));
+    const underlyingReturn = 0.002 + marketRegime[month % marketRegime.length]! + centeredNoise * 0.045;
+    const unboundedReturn = underlyingReturn * simulatedExposure
+      + strategyEdge * allocation - exposureDrag;
+    const monthlyReturn = clamp(unboundedReturn, -maximumMonthlyLoss, maximumMonthlyGain);
     returns.push(monthlyReturn);
     equity *= 1 + monthlyReturn;
     equityValues.push(equity);

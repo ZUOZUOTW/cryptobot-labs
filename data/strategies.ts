@@ -49,10 +49,10 @@ const strategyBlocks: StrategyBlock[] = [
     parameter("multiplier", "量能倍數", 1.5, 1, 5, 0.1),
   ]),
   block("take-profit", "固定停利", "exit", "獲利達目標幅度時平倉。", [
-    parameter("takeProfit", "停利", 8, 0.5, 100, 0.5, "%"),
+    parameter("takeProfit", "停利", 8, 0.5, 1000, 0.5, "%"),
   ]),
   block("stop-loss", "固定停損", "risk", "虧損達限制幅度時平倉。", [
-    parameter("stopLoss", "停損", 3, 0.5, 20, 0.5, "%"),
+    parameter("stopLoss", "停損", 3, 0.5, 100, 0.5, "%"),
   ]),
   block("trailing-stop", "移動停損", "risk", "價格回撤達移動距離時保護獲利。", [
     parameter("trailingDistance", "追蹤距離", 4, 0.5, 20, 0.5, "%"),

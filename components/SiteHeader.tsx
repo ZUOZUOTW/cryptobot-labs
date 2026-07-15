@@ -2,15 +2,13 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { signOutPlatform, usePlatformAuth } from "./PlatformAuthProvider";
 
 const NAVIGATION_LINKS = [
-  { href: "/bots", label: "機器人" },
+  { href: "/bots", label: "探索策略" },
+  { href: "/workshop", label: "組裝策略" },
   { href: "/leaderboard", label: "排行榜" },
-  { href: "/workshop", label: "組裝車間" },
-  { href: "/backtests", label: "歷史回測" },
-  { href: "/connections", label: "連線" },
-  { href: "/runs", label: "運行" },
-  { href: "/activity", label: "活動" },
+  { href: "/runs", label: "我的運行" },
 ] as const;
 
 function NavigationLinks() {
@@ -23,6 +21,7 @@ function NavigationLinks() {
 
 export function SiteHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mode, user } = usePlatformAuth();
 
   return (
     <header className="site-header">
@@ -45,10 +44,8 @@ export function SiteHeader() {
         </nav>
 
         <div className="site-header__actions">
-          <span className="exchange-badge">
-            <span className="exchange-badge__signal" aria-hidden="true" />
-            WEEX API · 推薦
-          </span>
+          {user ? <details className="user-menu"><summary>{user.displayName}</summary><div><Link href="/connections">WEEX 連線</Link>{mode === "demo" && <Link href="/admin/users">展示後台</Link>}<button onClick={() => { void signOutPlatform(mode); }} type="button">登出</button></div></details>
+            : <Link className="button button--primary button--small header-login" href="/auth?return_to=%2F">登入</Link>}
           <button
             aria-controls="mobile-navigation"
             aria-expanded={menuOpen}
@@ -71,6 +68,7 @@ export function SiteHeader() {
         id="mobile-navigation"
       >
         <NavigationLinks />
+        {user ? <Link className="site-nav__link" href="/connections">WEEX 連線</Link> : <Link className="site-nav__link" href="/auth?return_to=%2F">登入</Link>}
       </nav>
     </header>
   );

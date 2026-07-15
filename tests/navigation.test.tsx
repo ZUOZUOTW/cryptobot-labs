@@ -7,12 +7,10 @@ afterEach(cleanup);
 
 describe("SiteHeader", () => {
   it.each([
-    ["機器人", "/bots"],
+    ["探索策略", "/bots"],
+    ["組裝策略", "/workshop"],
     ["排行榜", "/leaderboard"],
-    ["組裝車間", "/workshop"],
-    ["連線", "/connections"],
-    ["運行", "/runs"],
-    ["活動", "/activity"],
+    ["我的運行", "/runs"],
   ])("links %s to %s", (name, href) => {
     render(<SiteHeader />);
 

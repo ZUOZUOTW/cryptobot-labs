@@ -31,6 +31,7 @@ describe("CryptoBot Labs production shell", () => {
     expect(styles).toContain("--violet: #8b63ff");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
     expect(footer).toContain("模擬回測資料，不代表未來績效");
-    expect(footer).toContain("推薦使用 WEEX API");
+    expect(footer).not.toContain("WEEX 專用");
+    expect(footer).toContain("正式連線使用 WEEX OAuth");
   });
 });

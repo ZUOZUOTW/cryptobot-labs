@@ -1,15 +1,12 @@
 import Link from "next/link";
-import { BOT_CATALOG } from "../data/bots";
-import { BotCard } from "../components/BotCard";
+import { HomePerformanceSections } from "../components/HomePerformanceSections";
 import { OrbitalHero } from "../components/OrbitalHero";
 
 const steps = [
   ["01", "挑選", "從現貨、合約與不同風險等級中，找到符合想法的策略起點。"],
-  ["02", "組裝", "加入多個條件與風控積木，或使用 JavaScript 描述進階邏輯。"],
-  ["03", "回測與下載", "先檢視可重現的模擬結果，再下載適用 WEEX 的策略包。"],
+  ["02", "模擬", "組裝條件與風控，先用公開歷史行情回測，再啟動 Paper。"],
+  ["03", "自動運行", "通過模擬與權限檢查後，才連接 WEEX 並設定雲端執行。"],
 ] as const;
-
-const leaderboardPreview = BOT_CATALOG.toSorted((a, b) => b.metrics.totalReturn - a.metrics.totalReturn).slice(0, 3);
 
 export default function Home() {
   return (
@@ -17,8 +14,8 @@ export default function Home() {
       <OrbitalHero />
 
       <section className="landing-section site-container" aria-label="三步驟開始使用">
-        <p className="eyebrow">FROM IDEA TO PACKAGE</p>
-        <h2 id="flow-title">三步，讓策略開始運轉。</h2>
+        <p className="eyebrow">PICK / SIMULATE / RUN</p>
+        <h2 id="flow-title">三步，從想法走到安全運行。</h2>
         <ol className="step-grid">
           {steps.map(([number, title, description]) => (
             <li className="step-card glass-panel" key={number}>
@@ -36,7 +33,7 @@ export default function Home() {
           <Link className="text-link" href="/workshop">進入組裝車間 <span aria-hidden="true">→</span></Link>
         </div>
         <div className="feature-placeholder glass-panel" aria-label="多策略積木預覽">
-          <span>RSI REBOUND</span><span>＋</span><span>ATR SENTINEL</span><span>＋</span><span>FIXED RISK</span>
+          <span>RSI 反彈</span><span>＋</span><span>ATR 波動倉位</span><span>＋</span><span>固定風控</span>
         </div>
       </section>
 
@@ -50,40 +47,17 @@ export default function Home() {
         <pre className="code-preview glass-panel" aria-label="WEEX 策略程式碼預覽"><code>{`if (signal.rsi < 30) {\n  strategy.enter("WEEX", "BTCUSDT");\n}`}</code></pre>
       </section>
 
-      <section className="landing-section site-container" aria-labelledby="featured-title">
-        <p className="eyebrow">CURATED BOTS</p><h2 id="featured-title">熱門機器人</h2>
-        <div className="bot-grid bot-grid--featured">
-          {[BOT_CATALOG[0], BOT_CATALOG[5], BOT_CATALOG[9]].map((bot) => <BotCard bot={bot} key={bot.id} />)}
-        </div>
-      </section>
-
-      <section className="landing-section site-container" aria-labelledby="leaderboard-preview-title">
-        <p className="eyebrow">SIMULATED LEADERBOARD</p><h2 id="leaderboard-preview-title">績效排行榜預覽</h2>
-        <div className="leaderboard-preview glass-panel">
-          <ol>
-            {leaderboardPreview.map((bot, index) => (
-              <li key={bot.id}>
-                <span className="leaderboard-preview__rank">0{index + 1}</span>
-                <div><strong>{bot.name}</strong><span>{bot.market === "spot" ? "現貨" : "合約"} · {bot.risk}風險</span></div>
-                <dl><div><dt>累積收益</dt><dd>+{bot.metrics.totalReturn.toFixed(1)}%</dd></div><div><dt>夏普比率</dt><dd>{bot.metrics.sharpe.toFixed(2)}</dd></div></dl>
-              </li>
-            ))}
-          </ol>
-          <div className="leaderboard-preview__footer">
-            <p className="simulation-disclosure" role="note">模擬回測資料，不代表未來績效</p>
-            <Link className="text-link" href="/leaderboard">查看完整排行榜</Link>
-          </div>
-        </div>
-      </section>
+      <HomePerformanceSections />
 
       <section className="landing-section site-container boundary-panel glass-panel">
-        <div><p className="eyebrow">EXCHANGE CONNECTION</p><h2>推薦使用 WEEX API。</h2></div>
-        <p>目前可用的實盤連線為 WEEX API。API 憑證由本機代理保存，網站只顯示遮罩後的連線狀態。</p>
+        <div><p className="eyebrow">SECURE WEEX CONNECTION</p><h2>不用貼 API Key，也能安全準備自動執行。</h2></div>
+        <p>正式版透過 WEEX 官方 OAuth 授權，憑證只由固定 IP 後端加密保存。第一個運行固定是 Paper，Live 必須另外通過完整安全門檻。</p>
+        <Link className="text-link" href="/connections">查看安全連線流程 <span aria-hidden="true">→</span></Link>
       </section>
 
       <section className="landing-section landing-cta site-container">
-        <p className="eyebrow">READY TO ASSEMBLE?</p><h2>下一個策略，從這裡開始。</h2>
-        <div className="button-row"><Link className="button button--primary" href="/bots">探索 10 組策略</Link><Link className="button button--secondary" href="/workshop?new=1">從空白開始</Link></div>
+        <p className="eyebrow">START WITH EVIDENCE</p><h2>先選一個策略，看懂風險再開始。</h2>
+        <div className="button-row"><Link className="button button--primary" href="/bots">先選一個策略</Link><Link className="button button--secondary" href="/workshop?new=1">從空白開始</Link></div>
       </section>
     </div>
   );

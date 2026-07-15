@@ -1,28 +1,39 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { BotCard } from "../../components/BotCard";
 import { BOT_CATALOG } from "../../data/bots";
-import type { Market, RiskLevel } from "../../lib/types";
+import type { Market, RiskLevel, WeexHistoricalPerformance } from "../../lib/types";
 import { loadDiscoveryPreferences, saveDiscoveryPreferences, type DiscoveryPreferences } from "../../lib/preferences";
+import { loadWeexBotPerformance } from "../../lib/weex-historical-client";
+import { captureAttribution } from "../../lib/attribution";
+import { demoAuthPath } from "../../lib/demo-auth";
+import { usePlatformUser } from "../../components/PlatformAuthProvider";
 
 type MarketFilter = Market | "all";
 type RiskFilter = RiskLevel | "all";
-type SortOption = "return-desc" | "drawdown-asc" | "win-rate-desc" | "stability-desc";
+type SortOption = "recommended" | "return-desc" | "drawdown-asc" | "win-rate-desc" | "stability-desc";
 
 const TAGS = Array.from(new Set(BOT_CATALOG.flatMap((bot) => bot.tags))).sort((a, b) => a.localeCompare(b, "zh-Hant"));
 const TIMEFRAMES = Array.from(new Set(BOT_CATALOG.map((bot) => bot.timeframe))).sort();
 
 export default function BotsPage() {
+  const user = usePlatformUser();
   const [market, setMarket] = useState<MarketFilter>("all");
   const [risk, setRisk] = useState<RiskFilter>("all");
   const [tag, setTag] = useState("all");
   const [timeframe, setTimeframe] = useState("all");
-  const [sort, setSort] = useState<SortOption>("return-desc");
+  const [sort, setSort] = useState<SortOption>("recommended");
   const [favorites, setFavorites] = useState<string[]>([]);
   const [preferenceError, setPreferenceError] = useState("");
+  const [performanceState, setPerformanceState] = useState<"loading" | "ready" | "error">("loading");
+  const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
+  const [performanceUpdatedAt, setPerformanceUpdatedAt] = useState("");
+  const [demoPerformance, setDemoPerformance] = useState(false);
 
   useEffect(() => {
+    captureAttribution(new URLSearchParams(window.location.search).get("via"));
     const timer = window.setTimeout(() => {
       const saved = loadDiscoveryPreferences();
       if (!saved) return;
@@ -36,12 +47,31 @@ export default function BotsPage() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadWeexBotPerformance().then((result) => {
+      if (cancelled) return;
+      setPerformances(result.performances);
+      setPerformanceUpdatedAt(result.updatedAt);
+      setDemoPerformance(result.demo);
+      setPerformanceState("ready");
+    }).catch(() => {
+      if (!cancelled) setPerformanceState("error");
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const catalog = useMemo(() => BOT_CATALOG.map((bot) => {
+    const performance = performances[bot.id];
+    return performance ? { ...bot, metrics: performance.metrics, equityCurve: performance.equityCurve, disclaimer: performance.disclaimer } : bot;
+  }), [performances]);
+
   const persist = (next: Partial<DiscoveryPreferences>) => {
     const result = saveDiscoveryPreferences({ market, risk, tag, timeframe, sort, favorites, ...next });
     setPreferenceError(result.ok ? "" : result.reason);
   };
 
-  const visibleBots = useMemo(() => BOT_CATALOG
+  const visibleBots = useMemo(() => catalog
     .filter((bot) => market === "all" || bot.market === market)
     .filter((bot) => risk === "all" || bot.risk === risk)
     .filter((bot) => tag === "all" || bot.tags.includes(tag))
@@ -50,8 +80,14 @@ export default function BotsPage() {
       if (sort === "drawdown-asc") return Math.abs(a.metrics.maxDrawdown) - Math.abs(b.metrics.maxDrawdown);
       if (sort === "win-rate-desc") return b.metrics.winRate - a.metrics.winRate;
       if (sort === "stability-desc") return b.metrics.stability - a.metrics.stability;
+      if (sort === "recommended") {
+        const score = (item: typeof a) => item.metrics.stability + item.metrics.sharpe * 12 - Math.abs(item.metrics.maxDrawdown) + Math.min(item.metrics.trades, 100) / 20;
+        return score(b) - score(a);
+      }
       return b.metrics.totalReturn - a.metrics.totalReturn;
-    }), [market, risk, sort, tag, timeframe]);
+    }), [catalog, market, risk, sort, tag, timeframe]);
+  const displayedBots = user ? visibleBots : visibleBots.slice(0, 6);
+  const hasMemberResults = !user && visibleBots.length > displayedBots.length;
 
   const resetFilters = () => {
     setMarket("all");
@@ -70,19 +106,33 @@ export default function BotsPage() {
   return (
     <div className="catalog-page site-container">
       <header className="page-intro">
-        <p className="eyebrow">BOT CATALOG / WEEX API · 推薦</p>
-        <h1>機器人市場</h1>
-        <p>比較 10 組經典策略的模擬績效，從市場、風險與策略邏輯找到合適的起點。</p>
-        <p className="simulation-disclosure" role="note">模擬回測資料，不代表未來績效</p>
+        <p className="eyebrow">PUBLIC STRATEGIES / 01</p>
+        <h1>探索策略</h1>
+        <p>先比較用途、風險、最大回撤、交易次數與資料日期；未登入可預覽精選策略，登入後查看完整策略庫。</p>
       </header>
 
       <section className="catalog-controls glass-panel" aria-label="篩選與排序機器人">
-        <label>
+        <div className="catalog-choice-filter catalog-choice-filter--market">
           <span>市場</span>
-          <select value={market} onChange={(event) => { const value = event.target.value as MarketFilter; setMarket(value); persist({ market: value }); }}>
-            <option value="all">全部市場</option><option value="spot">現貨</option><option value="futures">合約</option>
-          </select>
-        </label>
+          <div aria-label="市場" className="catalog-choice-group" role="group">
+            {([
+              ["all", "全部", user ? `${catalog.length} 組` : "公開預覽"],
+              ["spot", "現貨", "資產持有"],
+              ["futures", "合約", "多空策略"],
+            ] as const).map(([value, label, detail]) => (
+              <button
+                aria-pressed={market === value}
+                data-choice={value}
+                data-filter-control="market"
+                key={value}
+                onClick={() => { setMarket(value); persist({ market: value }); }}
+                type="button"
+              >
+                <strong>{label}</strong><small>{detail}</small>
+              </button>
+            ))}
+          </div>
+        </div>
         <label>
           <span>風險等級</span>
           <select value={risk} onChange={(event) => { const value = event.target.value as RiskFilter; setRisk(value); persist({ risk: value }); }}>
@@ -96,16 +146,27 @@ export default function BotsPage() {
             {TAGS.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
         </label>
-        <label>
+        <div className="catalog-choice-filter catalog-choice-filter--timeframe">
           <span>交易週期</span>
-          <select value={timeframe} onChange={(event) => { const value = event.target.value; setTimeframe(value); persist({ timeframe: value }); }}>
-            <option value="all">全部週期</option>
-            {TIMEFRAMES.map((item) => <option key={item} value={item}>{item}</option>)}
-          </select>
-        </label>
+          <div aria-label="交易週期" className="catalog-choice-group catalog-choice-group--timeframe" role="group">
+            {["all", ...TIMEFRAMES].map((value) => (
+              <button
+                aria-pressed={timeframe === value}
+                data-filter-control="timeframe"
+                key={value}
+                onClick={() => { setTimeframe(value); persist({ timeframe: value }); }}
+                type="button"
+              >
+                <strong>{value === "all" ? "全部" : value}</strong>
+                <small>{value === "all" ? "不限" : value === "1h" ? "日內" : "波段"}</small>
+              </button>
+            ))}
+          </div>
+        </div>
         <label>
           <span>排序方式</span>
           <select value={sort} onChange={(event) => { const value = event.target.value as SortOption; setSort(value); persist({ sort: value }); }}>
+            <option value="recommended">熱門推薦：完成度與風險調整</option>
             <option value="return-desc">累積收益：高到低</option>
             <option value="drawdown-asc">最大回撤：低到高</option>
             <option value="win-rate-desc">勝率：高到低</option>
@@ -115,23 +176,78 @@ export default function BotsPage() {
       </section>
 
       {preferenceError && <p className="catalog-preference-status" role="status">{preferenceError}，目前篩選仍可繼續使用。</p>}
+      {demoPerformance && <p className="catalog-preference-status" role="note">DEMO_MODE：目前顯示固定的合成模擬範例，不會呼叫 WEEX 行情 API；所有績效都不代表未來結果。</p>}
+      {performanceState !== "ready" && (
+        <p className="catalog-preference-status" role={performanceState === "error" ? "alert" : "status"}>
+          {performanceState === "error" ? "近期績效暫時無法取得；未顯示替代或虛構數據。" : "正在計算近期績效…"}
+        </p>
+      )}
 
       <div className="catalog-summary">
-        <p aria-live="polite">顯示 {visibleBots.length} / {BOT_CATALOG.length} 組策略</p>
+        <p aria-live="polite">{user ? `顯示 ${displayedBots.length} / ${visibleBots.length} 組符合策略` : `目前顯示 ${displayedBots.length} 組符合策略`}</p>
         <button className="text-button" onClick={resetFilters} type="button">重設篩選</button>
       </div>
 
       {visibleBots.length > 0 ? (
-        <section className="bot-grid" aria-label="機器人搜尋結果">
-          {visibleBots.map((bot) => <BotCard bot={bot} favorite={favorites.includes(bot.id)} key={bot.id} onFavorite={toggleFavorite} />)}
-        </section>
+        <>
+          <section className="bot-grid" aria-label="機器人搜尋結果">
+            {displayedBots.map((bot) => <BotCard
+              bot={bot}
+              favorite={favorites.includes(bot.id)}
+              historicalPerformance={performances[bot.id]}
+              key={bot.id}
+              onFavorite={toggleFavorite}
+              performanceStatus={performanceState === "ready" && !demoPerformance && !performances[bot.id] ? "error" : performanceState}
+            />)}
+          </section>
+          {performanceState === "ready" && performanceUpdatedAt && (
+            <p className="research-data-note research-data-note--catalog" role="note">
+              <strong>研究資料說明</strong>
+              <span>近 30 天 WEEX 公開歷史 K 線，現貨採 4h、合約採 1h；手續費與滑價使用統一研究假設，未計資金費率。更新於 {new Date(performanceUpdatedAt).toLocaleString("zh-TW")}；回測不代表未來績效。</span>
+            </p>
+          )}
+          {hasMemberResults && (
+            <section className="catalog-member-vault" aria-label="會員策略庫預覽">
+              <section className="catalog-login-gate glass-panel" aria-labelledby="catalog-login-title">
+                <div className="catalog-login-gate__signal" aria-hidden="true"><span>MEMBER</span><strong>+</strong></div>
+                <div className="catalog-login-gate__copy">
+                  <p className="eyebrow">MEMBER STRATEGY VAULT</p>
+                  <h2 id="catalog-login-title">登入後，繼續探索完整策略庫</h2>
+                  <p>查看更多現貨與合約策略、保存收藏偏好，並將策略直接帶入組裝車間。</p>
+                  <ul aria-label="會員功能">
+                    <li>完整策略比較</li><li>收藏跨裝置保存</li><li>一鍵帶入組裝</li>
+                  </ul>
+                </div>
+                <div className="catalog-login-gate__action">
+                  <Link className="button button--primary" href={demoAuthPath("/bots")}>登入繼續探索</Link>
+                  <small>不需連接 WEEX 即可瀏覽</small>
+                </div>
+              </section>
+              <div aria-hidden="true" className="catalog-member-preview" inert>
+                {["signal", "range", "momentum"].map((variant, index) => (
+                  <article className="catalog-member-preview__card" data-member-preview-card data-variant={variant} key={variant}>
+                    <div className="catalog-member-preview__top"><span>MEMBER STRATEGY</span><b>0{index + 1}</b></div>
+                    <div className="catalog-member-preview__identity"><strong>進階策略模型</strong><span>市場 · 週期 · 風險</span></div>
+                    <div className="catalog-member-preview__chart"><span /><span /><span /><span /><span /></div>
+                    <dl>
+                      <div><dt>累積收益</dt><dd>—</dd></div>
+                      <div><dt>最大回撤</dt><dd>—</dd></div>
+                      <div><dt>交易次數</dt><dd>—</dd></div>
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       ) : (
         <section className="empty-state glass-panel" aria-live="polite">
-          <p className="eyebrow">NO MATCHES</p><h2>沒有符合條件的機器人</h2>
+          <p className="eyebrow">NO MATCHES</p><h2>沒有符合條件的策略</h2>
           <p>調整市場、風險或策略類型，探索其他組合。</p>
           <button className="button button--primary" onClick={resetFilters} type="button">清除篩選</button>
         </section>
       )}
+
     </div>
   );
 }

@@ -7,7 +7,7 @@ import type { BotConfig } from "../../lib/types";
 export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | "symbol" | "timeframe">) => [
   "/**",
   " * CryptoBot Labs 的 WEEX 模擬策略範例。",
-  " * 回測與本機代理只會在隔離沙箱中執行此函式。",
+  " * 回測與雲端執行器只會在隔離沙箱中執行此函式。",
   " */",
   "export const strategy = {",
   "  exchange: \"WEEX\",",
@@ -58,7 +58,7 @@ export function JavaScriptEditor({ source, onChange }: JavaScriptEditorProps) {
         </span>
       </div>
 
-      <p className="javascript-editor__lead">此頁不執行程式碼；歷史回測與本機代理只會在無網路、無檔案及無 API Key 權限的隔離沙箱中執行，輸出只能是交易訊號。</p>
+      <p className="javascript-editor__lead">此頁不執行程式碼；歷史回測與雲端執行器只會在無網路、無檔案及無 API Key 權限的隔離沙箱中執行，輸出只能是交易訊號。</p>
       <label className="javascript-editor__field" htmlFor="javascript-strategy-source">
         <span>JavaScript 策略原始碼</span>
         <textarea

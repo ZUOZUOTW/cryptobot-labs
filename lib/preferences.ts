@@ -3,14 +3,14 @@ export interface DiscoveryPreferences {
   risk: "all" | "低" | "中" | "高";
   tag: string;
   timeframe: string;
-  sort: "return-desc" | "drawdown-asc" | "win-rate-desc" | "stability-desc";
+  sort: "recommended" | "return-desc" | "drawdown-asc" | "win-rate-desc" | "stability-desc";
   favorites: string[];
 }
 
 const STORAGE_KEY = "cryptobot-labs:discovery:v1";
 const MARKETS = new Set(["all", "spot", "futures"]);
 const RISKS = new Set(["all", "低", "中", "高"]);
-const SORTS = new Set(["return-desc", "drawdown-asc", "win-rate-desc", "stability-desc"]);
+const SORTS = new Set(["recommended", "return-desc", "drawdown-asc", "win-rate-desc", "stability-desc"]);
 
 export type SavePreferencesResult = { ok: true } | { ok: false; reason: string };
 

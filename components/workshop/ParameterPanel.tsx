@@ -1,6 +1,31 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
+import { STRATEGY_BLOCKS } from "../../data/strategies";
+import {
+  FALLBACK_WEEX_MARKET_CATALOG,
+  isWeexMarketCatalog,
+  type WeexMarketCatalog,
+} from "../../lib/weex-market-catalog";
 import type { BotConfig } from "../../lib/types";
+import { TradingPairCombobox } from "./TradingPairCombobox";
+
+const commonParameterValue = (blockId: string, parameterKey: string): number | undefined => (
+  STRATEGY_BLOCKS.find((block) => block.id === blockId)
+    ?.parameters.find((parameter) => parameter.key === parameterKey)?.value
+);
+
+const MARKET_OPTIONS = [
+  { value: "spot", label: "現貨", detail: "資產持有 · 1×" },
+  { value: "futures", label: "合約", detail: "多空交易 · 可調槓桿" },
+] as const;
+
+const TIMEFRAME_OPTIONS = [
+  { value: "15m", label: "15 分", detail: "短線" },
+  { value: "1h", label: "1 小時", detail: "日內" },
+  { value: "4h", label: "4 小時", detail: "波段" },
+  { value: "1d", label: "1 天", detail: "趨勢" },
+] as const;
 
 interface ParameterPanelProps {
   config: BotConfig;
@@ -12,6 +37,56 @@ interface ParameterPanelProps {
 }
 
 export function ParameterPanel({ config, onConfigField, onParameter }: ParameterPanelProps) {
+  const [catalog, setCatalog] = useState<WeexMarketCatalog>(FALLBACK_WEEX_MARKET_CATALOG);
+  const [catalogStatus, setCatalogStatus] = useState<"loading" | "live" | "fallback">(
+    process.env.NODE_ENV === "test" ? "fallback" : "loading",
+  );
+  const pairs = catalog[config.market];
+  const selectedPair = useMemo(
+    () => pairs.find((pair) => pair.symbol === config.symbol),
+    [config.symbol, pairs],
+  );
+  const maximumLeverage = config.market === "spot" ? 1 : selectedPair?.maxLeverage ?? 1;
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "test") return;
+    const controller = new AbortController();
+    void fetch("/api/weex/markets", { headers: { Accept: "application/json" }, signal: controller.signal })
+      .then(async (response) => response.ok ? response.json() : Promise.reject(new Error("market metadata unavailable")))
+      .then((value: unknown) => {
+        if (!isWeexMarketCatalog(value)) throw new TypeError("invalid WEEX market catalog");
+        setCatalog(value);
+        setCatalogStatus("live");
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setCatalogStatus("fallback");
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (selectedPair) return;
+    const fallback = pairs.find((pair) => pair.symbol === "BTCUSDT") ?? pairs[0];
+    if (fallback) onConfigField("symbol", fallback.symbol);
+  }, [onConfigField, pairs, selectedPair]);
+
+  useEffect(() => {
+    if (config.market === "futures" && config.leverage > maximumLeverage) {
+      onConfigField("leverage", maximumLeverage);
+    }
+  }, [config.leverage, config.market, maximumLeverage, onConfigField]);
+
+  const catalogMessage = catalogStatus === "live"
+    ? `已同步 WEEX · ${pairs.length} 個交易對`
+    : catalogStatus === "loading"
+      ? `正在同步 WEEX · 先顯示 ${pairs.length} 個公告交易對`
+      : `WEEX 暫時無法連線 · 顯示 ${pairs.length} 個公告交易對`;
+  const leverageSource = catalogStatus === "live"
+    ? "WEEX 即時產品資料"
+    : catalogStatus === "loading"
+      ? "正在同步 WEEX 產品資料"
+      : "WEEX 公告備援資料";
+
   return (
     <section className="workshop-panel parameter-panel glass-panel" aria-labelledby="parameter-title">
       <div className="workshop-panel__heading">
@@ -24,34 +99,49 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
 
       <fieldset className="market-controls">
         <legend>交易環境</legend>
-        <label>
-          <span>市場</span>
-          <select
-            aria-label="市場"
-            onChange={(event) => onConfigField("market", event.target.value as BotConfig["market"])}
-            value={config.market}
-          >
-            <option value="spot">現貨</option>
-            <option value="futures">合約</option>
-          </select>
-        </label>
-        <label>
-          <span>交易對</span>
-          <select aria-label="交易對" onChange={(event) => onConfigField("symbol", event.target.value)} value={config.symbol}>
-            <option value="BTCUSDT">BTC / USDT</option>
-            <option value="ETHUSDT">ETH / USDT</option>
-            <option value="SOLUSDT">SOL / USDT</option>
-          </select>
-        </label>
-        <label>
-          <span>時間週期</span>
-          <select aria-label="時間週期" onChange={(event) => onConfigField("timeframe", event.target.value)} value={config.timeframe}>
-            <option value="15m">15 分鐘</option>
-            <option value="1h">1 小時</option>
-            <option value="4h">4 小時</option>
-            <option value="1d">1 天</option>
-          </select>
-        </label>
+        <div className="market-control market-control--visual">
+          <span className="market-control__label">市場</span>
+          <div aria-label="市場" className="visual-choice-group visual-choice-group--market" role="group">
+            {MARKET_OPTIONS.map((option) => (
+              <button
+                aria-pressed={config.market === option.value}
+                data-choice={option.value}
+                key={option.value}
+                onClick={() => onConfigField("market", option.value)}
+                type="button"
+              >
+                <strong>{option.label}</strong>
+                <small>{option.detail}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="market-control market-control--pair">
+          <span className="market-control__label">交易對</span>
+          <TradingPairCombobox
+            key={config.market}
+            onChange={(symbol) => onConfigField("symbol", symbol)}
+            pairs={pairs}
+            value={config.symbol}
+          />
+          <small className="market-catalog-status" data-status={catalogStatus}>{catalogMessage}</small>
+        </div>
+        <div className="market-control market-control--visual">
+          <span className="market-control__label">時間週期</span>
+          <div aria-label="時間週期" className="visual-choice-group visual-choice-group--timeframe" role="group">
+            {TIMEFRAME_OPTIONS.map((option) => (
+              <button
+                aria-pressed={config.timeframe === option.value}
+                key={option.value}
+                onClick={() => onConfigField("timeframe", option.value)}
+                type="button"
+              >
+                <strong>{option.label}</strong>
+                <small>{option.detail}</small>
+              </button>
+            ))}
+          </div>
+        </div>
         <label>
           <span>條件邏輯</span>
           <select
@@ -66,16 +156,35 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
       </fieldset>
 
       <div className="leverage-control">
+        <div
+          aria-label="交易對槓桿上限"
+          aria-live="polite"
+          className="leverage-limit-card"
+          data-market={config.market}
+          role="region"
+        >
+          <div className="leverage-limit-card__value">
+            <span>WEEX 最大支援槓桿</span>
+            <strong>{maximumLeverage}<small>×</small></strong>
+          </div>
+          <div className="leverage-limit-card__copy">
+            <strong>{config.symbol} · {config.market === "spot" ? "現貨" : "合約"}</strong>
+            <p>{config.market === "spot"
+              ? "現貨交易不使用合約槓桿，系統固定為 1×。"
+              : `此交易對最高支援 ${maximumLeverage}×；目前設定為 ${config.leverage}×。`}</p>
+          </div>
+          <span className="leverage-limit-card__source" data-status={catalogStatus}>{leverageSource}</span>
+        </div>
         <div className="parameter-row__label">
           <label htmlFor="leverage-slider">槓桿</label>
-          <span>{config.leverage}×</span>
+          <span>目前設定 {config.leverage}×</span>
         </div>
         <div className="parameter-row__inputs">
           <input
             aria-label="槓桿滑桿"
             disabled={config.market === "spot"}
             id="leverage-slider"
-            max={20}
+            max={maximumLeverage}
             min={1}
             onChange={(event) => onConfigField("leverage", Number(event.target.value))}
             step={1}
@@ -85,7 +194,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
           <input
             aria-label="槓桿數值"
             disabled={config.market === "spot"}
-            max={20}
+            max={maximumLeverage}
             min={1}
             onChange={(event) => onConfigField("leverage", Number(event.target.value))}
             step={1}
@@ -93,7 +202,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
             value={config.leverage}
           />
         </div>
-        {config.market === "spot" && <small>現貨模式固定為 1× 槓桿</small>}
+        {config.market === "futures" && <small>若切換至較低上限的交易對，系統會自動將設定下修至合法範圍。</small>}
       </div>
 
       <div className="block-parameters">
@@ -104,7 +213,9 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
               <div className="parameter-row" key={parameter.key}>
                 <div className="parameter-row__label">
                   <label htmlFor={`${block.id}-${parameter.key}-slider`}>{parameter.label}</label>
-                  <span>{parameter.value}{parameter.suffix}</span>
+                  <span className="parameter-row__common">
+                    常用 {commonParameterValue(block.id, parameter.key) ?? parameter.value}{parameter.suffix}
+                  </span>
                 </div>
                 <div className="parameter-row__inputs">
                   <input

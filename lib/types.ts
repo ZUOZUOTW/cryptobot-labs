@@ -48,7 +48,35 @@ export interface BacktestReport {
   generatedAt: string;
   metrics: BotMetrics;
   equityCurve: EquityPoint[];
-  disclaimer: "模擬回測資料，不代表未來績效";
+  disclaimer: PerformanceDisclaimer;
+  evidence?: WeexHistoricalEvidence;
+}
+export type PerformanceDisclaimer =
+  | "模擬回測資料，不代表未來績效"
+  | "WEEX 歷史行情回測，不代表未來績效";
+export interface WeexHistoricalEvidence {
+  level: "historical";
+  provider: "WEEX";
+  market: Market;
+  symbol: string;
+  interval: string;
+  startTime: number;
+  endTime: number;
+  collectedAt: number;
+  candleCount: number;
+  complete: boolean;
+  feeRate: string;
+  slippageRate: string;
+  fundingIncluded: boolean;
+  datasetDigest: string;
+  engineVersion: string;
+}
+export interface WeexHistoricalPerformance {
+  metrics: BotMetrics;
+  equityCurve: EquityPoint[];
+  generatedAt: string;
+  disclaimer: "WEEX 歷史行情回測，不代表未來績效";
+  evidence: WeexHistoricalEvidence;
 }
 export interface BotDefinition extends BotConfig {
   description: string;
@@ -59,5 +87,5 @@ export interface BotDefinition extends BotConfig {
   explanation: string;
   suitableFor: string;
   riskNote: string;
-  disclaimer: "模擬回測資料，不代表未來績效";
+  disclaimer: PerformanceDisclaimer;
 }

@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
-import { BacktestRequestForm } from "../../components/backtests/BacktestRequestForm";
 import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
 import { PackagePanel } from "../../components/workshop/PackagePanel";
@@ -15,6 +14,9 @@ import { downloadBlob } from "../../lib/browser-download";
 import { loadDraft, saveDraft } from "../../lib/storage";
 import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "../../lib/types";
 import { validateConfig, validateDraftConfig } from "../../lib/strategy-validation";
+import { captureAttribution } from "../../lib/attribution";
+import { BacktestRequestForm } from "../../components/backtests/BacktestRequestForm";
+import { usePlatformAuth } from "../../components/PlatformAuthProvider";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -61,6 +63,7 @@ interface AssociatedReport {
 }
 
 export default function WorkshopPage() {
+  const { mode: authMode } = usePlatformAuth();
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [draftError, setDraftError] = useState("");
   const [mode, setMode] = useState<WorkshopMode>("visual");
@@ -70,6 +73,7 @@ export default function WorkshopPage() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const search = new URLSearchParams(window.location.search);
+      captureAttribution(search.get("via"));
       const draft = loadDraft();
       const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
       const deliberateNew = search.get("new") === "1";
@@ -145,7 +149,7 @@ export default function WorkshopPage() {
   const updateSource = (source: string) => updateConfig((current) => ({ ...current, source }));
   const acceptReport = (report: BacktestReport) => {
     setAssociatedReport({ fingerprint: configFingerprint, report });
-    setMobileMessage("回測完成，可下載策略套件");
+    setMobileMessage("回測完成，可保存、分享或開始 Paper");
   };
   const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
     const next = cloneConfig(importedConfig);
@@ -178,8 +182,8 @@ export default function WorkshopPage() {
       <header className="page-intro workshop-page__intro">
         <p className="eyebrow">ORBITAL LAB / QUICK ASSEMBLY</p>
         <h1>多策略組裝車間</h1>
-        <p>從訊號、確認、出場、倉位與風控模組快速組合一套 WEEX 策略，再用可重現的模擬資料驗證想法。</p>
-        <p className="simulation-disclosure" role="note">模擬回測資料，不代表未來績效</p>
+        <p>從訊號、確認、出場、倉位與風控模組快速組合一套 WEEX 策略，再以 WEEX 公開歷史行情驗證策略想法。</p>
+        <p className="simulation-disclosure" role="note">WEEX 歷史行情回測，不代表未來績效</p>
       </header>
 
       {draftError && (
@@ -215,29 +219,26 @@ export default function WorkshopPage() {
         <div className="workshop-grid__results">
           <StrategySummary config={config} validation={validation} />
           <div className="backtest-track">
-            <p className="backtest-track__label">快速、裝置內、使用固定模擬資料</p>
+            <p className="backtest-track__label">快速驗證 · WEEX 公開歷史 K 線 · 無需登入</p>
             <BacktestPanel
               config={config}
               onReport={acceptReport}
-              onRun={() => setMobileMessage("正在驗證並執行模擬回測…")}
+              onRun={() => setMobileMessage("正在取得 WEEX 歷史行情並執行回測…")}
               restoredReport={currentReport}
               validation={validation}
             />
+            {authMode === "production" && <BacktestRequestForm compact config={config} />}
           </div>
-        </div>
-        <div className="workshop-historical">
-          <p className="backtest-track__label">可保存、WEEX 公開歷史行情、需登入</p>
-          <BacktestRequestForm compact config={config} />
         </div>
         <PackagePanel config={config} onImport={acceptImport} report={currentReport} />
       </div>
 
       <section className="workshop-mobile-actions" aria-label="手機版組裝操作">
-        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可下載策略套件" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
+        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可開始 Paper" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
         <div>
-          <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行模擬回測。" : validation.errors.join("；"))} type="button">檢查</button>
+          <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行 WEEX 歷史行情回測。" : validation.errors.join("；"))} type="button">檢查</button>
           <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => document.querySelector<HTMLButtonElement>(".backtest-run")?.click()} type="button">回測</button>
-          <button aria-label="行動列：下載套件" disabled={!currentReport} onClick={() => document.querySelector<HTMLButtonElement>('[data-package-export-trigger="true"]')?.click()} type="button">下載</button>
+          <button aria-label="行動列：開始 Paper" disabled={!currentReport} onClick={() => document.querySelector<HTMLButtonElement>('.workshop-primary-actions .button--primary')?.click()} type="button">Paper</button>
         </div>
       </section>
     </div>

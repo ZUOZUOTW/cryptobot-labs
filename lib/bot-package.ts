@@ -60,13 +60,22 @@ const isBacktestReport = (value: unknown): value is BacktestReport => (
   isRecord(value)
   && isString(value.seed)
   && isString(value.generatedAt)
-  && value.disclaimer === "模擬回測資料，不代表未來績效"
+  && (value.disclaimer === "模擬回測資料，不代表未來績效"
+    || value.disclaimer === "WEEX 歷史行情回測，不代表未來績效")
   && hasFiniteMetrics(value.metrics)
   && Array.isArray(value.equityCurve)
   && value.equityCurve.every((point) => (
     isRecord(point) && isString(point.label) && isFiniteNumber(point.value)
   ))
 );
+
+const historicalReportMatchesConfig = (report: BacktestReport, config: BotConfig): boolean => {
+  const evidence = report.evidence;
+  return evidence?.level === "historical" && evidence.provider === "WEEX" && evidence.complete
+    && evidence.market === config.market && evidence.symbol === config.symbol && evidence.interval === config.timeframe
+    && evidence.startTime < evidence.endTime && evidence.candleCount >= 2
+    && evidence.datasetDigest.startsWith(report.seed) && report.generatedAt === new Date(evidence.collectedAt).toISOString();
+};
 
 const invalidConfigError = (errors: string[]): Error => new Error(`策略設定無效：${errors.join("；")}`);
 
@@ -132,14 +141,14 @@ const packageReadme = (config: BotConfig): string => [
   "",
   "此策略套件是 CryptoBot Labs 產生的模擬原型，僅供策略編輯與回測用途。",
   "本套件無法獨立執行實盤交易，也不會連線至交易所送出訂單。",
-  "所有回測資料均為模擬結果，不代表未來績效。",
+  "回測可能使用 WEEX 公開歷史行情或固定模擬資料；兩者都不是實盤績效，也不代表未來結果。",
   "",
 ].join("\n");
 
 export const buildBotPackageFiles = async (config: BotConfig, report: BacktestReport): Promise<BotPackageFile[]> => {
   const validConfig = assertConfig(config, true);
   const validReport = assertReport(report);
-  if (!reportsMatch(validReport, runBacktest(validConfig))) {
+  if (!(validReport.evidence ? historicalReportMatchesConfig(validReport, validConfig) : reportsMatch(validReport, runBacktest(validConfig)))) {
     throw new Error("回測報告與策略設定不一致：backtest-report.json");
   }
   const source = validConfig.source ?? defaultStrategySource(validConfig);
@@ -210,8 +219,7 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
 
   const reportValue = await parseJsonFile(zip, "backtest-report.json");
   const report = assertReport(reportValue);
-  const expectedReport = runBacktest(config);
-  if (!reportsMatch(report, expectedReport)) {
+  if (!(report.evidence ? historicalReportMatchesConfig(report, config) : reportsMatch(report, runBacktest(config)))) {
     throw new Error("回測報告與策略設定不一致：backtest-report.json");
   }
 

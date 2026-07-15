@@ -478,8 +478,8 @@ export const validateConfig = (value: unknown): ValidationResult => {
   }
 
   if (config.market === "spot" && config.leverage !== 1) errors.push("現貨交易槓桿必須為 1");
-  if (config.market === "futures" && (!Number.isFinite(config.leverage) || config.leverage < 1 || config.leverage > 20)) {
-    errors.push("合約交易槓桿必須介於 1 到 20");
+  if (config.market === "futures" && (!Number.isFinite(config.leverage) || config.leverage < 1 || config.leverage > 500)) {
+    errors.push("合約交易槓桿必須介於 1 到 WEEX 支援上限（最高 500）");
   }
 
   for (const strategy of config.blocks) {

@@ -1,0 +1,420 @@
+.battleChart {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 0.2rem 1rem 0.2rem 1rem;
+  background: radial-gradient(circle at 36% 0, rgb(88 230 255 / 8%), transparent 42%), linear-gradient(180deg, rgb(8 20 40 / 98%), rgb(2 8 18 / 98%));
+}
+
+.insights {
+  display: block;
+}
+
+.insights .riskPlot {
+  min-height: clamp(28rem, 39vw, 34rem);
+}
+
+.plot {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 58rem;
+  height: clamp(26rem, 36vw, 34rem);
+  display: block;
+  overflow: visible;
+  fill: none;
+}
+
+.plotScroller {
+  position: relative;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: rgb(88 230 255 / 30%) transparent;
+  scrollbar-width: thin;
+}
+
+.battleToolbar {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.85fr) minmax(25rem, 1.25fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.9rem clamp(1rem, 2vw, 1.35rem);
+  border-bottom: 1px solid rgb(88 230 255 / 13%);
+  background: rgb(1 7 16 / 54%);
+}
+
+.sortDock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: 0.55rem;
+}
+
+.sortLabel,
+.sortResult {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.sortResult {
+  min-width: 5.8rem;
+  color: rgb(84 247 194 / 72%);
+}
+
+.sortButtons {
+  display: inline-flex;
+  min-width: 0;
+  padding: 0.2rem;
+  border: 1px solid rgb(88 230 255 / 14%);
+  border-radius: 0.55rem;
+  background: rgb(4 13 27 / 74%);
+}
+
+.sortButton {
+  min-height: 2.75rem;
+  padding: 0.48rem 0.8rem;
+  border: 0;
+  border-radius: 0.38rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: background-color 140ms ease, box-shadow 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.sortButton:hover,
+.sortButton:focus-visible {
+  color: var(--text);
+  background: rgb(88 230 255 / 8%);
+}
+
+.sortButton:focus-visible {
+  outline: 2px solid rgb(88 230 255 / 58%);
+  outline-offset: 1px;
+}
+
+.sortButton[data-active="true"] {
+  background: linear-gradient(135deg, rgb(88 230 255 / 18%), rgb(84 247 194 / 12%));
+  box-shadow: inset 0 0 0 1px rgb(88 230 255 / 30%), 0 0 0.9rem rgb(88 230 255 / 8%);
+  color: var(--cyan);
+}
+
+.sortButton:active {
+  transform: translateY(1px);
+}
+
+.battleStatus {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.55rem;
+}
+
+.battleStatus > span {
+  width: 0.48rem;
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0.8rem var(--mint);
+  animation: battleStatusPulse 1.8s ease-in-out infinite;
+}
+
+.battleStatus strong {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.battleStatus small {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+}
+
+.battleMeta {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.battleMeta span {
+  padding: 0.42rem 0.65rem;
+  border: 1px solid rgb(88 230 255 / 18%);
+  border-radius: 0.45rem;
+  background: rgb(88 230 255 / 5%);
+  color: var(--cyan);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.profitZone {
+  fill: rgb(84 247 194 / 2.5%);
+}
+
+.lossZone {
+  fill: rgb(255 111 105 / 2.8%);
+}
+
+.labelRail {
+  stroke: rgb(88 230 255 / 14%);
+  stroke-width: 1;
+  stroke-dasharray: 2 7;
+}
+
+.gridline {
+  stroke: rgb(135 161 199 / 14%);
+  stroke-width: 1;
+  stroke-dasharray: 3 7;
+}
+
+.verticalGridline {
+  stroke: rgb(135 161 199 / 8%);
+  stroke-width: 1;
+}
+
+.axisLabel,
+.timeLabel {
+  dominant-baseline: middle;
+  fill: rgb(158 177 207 / 66%);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.timeLabel {
+  font-size: 10.5px;
+}
+
+.baseline {
+  stroke: rgb(255 255 255 / 42%);
+  stroke-width: 1.4;
+  stroke-dasharray: 6 5;
+}
+
+.baselineLabel {
+  fill: rgb(216 228 247 / 44%);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+.series {
+  cursor: pointer;
+  outline: none;
+}
+
+.hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  pointer-events: stroke;
+}
+
+.line {
+  fill: none;
+  stroke: var(--battle-color);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  filter: drop-shadow(0 0 3px var(--battle-color));
+  pointer-events: none;
+  animation: battleLineDraw 460ms var(--battle-delay) cubic-bezier(.16, 1, .3, 1) forwards;
+  transition: opacity 140ms ease, stroke-width 140ms ease, filter 140ms ease;
+}
+
+.endConnector {
+  fill: none;
+  opacity: 0.32;
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  pointer-events: none;
+  transition: opacity 140ms ease, stroke-width 140ms ease;
+}
+
+.endDot {
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 5px var(--battle-color));
+  pointer-events: none;
+}
+
+.endCard {
+  opacity: 0.9;
+  pointer-events: none;
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+
+.endCardSurface {
+  fill: rgb(4 12 25 / 94%);
+  stroke: rgb(150 177 214 / 20%);
+  stroke-width: 1;
+}
+
+.avatarRing {
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 4px var(--battle-color));
+}
+
+.endLabel {
+  dominant-baseline: middle;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11.5px;
+  font-weight: 720;
+  letter-spacing: 0.035em;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: rgb(3 11 24 / 96%);
+  stroke-width: 3px;
+}
+
+.endValue {
+  fill: rgb(218 230 247 / 82%);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.battleChart:has(.series:hover) .series:not(:hover) .line {
+  opacity: 0.14;
+  filter: none;
+}
+
+.battleChart:has(.series:hover) .series:not(:hover) .endCard {
+  opacity: 0.26;
+}
+
+.series:hover .line,
+.series:focus .line {
+  stroke-width: 4;
+  filter: drop-shadow(0 0 9px var(--battle-color));
+}
+
+.series:hover .endConnector,
+.series:focus .endConnector { opacity: 1; stroke-width: 2; }
+
+.series:hover .endCard,
+.series:focus .endCard { opacity: 1; filter: drop-shadow(0 0 8px var(--battle-color)); }
+
+.legend {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  border-top: 1px solid rgb(88 230 255 / 12%);
+  background: rgb(1 7 16 / 72%);
+  scrollbar-color: rgb(88 230 255 / 30%) transparent;
+  scrollbar-width: thin;
+}
+
+.legendLink {
+  min-width: 10.5rem;
+  flex: 1 0 10.5rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.72rem 0.8rem;
+  border-right: 1px solid rgb(88 230 255 / 10%);
+  color: var(--muted);
+  background: rgb(2 9 20 / 38%);
+  font-size: 0.78rem;
+  transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease;
+}
+
+.legendLink:hover,
+.legendLink:focus-visible {
+  border-color: var(--battle-color);
+  color: var(--text);
+  background: rgb(88 230 255 / 6%);
+}
+
+.swatch {
+  width: 0.55rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--battle-color);
+  box-shadow: 0 0 0.65rem var(--battle-color);
+}
+
+.legendName {
+  overflow: hidden;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legendResult {
+  color: var(--mint);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.74rem;
+  font-style: normal;
+}
+
+.legendResult[data-result="loss"] {
+  color: var(--danger);
+}
+
+@keyframes battleLineDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes battleStatusPulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.86); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@media (max-width: 72rem) {
+  .battleToolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .sortDock {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 38rem) {
+  .battleToolbar {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+
+  .battleStatus small { display: none; }
+  .sortDock { align-items: flex-start; flex-direction: column; width: 100%; }
+  .sortButtons { width: 100%; overflow-x: auto; }
+  .sortButton { flex: 1 0 auto; }
+  .sortResult { min-width: 0; }
+  .battleMeta { justify-content: flex-start; }
+  .plot { min-width: 52rem; height: 26rem; }
+  .legendLink { min-width: 9.6rem; flex-basis: 9.6rem; }
+  .insights .riskPlot { min-height: 32rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .line {
+    animation: none !important;
+    stroke-dashoffset: 0;
+  }
+
+  .battleStatus > span {
+    animation: none !important;
+  }
+}

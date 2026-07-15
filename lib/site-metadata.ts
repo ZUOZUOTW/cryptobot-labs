@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const SITE_TITLE = "CryptoBot Labs｜WEEX 自動交易策略實驗室";
-export const SITE_DESCRIPTION = "探索、比較並組裝自動交易策略，透過可重現的模擬回測安全驗證交易想法；推薦使用 WEEX API。";
-export const SOCIAL_IMAGE_ALT = "CryptoBot Labs：把交易想法，組裝成你的機器人。WEEX API · 推薦";
+export const SITE_DESCRIPTION = "探索、組裝與分享 WEEX 自動交易策略；先用公開歷史資料回測與 Paper 模擬，再透過 WEEX OAuth 安全準備雲端執行。";
+export const SOCIAL_IMAGE_ALT = "CryptoBot Labs：把交易想法，組成能先模擬的 WEEX 自動策略。";
 
 const DEFAULT_SITE_METADATA = {
   title: SITE_TITLE,
