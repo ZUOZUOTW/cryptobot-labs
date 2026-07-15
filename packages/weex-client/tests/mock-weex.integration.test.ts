@@ -55,7 +55,7 @@ describe("mock WEEX futures demo integration", () => {
     })).resolves.toEqual({ status: "acknowledged", exchangeOrderId: "demo-42" });
     await expect(client.findOrderByClientOrderId({
       target, symbol: "BTCUSDT", clientOrderId: "demo-client-1",
-    })).resolves.toMatchObject({ status: "FILLED", cumulativeFilledQuantity: "0.001" });
+    })).resolves.toMatchObject({ status: "FILLED", cumulativeFilledQuantity: "0.001", fees: "0" });
 
     expect(transport.requests.map(({ method, url }) => `${method} ${url}`)).toEqual([
       "GET https://api-contract.weex.com/capi/v3/sim/balance",

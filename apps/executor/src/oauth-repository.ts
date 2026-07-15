@@ -1,0 +1,160 @@
+import postgres, { type Sql } from "postgres";
+import type { EncryptedWeexCredentials, ExecutorOAuthHandoff } from "@cryptobot-labs/weex-client";
+
+type Database = Sql<Record<string, never>>;
+type Row = Record<string, unknown>;
+
+export interface StoredOAuthState {
+  readonly id: string;
+  readonly connectionId: string;
+  readonly userId: string;
+  readonly stateHash: string;
+  readonly sessionHash: string;
+  readonly redirectUri: string;
+  readonly keyId: string;
+  readonly encryptedDataKey: Uint8Array;
+  readonly initializationVector: Uint8Array;
+  readonly ciphertext: Uint8Array;
+  readonly context: Readonly<Record<string, string>>;
+  readonly expiresAt: number;
+}
+
+export interface OAuthRepository {
+  assertReady(): Promise<void>;
+  registerShard(input: { shardId: string; region: string; egressIp: string; now: number }): Promise<void>;
+  reserveHandoff(input: { handoff: ExecutorOAuthHandoff; nonceHash: string; now: number }): Promise<void>;
+  prepareConnection(input: { candidateId: string; userId: string; shardId: string; now: number }): Promise<string>;
+  createState(input: { id: string; connectionId: string; userId: string; stateHash: string; sessionHash: string;
+    redirectUri: string; expiresAt: number; now: number; envelope: EncryptedWeexCredentials;
+    context: Readonly<Record<string, string>> }): Promise<void>;
+  findState(stateHash: string): Promise<StoredOAuthState | null>;
+  consumeState(id: string, stateHash: string, now: number): Promise<boolean>;
+  completeState(input: { state: StoredOAuthState; credentialEnvelope: EncryptedWeexCredentials;
+    credentialContext: Readonly<Record<string, string>>; maskedApiKeySuffix: string; now: number }): Promise<void>;
+  failState(input: { state: StoredOAuthState; code: string; now: number }): Promise<void>;
+  close(): Promise<void>;
+}
+
+const number = (value: unknown, label: string): number => {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${label} is invalid`);
+  return parsed;
+};
+const bytes = (value: unknown, label: string): Uint8Array => {
+  if (!(value instanceof Uint8Array) || value.byteLength < 1) throw new Error(`${label} is invalid`);
+  return Uint8Array.from(value);
+};
+const context = (value: unknown): Readonly<Record<string, string>> => {
+  const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+    || Object.values(parsed).some((item) => typeof item !== "string")) throw new Error("encryption context is invalid");
+  return Object.freeze({ ...(parsed as Record<string, string>) });
+};
+
+export class PostgresOAuthRepository implements OAuthRepository {
+  readonly #sql: Database;
+
+  constructor(databaseUrl: string) {
+    this.#sql = postgres(databaseUrl, { max: 4, idle_timeout: 20, connect_timeout: 10, prepare: false, ssl: "require" });
+  }
+
+  async assertReady(): Promise<void> {
+    const rows = await this.#sql.unsafe("select to_regclass('public.weex_connections') as connections, to_regclass('private.weex_oauth_states') as states, to_regclass('private.weex_credential_blobs') as credentials, to_regclass('private.weex_oauth_handoffs') as handoffs");
+    const row = rows[0] as Row | undefined;
+    if (!row || Object.values(row).some((value) => typeof value !== "string")) throw new Error("OAuth database schema is not ready");
+  }
+
+  async registerShard(input: { shardId: string; region: string; egressIp: string; now: number }): Promise<void> {
+    await this.#sql.unsafe(`insert into public.executor_shards
+      (id,name,region,egress_ip,status,last_seen_at,created_at,updated_at) values ($1,$2,$3,$4,'ready',$5,$5,$5)
+      on conflict(id) do update set region=excluded.region,egress_ip=excluded.egress_ip,status='ready',
+      last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at`,
+    [input.shardId, "CryptoBot Labs production executor", input.region, input.egressIp, input.now]);
+  }
+
+  async reserveHandoff(input: { handoff: ExecutorOAuthHandoff; nonceHash: string; now: number }): Promise<void> {
+    await this.#sql.unsafe(`insert into private.weex_oauth_handoffs
+      (nonce_hash,user_id,action,expires_at,consumed_at,created_at) values ($1,$2,$3,$4,$5,$5)`,
+    [input.nonceHash, input.handoff.userId, input.handoff.action, input.handoff.expiresAt, input.now]);
+  }
+
+  async prepareConnection(input: { candidateId: string; userId: string; shardId: string; now: number }): Promise<string> {
+    const rows = await this.#sql.unsafe(`insert into public.weex_connections
+      (id,user_id,executor_shard_id,provider,status,permissions_json,withdrawal_access_absent,version,created_at,updated_at)
+      values ($1,$2,$3,'weex','pending','{}'::jsonb,false,1,$4,$4)
+      on conflict(user_id,provider) do update set executor_shard_id=excluded.executor_shard_id,status='pending',
+      revoked_at=null,version=public.weex_connections.version+1,updated_at=excluded.updated_at returning id`,
+    [input.candidateId, input.userId, input.shardId, input.now]);
+    const id = (rows[0] as Row | undefined)?.id;
+    if (typeof id !== "string") throw new Error("WEEX connection preparation failed");
+    return id;
+  }
+
+  async createState(input: { id: string; connectionId: string; userId: string; stateHash: string; sessionHash: string;
+    redirectUri: string; expiresAt: number; now: number; envelope: EncryptedWeexCredentials;
+    context: Readonly<Record<string, string>> }): Promise<void> {
+    await this.#sql.unsafe(`insert into private.weex_oauth_states
+      (id,connection_id,user_id,state_hash,session_hash,redirect_uri,promoter_slug,kms_key_id,encrypted_data_key,
+       initialization_vector,code_verifier_ciphertext,encryption_context_json,status,expires_at,created_at,updated_at)
+      values ($1,$2,$3,$4,$5,$6,null,$7,$8,$9,$10,$11::jsonb,'init',$12,$13,$13)`,
+    [input.id, input.connectionId, input.userId, input.stateHash, input.sessionHash, input.redirectUri,
+      input.envelope.keyId, input.envelope.encryptedDataKey, input.envelope.initializationVector,
+      input.envelope.ciphertext, JSON.stringify(input.context), input.expiresAt, input.now]);
+  }
+
+  async findState(stateHash: string): Promise<StoredOAuthState | null> {
+    const rows = await this.#sql.unsafe(`select id,connection_id,user_id,state_hash,session_hash,redirect_uri,kms_key_id,
+      encrypted_data_key,initialization_vector,code_verifier_ciphertext,encryption_context_json,expires_at
+      from private.weex_oauth_states where state_hash=$1 and status='init' and consumed_at is null limit 1`, [stateHash]);
+    const row = rows[0] as Row | undefined;
+    if (!row) return null;
+    return Object.freeze({ id: String(row.id), connectionId: String(row.connection_id), userId: String(row.user_id),
+      stateHash: String(row.state_hash), sessionHash: String(row.session_hash), redirectUri: String(row.redirect_uri),
+      keyId: String(row.kms_key_id), encryptedDataKey: bytes(row.encrypted_data_key, "encrypted data key"),
+      initializationVector: bytes(row.initialization_vector, "initialization vector"),
+      ciphertext: bytes(row.code_verifier_ciphertext, "PKCE ciphertext"), context: context(row.encryption_context_json),
+      expiresAt: number(row.expires_at, "OAuth expiry") });
+  }
+
+  async consumeState(id: string, stateHash: string, now: number): Promise<boolean> {
+    const result = await this.#sql.unsafe(`update private.weex_oauth_states set status='processing',consumed_at=$3,updated_at=$3
+      where id=$1 and state_hash=$2 and status='init' and consumed_at is null and expires_at>$3`, [id, stateHash, now]);
+    return result.count === 1;
+  }
+
+  async completeState(input: { state: StoredOAuthState; credentialEnvelope: EncryptedWeexCredentials;
+    credentialContext: Readonly<Record<string, string>>; maskedApiKeySuffix: string; now: number }): Promise<void> {
+    await this.#sql.begin(async (transaction) => {
+      await transaction.unsafe(`insert into private.weex_credential_blobs
+        (connection_id,user_id,kms_key_id,encrypted_data_key,initialization_vector,credential_ciphertext,
+         encryption_context_json,credential_version,created_at,rotated_at,updated_at)
+        values ($1,$2,$3,$4,$5,$6,$7::jsonb,1,$8,null,$8)
+        on conflict(connection_id) do update set kms_key_id=excluded.kms_key_id,encrypted_data_key=excluded.encrypted_data_key,
+        initialization_vector=excluded.initialization_vector,credential_ciphertext=excluded.credential_ciphertext,
+        encryption_context_json=excluded.encryption_context_json,credential_version=private.weex_credential_blobs.credential_version+1,
+        rotated_at=excluded.updated_at,updated_at=excluded.updated_at`,
+      [input.state.connectionId, input.state.userId, input.credentialEnvelope.keyId,
+        input.credentialEnvelope.encryptedDataKey, input.credentialEnvelope.initializationVector,
+        input.credentialEnvelope.ciphertext, JSON.stringify(input.credentialContext), input.now]);
+      const connection = await transaction.unsafe(`update public.weex_connections set status='active',masked_api_key_suffix=$3,
+        permissions_json=$4::jsonb,withdrawal_access_absent=true,verified_at=$5,revoked_at=null,updated_at=$5
+        where id=$1 and user_id=$2`, [input.state.connectionId, input.state.userId, input.maskedApiKeySuffix,
+        JSON.stringify({ read: true, spotTrade: true, futuresTrade: true, withdrawal: false }), input.now]);
+      const state = await transaction.unsafe(`update private.weex_oauth_states set status='success',error_code=null,updated_at=$2
+        where id=$1 and status='processing'`, [input.state.id, input.now]);
+      if (connection.count !== 1 || state.count !== 1) throw new Error("OAuth completion conflict");
+    });
+  }
+
+  async failState(input: { state: StoredOAuthState; code: string; now: number }): Promise<void> {
+    const safeCode = /^[a-z0-9_]{1,64}$/.test(input.code) ? input.code : "internal";
+    await this.#sql.begin(async (transaction) => {
+      await transaction.unsafe(`update private.weex_oauth_states set status='failed',error_code=$2,updated_at=$3
+        where id=$1 and status='processing'`, [input.state.id, safeCode, input.now]);
+      await transaction.unsafe(`update public.weex_connections set status='error',updated_at=$3 where id=$1 and user_id=$2`,
+      [input.state.connectionId, input.state.userId, input.now]);
+    });
+  }
+
+  async close(): Promise<void> { await this.#sql.end({ timeout: 5 }); }
+}

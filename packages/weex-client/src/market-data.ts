@@ -208,9 +208,9 @@ function validateRequest(request: HistoricalCandleRequest): void {
   if (request.startTime !== undefined && request.endTime !== undefined && request.endTime <= request.startTime) {
     throw new WeexApiError("Historical endTime must be after startTime", { category: "validation", retryable: false });
   }
-  if (request.market === "futures" && request.limit !== undefined &&
-      (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 100)) {
-    throw new WeexApiError("Futures history limit must be between 1 and 100", { category: "validation", retryable: false });
+  if (request.limit !== undefined &&
+      (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > (request.market === "spot" ? 1_000 : 100))) {
+    throw new WeexApiError(`${request.market === "spot" ? "Spot" : "Futures history"} limit is invalid`, { category: "validation", retryable: false });
   }
   if (request.market === "futures" && request.startTime !== undefined && request.endTime !== undefined &&
       request.endTime - request.startTime > MAX_FUTURES_HISTORY_RANGE_MS) {
@@ -237,6 +237,8 @@ function candleUrl(request: HistoricalCandleRequest): string {
     if (request.startTime !== undefined) query.set("startTime", String(request.startTime));
     if (request.endTime !== undefined) query.set("endTime", String(request.endTime));
     query.set("limit", String(request.limit ?? 100));
+  } else {
+    query.set("limit", String(request.limit ?? MAX_SPOT_HISTORY_CANDLES));
   }
   return `${endpoint.origin}${endpoint.path}?${query}`;
 }
@@ -288,9 +290,13 @@ export class WeexPublicClient {
       headers: { Accept: "application/json" },
       ...(signal ? { signal } : {}),
     });
-    return request.market === "spot"
+    const parsed = request.market === "spot"
       ? parseSpotCandleRows(response.body, this.now())
       : parseFuturesCandleRows(response.body, this.now());
+    const intervalMs = parseIntervalMs(request.interval);
+    return parsed.map((candle) => candle.closeTime === candle.openTime + intervalMs
+      ? { ...candle, closeTime: candle.closeTime - 1 }
+      : candle);
   }
 
   async collectHistoricalCandles(request: HistoricalCandleRequest, signal?: AbortSignal): Promise<HistoricalDataset> {
@@ -304,7 +310,7 @@ export class WeexPublicClient {
     if (request.market === "spot") {
       collected.push(...await this.fetchCandles(request, signal));
     } else {
-      let cursor = request.startTime;
+      let cursorEnd = request.endTime;
       let pageCount = 0;
       do {
         signal?.throwIfAborted();
@@ -312,7 +318,8 @@ export class WeexPublicClient {
           terminationReason = "page-limit";
           break;
         }
-        const page = await this.fetchCandles({ ...request, startTime: cursor }, signal);
+        const page = await this.fetchCandles({ ...request, endTime: cursorEnd }, signal);
+        signal?.throwIfAborted();
         pageCount += 1;
         const remainingCapacity = MAX_FUTURES_HISTORY_CANDLES - collected.length;
         collected.push(...page.slice(0, remainingCapacity));
@@ -320,12 +327,13 @@ export class WeexPublicClient {
           terminationReason = "candle-limit";
           break;
         }
-        if (page.length === 0 || request.endTime === undefined) break;
-        const maximumOpenTime = Math.max(...page.map((candle) => candle.openTime));
-        const nextCursor = maximumOpenTime + intervalMs;
-        if (cursor !== undefined && nextCursor <= cursor) break;
-        cursor = nextCursor;
-        if (cursor >= request.endTime) break;
+        if (page.length === 0 || request.startTime === undefined) break;
+        const minimumOpenTime = Math.min(...page.map((candle) => candle.openTime));
+        if (minimumOpenTime <= request.startTime) break;
+        const nextEnd = minimumOpenTime - 1;
+        if (cursorEnd !== undefined && nextEnd >= cursorEnd) break;
+        cursorEnd = nextEnd;
+        if (cursorEnd < request.startTime) break;
         paginated = true;
         if (page.length < (request.limit ?? 100)) break;
       } while (true);

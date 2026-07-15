@@ -19,13 +19,13 @@ const row = (openTime: number, open = "1", high = "2", low = "0.5", close = "1.5
   [openTime, open, high, low, close, volume, openTime + 59_999, "15", 4, "5", "7.5"];
 
 describe("WeexPublicClient", () => {
-  it("uses only documented symbol and interval query parameters for spot candles", async () => {
+  it("uses documented spot candle query parameters including the requested limit", async () => {
     const transport = new RecordingTransport([ok([row(0)])]);
     const client = new WeexPublicClient(transport, () => 30_000);
     const candles = await client.fetchCandles({
       market: "spot", symbol: "BTCUSDT", interval: "1m", startTime: 0, endTime: 60_000, limit: 50,
     });
-    expect(transport.requests[0]?.url).toBe("https://api-spot.weex.com/api/v3/market/klines?symbol=BTCUSDT&interval=1m");
+    expect(transport.requests[0]?.url).toBe("https://api-spot.weex.com/api/v3/market/klines?symbol=BTCUSDT&interval=1m&limit=50");
     expect(candles[0]).toMatchObject({ openTime: 0, closeTime: 59_999, open: "1", close: "1.5" });
   });
 
@@ -38,18 +38,19 @@ describe("WeexPublicClient", () => {
       .rejects.toMatchObject({ category: "validation" });
   });
 
-  it("normalizes reversed futures pages, deduplicates, excludes incomplete candles, and reports provenance", async () => {
+  it("paginates futures history backward, normalizes reversed pages, and excludes incomplete candles", async () => {
     const transport = new RecordingTransport([
-      ok([row(120_000, "3", "4", "2", "3.5", "30"), row(60_000, "2", "3", "1", "2.5", "20"), row(0)]),
-      ok([row(180_000, "4", "5", "3", "4.5", "40"), row(120_000, "3", "4", "2", "3.5", "30")]),
+      ok([row(180_000, "4", "5", "3", "4.5", "40"), row(120_000, "3", "4", "2", "3.5", "30"), row(60_000, "2", "3", "1", "2.5", "20")]),
+      ok([row(0)]),
     ]);
     const dataset = await new WeexPublicClient(transport, () => 210_000).collectHistoricalCandles({
       market: "futures", symbol: "cmt_btcusdt", interval: "1m", startTime: 0, endTime: 240_000, limit: 3,
     });
     expect(dataset.candles.map((candle) => candle.openTime)).toEqual([0, 60_000, 120_000]);
-    expect(dataset.validation).toMatchObject({ duplicates: [120_000], gaps: [], incompleteCount: 1 });
+    expect(dataset.validation).toMatchObject({ duplicates: [], gaps: [], incompleteCount: 1 });
     expect(dataset.provenance).toMatchObject({ provider: "WEEX", sourceKind: "public-api", endpoint: "/capi/v3/market/historyKlines", paginated: true });
     expect(dataset.complete).toBe(false);
+    expect(transport.requests[1]?.url).toContain("endTime=59999");
   });
 
   it("truthfully marks spot single-response coverage incomplete when the range cannot be proven", async () => {
@@ -82,7 +83,7 @@ describe("WeexPublicClient", () => {
 
   it("stops full futures pages at the hard cap and reports truncation", async () => {
     const responses = Array.from({ length: MAX_FUTURES_HISTORY_PAGES }, (_, index) =>
-      ok([row(index * 60_000)]));
+      ok([row((MAX_FUTURES_HISTORY_PAGES + 9 - index) * 60_000)]));
     const transport = new RecordingTransport(responses);
     const dataset = await new WeexPublicClient(transport, () => 20_000_000).collectHistoricalCandles({
       market: "futures",

@@ -1,4 +1,5 @@
 packages:
+  - "."
   - "packages/*"
   - "apps/*"
 
@@ -8,6 +9,7 @@ publicHoistPattern:
 
 allowBuilds:
   electron: true
+  electron-winstaller: true
   esbuild: true
   sharp: true
   unrs-resolver: true

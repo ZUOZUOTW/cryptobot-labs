@@ -2,6 +2,7 @@ import type {
   CancelOutcome,
   ExchangeOrderQuery,
   ExchangeOrderSnapshot,
+  ExchangeFillSnapshot,
   ExchangeSubmitRequest,
   ExecutionTarget,
   InstrumentRules,
@@ -115,7 +116,10 @@ export interface WeexAccountPosition {
 }
 
 export interface WeexAccountSnapshot {
-  readonly target: { readonly market: "spot" | "futures"; readonly mode: "live" };
+  readonly target: {
+    readonly market: "spot" | "futures";
+    readonly mode: "live" | "futures-demo";
+  };
   readonly observedAt: number;
   readonly balances: readonly WeexAccountBalance[];
   readonly positions: readonly WeexAccountPosition[];
@@ -167,10 +171,14 @@ const FUTURES_ACCOUNT_CONFIG: Route = {
   origin: ORIGIN.futures,
   path: "/capi/v3/account/accountConfig",
 };
-const FUTURES_POSITIONS: Route = {
-  origin: ORIGIN.futures,
-  path: "/capi/v3/account/position/allPosition",
-};
+function futuresPositionsRoute(target: ExecutionTarget): Route {
+  return {
+    origin: ORIGIN.futures,
+    path: target.mode === "live"
+      ? "/capi/v3/account/position/allPosition"
+      : "/capi/v3/sim/position/allPosition",
+  };
+}
 
 function orderRoute(target: ExecutionTarget): Route {
   if (target.market === "spot") return { origin: ORIGIN.spot, path: "/api/v3/order" };
@@ -285,19 +293,37 @@ function parsePositions(value: unknown): readonly WeexAccountPosition[] {
   return Object.freeze(positions);
 }
 
-function parseTradeFees(body: unknown, target: ExecutionTarget, symbol: string): string {
+function parseTradeFills(body: unknown, target: ExecutionTarget, snapshot: ExchangeOrderSnapshot, feeCurrency: string): {
+  readonly fees: string;
+  readonly fills: readonly ExchangeFillSnapshot[];
+} {
   const data = unwrapGet(body);
   if (!Array.isArray(data) || data.length < 1 || data.length >= 100) throw schema("Invalid or truncated account trade collection");
-  let fees = "0";
-  for (const item of data) {
+  let fees = "0"; let quantity = "0";
+  const fills = data.map((item) => {
     const trade = record(item, "account trade");
-    if (trade.symbol !== symbol || typeof trade.commission !== "string" || !UNSIGNED_AMOUNT.test(trade.commission)
-      || (target.market === "futures" && trade.commissionAsset !== "USDT")) {
-      throw schema("Invalid account trade fee");
-    }
-    fees = canonicalSum(fees, trade.commission);
-  }
-  return fees;
+    const rawId = trade.id; const rawOrderId = trade.orderId;
+    const exchangeFillId = typeof rawId === "number" && Number.isSafeInteger(rawId) && rawId >= 0 ? String(rawId)
+      : typeof rawId === "string" && /^\d{1,32}$/.test(rawId) ? rawId : null;
+    const orderId = typeof rawOrderId === "number" && Number.isSafeInteger(rawOrderId) && rawOrderId >= 0 ? String(rawOrderId)
+      : typeof rawOrderId === "string" && /^\d{1,32}$/.test(rawOrderId) ? rawOrderId : null;
+    const filledAt = typeof trade.time === "string" && /^\d+$/.test(trade.time) ? Number(trade.time) : trade.time;
+    const realizedPnl = trade.realizedPnl;
+    if (!exchangeFillId || orderId !== snapshot.exchangeOrderId || trade.symbol !== snapshot.symbol
+      || typeof trade.price !== "string" || !UNSIGNED_AMOUNT.test(trade.price) || !/[1-9]/.test(trade.price)
+      || typeof trade.qty !== "string" || !UNSIGNED_AMOUNT.test(trade.qty) || !/[1-9]/.test(trade.qty)
+      || typeof trade.commission !== "string" || !UNSIGNED_AMOUNT.test(trade.commission)
+      || trade.commissionAsset !== feeCurrency
+      || (target.market === "futures" && (typeof realizedPnl !== "string" || !SIGNED_AMOUNT.test(realizedPnl)))
+      || !Number.isSafeInteger(filledAt) || (filledAt as number) < 0) throw schema("Invalid account trade fill");
+    fees = canonicalSum(fees, trade.commission); quantity = canonicalSum(quantity, trade.qty);
+    return Object.freeze({ exchangeFillId, price: trade.price, quantity: trade.qty, fee: trade.commission,
+      feeCurrency: trade.commissionAsset, ...(target.market === "futures" ? { realizedPnl: realizedPnl as string } : {}),
+      filledAt: filledAt as number });
+  });
+  if (new Set(fills.map(({ exchangeFillId }) => exchangeFillId)).size !== fills.length
+    || quantity !== canonicalSum("0", snapshot.cumulativeFilledQuantity)) throw schema("Account trade fills do not match the order");
+  return Object.freeze({ fees, fills: Object.freeze(fills) });
 }
 
 function parseAccount(
@@ -625,7 +651,9 @@ export class WeexPrivateClient {
 
   async getAccountSnapshot(target: ExecutionTarget): Promise<WeexAccountSnapshot> {
     assertTarget(target);
-    if (target.mode !== "live") throw validation("Account snapshots require a live WEEX target");
+    if (target.mode !== "live" && !(target.market === "futures" && target.mode === "futures-demo")) {
+      throw validation("Account snapshots require a supported WEEX private target");
+    }
     const authorization = this.#authorizationSnapshot(target);
     const accountResponse = await this.#safeGet(accountRoute(target));
     let balances: readonly WeexAccountBalance[];
@@ -645,25 +673,22 @@ export class WeexPrivateClient {
       balances = parseBalanceCollection(collection, "futures");
     }
     const positions = target.market === "futures"
-      ? parsePositions((await this.#safeGet(FUTURES_POSITIONS)).body)
+      ? parsePositions((await this.#safeGet(futuresPositionsRoute(target))).body)
       : Object.freeze([]) as readonly WeexAccountPosition[];
     this.#assertAuthorization(authorization);
     const observedAt = Math.floor(this.#now());
     if (!Number.isSafeInteger(observedAt) || observedAt < 0) throw validation("Invalid account snapshot time");
-    return Object.freeze({ target: Object.freeze({ market: target.market, mode: "live" as const }), observedAt,
+    return Object.freeze({ target: Object.freeze({ market: target.market, mode: target.mode }), observedAt,
       balances, positions });
   }
 
   async submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome> {
     const { identity, authorization } = await this.#validateOrder(request);
     const { intent, target, clientOrderId } = request;
-    const body = {
+    const commonBody = {
       symbol: intent.symbol,
       side: intent.side.toUpperCase(),
-      type: "LIMIT",
-      timeInForce: "GTC",
       quantity: intent.quantity,
-      price: intent.price,
       newClientOrderId: clientOrderId,
       ...(target.market === "futures"
         ? { positionSide: intent.reduceOnly
@@ -671,6 +696,9 @@ export class WeexPrivateClient {
             : intent.side === "buy" ? "LONG" : "SHORT" }
         : {}),
     };
+    const body = target.mode === "futures-demo"
+      ? { ...commonBody, type: "MARKET" }
+      : { ...commonBody, type: "LIMIT", timeInForce: "GTC", price: intent.price };
     const identityKey = `${target.market}:${target.mode}:${clientOrderId}`;
     const claimed = this.#claimSubmission(identityKey, identity);
     if ("existing" in claimed) return await claimed.existing;
@@ -738,10 +766,23 @@ export class WeexPrivateClient {
 
   async #attachTradeFees(target: ExecutionTarget, snapshot: ExchangeOrderSnapshot): Promise<ExchangeOrderSnapshot> {
     if (snapshot.cumulativeFilledQuantity === "0") return snapshot;
+    if (target.mode === "futures-demo") return Object.freeze({ ...snapshot, fees: "0" });
+    let feeCurrency = "USDT";
+    if (target.market === "spot") {
+      if (!this.#rulesProvider) throw validation("Current instrument rules are required for spot fill reconciliation");
+      const rules = await this.#rulesProvider(target, snapshot.symbol);
+      const now = this.#now();
+      if (!isValidInstrumentRules(rules?.rules) || rules.rules.market !== "spot" || rules.rules.symbol !== snapshot.symbol
+        || !Number.isSafeInteger(rules.verifiedAt) || rules.verifiedAt > now || now - rules.verifiedAt > MAX_RULES_AGE_MS) {
+        throw validation("Current spot instrument rules are unavailable for fill reconciliation");
+      }
+      feeCurrency = rules.rules.quoteAsset;
+    }
     const response = await this.#safeGet(tradeRoute(target), [
       ["symbol", snapshot.symbol], ["orderId", snapshot.exchangeOrderId], ["limit", "100"],
     ]);
-    return Object.freeze({ ...snapshot, fees: parseTradeFees(response.body, target, snapshot.symbol) });
+    const evidence = parseTradeFills(response.body, target, snapshot, feeCurrency);
+    return Object.freeze({ ...snapshot, ...evidence });
   }
 
   async findOrderByClientOrderId(query: ExchangeOrderQuery): Promise<ExchangeOrderSnapshot | null> {

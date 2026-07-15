@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly OUTPUT="${ROOT}/release/executor"
+cd "${ROOT}"
+pnpm --filter @cryptobot-labs/executor build
+set +e
+smoke_output="$(env -i PATH="${PATH}" NODE_ENV=production node apps/executor/dist/main.js 2>&1)"
+smoke_status=$?
+set -e
+if [[ "${smoke_status}" -eq 0 || "${smoke_output}" != *"EXECUTOR_SHARD_ID is required"* ]]; then
+  echo "Executor bundle smoke test failed before configuration validation." >&2
+  exit 1
+fi
+install -d -m 0750 "${OUTPUT}"
+install -m 0550 apps/executor/dist/main.js "${OUTPUT}/main.js"
+install -m 0550 infra/aws-executor/runtime/install-release.sh "${OUTPUT}/install-release.sh"
+install -m 0440 infra/aws-executor/runtime/cryptobot-executor.service "${OUTPUT}/cryptobot-executor.service"
+install -m 0440 infra/aws-executor/runtime/caddy.service "${OUTPUT}/caddy.service"
+install -m 0440 infra/aws-executor/runtime/Caddyfile "${OUTPUT}/Caddyfile"
+(cd "${OUTPUT}" && shasum -a 256 main.js > main.js.sha256)
+echo "Executor release prepared at ${OUTPUT}"
