@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
 import { benchmarkSeries } from "../lib/benchmark-series";
 import BotsPage from "../app/bots/page";
+import FavoritesPage from "../app/favorites/page";
 import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
 import { StrategyShareActions } from "../components/StrategyShareActions";
@@ -241,6 +242,37 @@ describe("bot catalog route", () => {
     expect(screen.queryByRole("button", { name: /取消收藏/ })).not.toBeInTheDocument();
   });
 
+});
+
+describe("favorite strategies route", () => {
+  it("shows saved strategies and removes them from the shared discovery preferences", async () => {
+    localStorage.setItem("cryptobot-labs:discovery:v1", JSON.stringify({
+      market: "all",
+      risk: "all",
+      tag: "all",
+      timeframe: "all",
+      sort: "recommended",
+      favorites: ["orbit-dca", "momentum-forge"],
+    }));
+    const user = userEvent.setup();
+    render(<FavoritesPage />);
+
+    expect(await screen.findByRole("heading", { name: "軌道定投" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "動能鍛造者" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "取消收藏 軌道定投" }));
+
+    expect(screen.queryByRole("heading", { name: "軌道定投" })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("cryptobot-labs:discovery:v1") ?? "{}")).toMatchObject({
+      favorites: ["momentum-forge"],
+    });
+  });
+
+  it("guides an empty collection back to strategy discovery", async () => {
+    render(<FavoritesPage />);
+
+    expect(await screen.findByRole("heading", { name: "尚未收藏任何策略" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "探索策略" })).toHaveAttribute("href", "/bots");
+  });
 });
 
 describe("bot detail route", () => {

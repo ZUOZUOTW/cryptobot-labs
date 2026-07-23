@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FiActivity, FiClock, FiCompass, FiTool, FiUser } from "react-icons/fi";
+import { FiActivity, FiCompass, FiStar, FiTool, FiUser } from "react-icons/fi";
 import { useI18n } from "./I18nProvider";
 import { usePlatformAuth } from "./PlatformAuthProvider";
 
@@ -10,7 +10,7 @@ const PRIMARY_TABS = [
   { href: "/bots", label: "探索策略", icon: FiCompass },
   { href: "/workshop", label: "組裝策略", icon: FiTool },
   { href: "/runs", label: "我的運行", icon: FiActivity },
-  { href: "/activity", label: "最後活動", icon: FiClock },
+  { href: "/favorites", label: "收藏策略", icon: FiStar },
 ] as const;
 
 export function MobileTabBar() {

@@ -1498,5 +1498,11 @@
   "）· 策略風控：僅收盤價、非盤中（": ")· Strategy Risk Control: Only Closing Price, Not Intraday(",
   "，目前篩選仍可繼續使用。": ", current screening can still be used.",
   "；回測不代表未來績效。": "; Backtesting does not represent future performance.",
-  "；市場基準期末淨值": "; benchmark ending equity"
+  "；市場基準期末淨值": "; benchmark ending equity",
+  "收藏 / 策略": "FAVORITES / STRATEGIES",
+  "收藏策略": "Favorite strategies",
+  "集中查看你收藏的策略，可直接查看詳細資料或帶入組裝車間。": "Review your favorite strategies in one place, open their details, or send them straight to the workshop.",
+  "正在載入收藏策略…": "Loading favorite strategies…",
+  "尚未收藏任何策略": "No favorite strategies yet",
+  "在探索策略頁點選星號，收藏後會顯示在這裡。": "Select the star on the strategy discovery page and it will appear here."
 }

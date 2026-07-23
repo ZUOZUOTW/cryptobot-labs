@@ -8,6 +8,7 @@ import { PwaInstallButton } from "./PwaInstallButton";
 
 const NAVIGATION_LINKS = [
   { href: "/bots", label: "探索策略" },
+  { href: "/favorites", label: "收藏策略" },
   { href: "/workshop", label: "組裝策略" },
   { href: "/leaderboard", label: "排行榜" },
   { href: "/runs", label: "我的運行" },

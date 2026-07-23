@@ -194,7 +194,12 @@ export default function BotsPage() {
 
       <div className="catalog-summary">
         <p aria-live="polite">{user ? `顯示 ${displayedBots.length} / ${visibleBots.length} 組符合策略` : `目前顯示 ${displayedBots.length} 組符合策略`}</p>
-        <button className="text-button" onClick={resetFilters} type="button">重設篩選</button>
+        <div className="catalog-summary__actions">
+          <Link aria-label="收藏策略" className="text-button catalog-favorites-link" href="/favorites">
+            <span>收藏</span><span>策略</span><strong>{favorites.length}</strong>
+          </Link>
+          <button className="text-button" onClick={resetFilters} type="button">重設篩選</button>
+        </div>
       </div>
 
       {visibleBots.length > 0 ? (
