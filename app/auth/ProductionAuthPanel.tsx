@@ -52,7 +52,7 @@ export function ProductionAuthPanel({ returnTo, sent, error, ready }: {
           <div><strong>登入不等於授權交易</strong><span>登入僅用於保存策略與操作紀錄，不會自動授權或執行任何交易。</span></div>
         </div>
         <div className={styles.cardFooter}>
-          <p>繼續即表示你同意 <Link href="/terms">服務條款</Link> 與 <Link href="/privacy">隱私權政策</Link>。</p>
+          <p>繼續即表示你已閱讀 <Link href="/legal">使用條款、隱私與風險說明</Link>。</p>
           <Link href="/disclosures">風險與資料使用說明</Link>
         </div>
       </section>

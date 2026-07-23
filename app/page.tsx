@@ -1,11 +1,15 @@
 import Link from "next/link";
-import { HomePerformanceSections } from "../components/HomePerformanceSections";
 import { OrbitalHero } from "../components/OrbitalHero";
+import {
+  DeferredHomePerformanceSections,
+  DeferredStrategyAssemblyPlayer,
+  DeferredStrategyCodePlayer,
+} from "../components/home/DeferredHomeContent";
 
 const steps = [
   ["01", "挑選", "從現貨、合約與不同風險等級中，找到符合想法的策略起點。"],
-  ["02", "模擬", "組裝條件與風控，先用公開歷史行情回測，再啟動 Paper。"],
-  ["03", "自動運行", "通過模擬與權限檢查後，才連接 WEEX 並設定雲端執行。"],
+  ["02", "組裝", "組裝條件與風控，先用公開歷史行情回測，再決定是否運行。"],
+  ["03", "自動運行", "通過回測與設置後，準備開始自動運行"],
 ] as const;
 
 export default function Home() {
@@ -15,7 +19,7 @@ export default function Home() {
 
       <section className="landing-section site-container" aria-label="三步驟開始使用">
         <p className="eyebrow">PICK / SIMULATE / RUN</p>
-        <h2 id="flow-title">三步，從想法走到安全運行。</h2>
+        <h2 id="flow-title">三步，從想法到自動實現</h2>
         <ol className="step-grid">
           {steps.map(([number, title, description]) => (
             <li className="step-card glass-panel" key={number}>
@@ -28,35 +32,27 @@ export default function Home() {
       <section className="landing-section site-container split-feature">
         <div>
           <p className="eyebrow">NO-CODE WORKSHOP</p>
-          <h2>多策略，自由組裝。</h2>
-          <p>把進場、確認、出場、倉位與風控拆成看得懂的積木，依交易想法自由組合。</p>
+          <h2>自由組裝各種策略</h2>
+          <p>把進場、確認、出場、倉位與風控用點擊組合的方式，簡單實現你的交易想法。</p>
           <Link className="text-link" href="/workshop">進入組裝車間 <span aria-hidden="true">→</span></Link>
         </div>
-        <div className="feature-placeholder glass-panel" aria-label="多策略積木預覽">
-          <span>RSI 反彈</span><span>＋</span><span>ATR 波動倉位</span><span>＋</span><span>固定風控</span>
-        </div>
+        <DeferredStrategyAssemblyPlayer />
       </section>
 
       <section className="landing-section site-container split-feature split-feature--reverse">
         <div>
           <p className="eyebrow">ADVANCED MODE</p>
-          <h2>用 JavaScript 寫下你的交易邏輯。</h2>
-          <p>貼上策略程式後先做靜態檢查與白話摘要；程式不會在瀏覽器執行，也不會連線下單。</p>
+          <h2>支援匯入交易策略代碼</h2>
+          <p>支持使用自行編寫的交易策略，幫助你開啟更多可能性</p>
           <Link className="text-link" href="/workshop?mode=javascript">開啟 JavaScript 模式 <span aria-hidden="true">→</span></Link>
         </div>
-        <pre className="code-preview glass-panel" aria-label="WEEX 策略程式碼預覽"><code>{`if (signal.rsi < 30) {\n  strategy.enter("WEEX", "BTCUSDT");\n}`}</code></pre>
+        <DeferredStrategyCodePlayer />
       </section>
 
-      <HomePerformanceSections />
-
-      <section className="landing-section site-container boundary-panel glass-panel">
-        <div><p className="eyebrow">SECURE WEEX CONNECTION</p><h2>不用貼 API Key，也能安全準備自動執行。</h2></div>
-        <p>正式版透過 WEEX 官方 OAuth 授權，憑證只由固定 IP 後端加密保存。第一個運行固定是 Paper，Live 必須另外通過完整安全門檻。</p>
-        <Link className="text-link" href="/connections">查看安全連線流程 <span aria-hidden="true">→</span></Link>
-      </section>
+      <DeferredHomePerformanceSections />
 
       <section className="landing-section landing-cta site-container">
-        <p className="eyebrow">START WITH EVIDENCE</p><h2>先選一個策略，看懂風險再開始。</h2>
+        <p className="eyebrow">START WITH EVIDENCE</p><h2>選擇策略範本，或是由你從零開始組裝</h2>
         <div className="button-row"><Link className="button button--primary" href="/bots">先選一個策略</Link><Link className="button button--secondary" href="/workshop?new=1">從空白開始</Link></div>
       </section>
     </div>

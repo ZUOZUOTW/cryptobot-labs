@@ -18,10 +18,11 @@ const REAL_RETURNS: Record<string, number> = {
   "leverage-guardian": -19.5,
   "breakout-hunter": -24.9,
 };
+const historicalReturn = (botId: string) => REAL_RETURNS[botId] ?? 1;
 
 const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id, {
-  metrics: { ...bot.metrics, totalReturn: REAL_RETURNS[bot.id] },
-  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + ((point.value - 100) * 0.1) + (REAL_RETURNS[bot.id] * index / Math.max(bot.equityCurve.length - 1, 1)) })),
+  metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
+  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + ((point.value - 100) * 0.1) + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)) })),
   generatedAt: "2026-07-13T12:00:00.000Z",
   disclaimer: "WEEX 歷史行情回測，不代表未來績效",
   evidence: {
@@ -38,7 +39,7 @@ const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Obje
     feeRate: "0.001",
     slippageRate: "0.0005",
     fundingIncluded: false,
-    datasetDigest: `${bot.id}-digest`,
+    datasetDigest: "d".repeat(64),
     engineVersion: "test",
   },
 }]));
@@ -92,7 +93,9 @@ describe("WEEX historical leaderboard", () => {
     expect(rankedIds()[0]).toBe("momentum-forge");
     expect(rankedIds().at(-1)).toBe("breakout-hunter");
     const sortControls = screen.getByRole("group", { name: "戰況排序" });
-    const returnButton = within(sortControls).getByRole("button", { name: "累積收益" });
+    const returnButton = within(sortControls).getByRole("button", { name: "交易績效" });
+    const winRateButton = within(sortControls).getByRole("button", { name: "勝率" });
+    const tradesButton = within(sortControls).getByRole("button", { name: "交易次數" });
     const stabilityButton = within(sortControls).getByRole("button", { name: "穩定度" });
     expect(returnButton).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("combobox", { name: "排序指標" })).not.toBeInTheDocument();
@@ -103,23 +106,53 @@ describe("WEEX historical leaderboard", () => {
     expect(returnButton).toHaveAttribute("aria-pressed", "false");
 
     await user.click(within(sortControls).getByRole("button", { name: "低回撤" }));
-    expect(rankedIds()[0]).toBe("orbit-dca");
+    expect(rankedIds()[0]).toBe("bollinger-pulse");
+
+    await user.click(winRateButton);
+    expect(rankedIds()[0]).toBe([...BOT_CATALOG].toSorted((a, b) => b.metrics.winRate - a.metrics.winRate || a.id.localeCompare(b.id))[0]?.id);
+    expect(winRateButton).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(tradesButton);
+    expect(rankedIds()[0]).toBe([...BOT_CATALOG].toSorted((a, b) => b.metrics.trades - a.metrics.trades || a.id.localeCompare(b.id))[0]?.id);
+    expect(tradesButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("sorts the complete performance table from its metric headers in both directions", async () => {
+    const user = userEvent.setup();
+    const table = await renderReady();
+    const returnHeader = within(table).getByRole("columnheader", { name: "交易績效" });
+    const winRateHeader = within(table).getByRole("columnheader", { name: "勝率" });
+
+    expect(returnHeader).toHaveAttribute("aria-sort", "descending");
+    expect(rankedIds()[0]).toBe("momentum-forge");
+
+    await user.click(within(returnHeader).getByRole("button", { name: "交易績效" }));
+    expect(returnHeader).toHaveAttribute("aria-sort", "ascending");
+    expect(rankedIds()[0]).toBe("breakout-hunter");
+
+    await user.click(within(winRateHeader).getByRole("button", { name: "勝率" }));
+    expect(winRateHeader).toHaveAttribute("aria-sort", "descending");
+    expect(rankedIds()[0]).toBe([...BOT_CATALOG].toSorted((a, b) => b.metrics.winRate - a.metrics.winRate || a.id.localeCompare(b.id))[0]?.id);
+
+    await user.click(within(winRateHeader).getByRole("button", { name: "勝率" }));
+    expect(winRateHeader).toHaveAttribute("aria-sort", "ascending");
+    expect(rankedIds()[0]).toBe([...BOT_CATALOG].toSorted((a, b) => a.metrics.winRate - b.metrics.winRate || a.id.localeCompare(b.id))[0]?.id);
   });
 
   it("renders an animated, clickable multi-line trading battle chart", async () => {
     await renderReady();
     const battle = screen.getByRole("region", { name: "機器人交易戰況" });
     expect(within(battle).getByRole("heading", { name: "機器人交易戰況" })).toBeInTheDocument();
-    expect(within(battle).queryByText("累積收益比較")).not.toBeInTheDocument();
+    expect(within(battle).queryByText("交易績效比較")).not.toBeInTheDocument();
     const lines = battle.querySelectorAll(".battle-chart__line");
     const hitAreas = battle.querySelectorAll(".battle-chart__hit");
     const endLabels = battle.querySelectorAll(".battle-chart__end-label");
     const endCards = battle.querySelectorAll(".battle-chart__end-card");
     const axisLabels = battle.querySelectorAll(".battle-chart__axis-label");
-    expect(lines).toHaveLength(BOT_CATALOG.length);
-    expect(hitAreas).toHaveLength(BOT_CATALOG.length);
-    expect(endLabels).toHaveLength(BOT_CATALOG.length);
-    expect(endCards).toHaveLength(BOT_CATALOG.length);
+    expect(lines).toHaveLength(10);
+    expect(hitAreas).toHaveLength(10);
+    expect(endLabels).toHaveLength(10);
+    expect(endCards).toHaveLength(10);
     expect(axisLabels.length).toBeGreaterThanOrEqual(10);
     const labelPositions = [...endLabels].map((label) => Number(label.getAttribute("y"))).sort((a, b) => a - b);
     expect(Math.min(...labelPositions)).toBeGreaterThanOrEqual(30);
@@ -129,9 +162,9 @@ describe("WEEX historical leaderboard", () => {
     expect([...hitAreas].every((line) => line.getAttribute("fill") === "none" && line.getAttribute("stroke") === "transparent")).toBe(true);
     expect(within(battle).getByRole("link", { name: /查看 動能鍛造者/ })).toHaveAttribute("href", "/bots/momentum-forge");
     expect(within(battle).getByRole("link", { name: /動能鍛造者\+15\.4%/ })).toHaveAttribute("href", "/bots/momentum-forge");
-    const orbitColor = battle.querySelector('[data-bot-id="orbit-dca"] .battle-chart__line')?.getAttribute("stroke");
+    const stableBotColor = battle.querySelector('[data-bot-id="rsi-deep-zone-reversal"] .battle-chart__line')?.getAttribute("stroke");
     await userEvent.click(within(battle).getByRole("button", { name: "穩定度" }));
-    expect(battle.querySelector('[data-bot-id="orbit-dca"] .battle-chart__line')?.getAttribute("stroke")).toBe(orbitColor);
+    expect(battle.querySelector('[data-bot-id="rsi-deep-zone-reversal"] .battle-chart__line')?.getAttribute("stroke")).toBe(stableBotColor);
   });
 
   it("keeps the historical-data explanation to one compact footer note", async () => {

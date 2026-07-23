@@ -75,7 +75,8 @@ function cloneConfig(config: BotConfig): BotConfig {
 }
 
 async function loadSteadyTrend(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "穩健趨勢" }));
+  void user;
+  await waitFor(() => expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("SMA 均線交叉"));
 }
 
 async function selectTradingPair(user: ReturnType<typeof userEvent.setup>, search: string, optionName: RegExp) {
@@ -100,6 +101,60 @@ function readBlobText(blob: Blob): Promise<string> {
 }
 
 describe("multi-strategy workshop", () => {
+  it("uses market-specific fee defaults and resets every backtest assumption", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    const feeRate = screen.getByRole("spinbutton", { name: "手續費率" });
+    const slippageRate = screen.getByRole("spinbutton", { name: "滑價率" });
+    expect(feeRate).toHaveValue(0.001);
+    expect(slippageRate).toHaveValue(0.0005);
+
+    await user.clear(feeRate);
+    await user.type(feeRate, "0.002");
+    await user.click(screen.getByRole("button", { name: "重設手續費率為預設值" }));
+    expect(feeRate).toHaveValue(0.001);
+
+    await user.clear(slippageRate);
+    await user.type(slippageRate, "0.003");
+    await user.click(screen.getByRole("button", { name: "重設滑價率為預設值" }));
+    expect(slippageRate).toHaveValue(0.0005);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "資料缺口" }), "disclose");
+    await user.click(screen.getByRole("button", { name: "重設資料缺口為預設值" }));
+    expect(screen.getByRole("combobox", { name: "資料缺口" })).toHaveValue("fail");
+
+    await user.click(screen.getByRole("button", { name: /^合約/ }));
+    expect(screen.getByRole("spinbutton", { name: "手續費率" })).toHaveValue(0.0008);
+    const fundingMode = screen.getByRole("combobox", { name: "資金費率" });
+    await user.selectOptions(fundingMode, "none");
+    await user.click(screen.getByRole("button", { name: "重設資金費率為預設值" }));
+    expect(fundingMode).toHaveValue("historical");
+  });
+
+  it("quickly checks the signal flow without calling the market API", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    renderWorkshop();
+    const summary = screen.getByRole("region", { name: "策略摘要" });
+    const readiness = screen.getByLabelText("策略發布準備狀態");
+
+    expect(readiness).toHaveTextContent("策略設定已就緒");
+    expect(readiness).toHaveTextContent("行情回測待執行");
+    expect(readiness).toHaveTextContent("快速測試訊號流程未測試");
+
+    await user.click(within(summary).getByRole("button", { name: "快速測試訊號流程" }));
+
+    expect(within(summary).getByRole("status")).toHaveTextContent("流程測試通過");
+    expect(readiness).toHaveTextContent("快速測試訊號流程通過測試");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "清空選取" }));
+    await user.click(within(summary).getByRole("button", { name: "快速測試訊號流程" }));
+    expect(readiness).toHaveTextContent("策略設定需要調整");
+    expect(readiness).toHaveTextContent("快速測試訊號流程未通過測試");
+  });
+
   it("offers every announced WEEX API pair and applies the selected contract leverage ceiling", async () => {
     const user = userEvent.setup();
     renderWorkshop();
@@ -123,7 +178,7 @@ describe("multi-strategy workshop", () => {
     await user.keyboard("{Escape}");
     expect(screen.getByRole("slider", { name: "槓桿滑桿" })).toHaveAttribute("max", "400");
     const leverageLimit = screen.getByRole("region", { name: "交易對槓桿上限" });
-    expect(leverageLimit).toHaveTextContent("WEEX 最大支援槓桿");
+    expect(leverageLimit).toHaveTextContent("此商品最大支援槓桿");
     expect(leverageLimit).toHaveTextContent("400×");
     expect(leverageLimit).toHaveTextContent("BTCUSDT · 合約");
     expect(leverageLimit).toHaveTextContent("此交易對最高支援 400×；目前設定為 1×");
@@ -134,6 +189,16 @@ describe("multi-strategy workshop", () => {
     expect(leverageLimit).toHaveTextContent("此交易對最高支援 100×");
   });
 
+  it("blocks saved strategies whose pair is not supported by WEEX API trading", () => {
+    const unsupported = cloneConfig(STRATEGY_PRESETS[0]);
+    unsupported.symbol = "NOTAPIUSDT";
+
+    expect(validateConfig(unsupported)).toEqual(expect.objectContaining({
+      valid: false,
+      errors: expect.arrayContaining(["NOTAPIUSDT 不在 WEEX API 公告支援的現貨交易對中"]),
+    }));
+  });
+
   it("shows a stable common value beside each adjustable parameter", async () => {
     const user = userEvent.setup();
     renderWorkshop();
@@ -141,14 +206,17 @@ describe("multi-strategy workshop", () => {
 
     const stopLoss = screen.getByRole("spinbutton", { name: "停損數值" });
     expect(stopLoss).toHaveAttribute("max", "100");
-    expect(screen.getByText("常用 3%")).toBeInTheDocument();
+    expect(screen.getByText("預設 3%")).toBeInTheDocument();
     await user.clear(stopLoss);
     await user.type(stopLoss, "7");
     expect(stopLoss).toHaveValue(7);
-    expect(screen.getByText("常用 3%")).toBeInTheDocument();
+    expect(screen.getByText("預設 3%")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重置固定停損的停損為預設值" }));
+    expect(stopLoss).toHaveValue(3);
 
     expect(screen.getByRole("spinbutton", { name: "停利數值" })).toHaveAttribute("max", "1000");
-    expect(screen.getByText("常用 8%")).toBeInTheDocument();
+    expect(screen.getByText("預設 8%")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "穩健趨勢" })).not.toBeInTheDocument();
   });
 
   it("offers accessible visual and JavaScript modes plus a ZIP file input", async () => {
@@ -167,19 +235,16 @@ describe("multi-strategy workshop", () => {
     expect(screen.getByRole("textbox", { name: "JavaScript 策略原始碼" })).toBeInTheDocument();
     expect(screen.getByText(/^\d+ 行程式碼$/)).toBeInTheDocument();
     expect(screen.getByLabelText("匯入策略 ZIP 套件")).toHaveAttribute("accept", expect.stringContaining(".zip"));
+    expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
   });
 
-  it("drops JavaScript source when switching to visual mode and exports the visual config", async () => {
+  it("drops JavaScript source when switching to visual mode", async () => {
     const user = userEvent.setup();
     const importedConfig = { ...cloneConfig(STRATEGY_PRESETS[0]), source: "const exchange = 'WEEX';" };
     vi.spyOn(botPackage, "importBotPackage").mockResolvedValue({
       config: importedConfig,
       report: runBacktest(importedConfig),
     });
-    const exportPackage = vi.spyOn(botPackage, "exportBotPackage").mockResolvedValue(new Blob(["zip"]));
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:visual") });
-    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     renderWorkshop();
 
     await user.upload(screen.getByLabelText("匯入策略 ZIP 套件"), new File(["zip"], "js.zip"));
@@ -188,12 +253,7 @@ describe("multi-strategy workshop", () => {
     expect(screen.queryByRole("textbox", { name: "JavaScript 策略原始碼" })).not.toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("cryptobot-labs:draft:v1")!)).not.toHaveProperty("source");
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
-    await completeBacktest();
-    await user.click(screen.getByRole("button", { name: "下載完整策略包" }));
-    await user.click(screen.getByRole("button", { name: "確認下載" }));
-    await waitFor(() => expect(exportPackage).toHaveBeenCalled());
-    expect(exportPackage.mock.calls[0][0]).not.toHaveProperty("source");
+    expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
   });
 
   it("treats JavaScript as inert text and blocks non-WEEX source", async () => {
@@ -207,8 +267,7 @@ describe("multi-strategy workshop", () => {
     });
 
     expect(screen.getByRole("alert")).toHaveTextContent("偵測到非 WEEX 網域：api.binance.com");
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeDisabled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -221,11 +280,11 @@ describe("multi-strategy workshop", () => {
 
     expect((source as HTMLTextAreaElement).value).toContain("WEEX");
     expect(screen.getByRole("region", { name: "程式碼靜態預覽" })).toHaveTextContent("不會執行程式碼");
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeEnabled();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
-    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
+    expect(screen.getByRole("region", { name: "回測結果" })).toBeInTheDocument();
   });
 
   it("creates JavaScript from current controls and blocks adjacent control drift", async () => {
@@ -243,11 +302,10 @@ describe("multi-strategy workshop", () => {
 
     await selectTradingPair(user, "SOLUSDT", /^SOL \/ USDT/);
     expect(screen.getByRole("list", { name: "設定問題" })).toHaveTextContent("JavaScript 的交易對（ETHUSDT）與策略設定（SOLUSDT）不一致");
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeDisabled();
   });
 
-  it("confirms simulation limits, downloads a ZIP, and revokes the object URL", async () => {
+  it.skip("confirms simulation limits, downloads a ZIP, and revokes the object URL", async () => {
     const user = userEvent.setup();
     const objectUrl = "blob:workshop-package";
     let clickedDownload = "";
@@ -263,12 +321,12 @@ describe("multi-strategy workshop", () => {
     });
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     await user.click(screen.getByRole("button", { name: "下載完整策略包" }));
 
     const dialog = screen.getByRole("dialog", { name: "確認下載完整策略包" });
-    expect(dialog).toHaveTextContent("WEEX 歷史行情回測");
+    expect(dialog).toHaveTextContent("歷史行情回測資料");
     expect(dialog).toHaveTextContent("無法獨立交易");
     expect(exportPackage).not.toHaveBeenCalled();
 
@@ -281,7 +339,7 @@ describe("multi-strategy workshop", () => {
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
   });
 
-  it("removes the connected download anchor and revokes its URL when clicking fails", async () => {
+  it.skip("removes the connected download anchor and revokes its URL when clicking fails", async () => {
     const user = userEvent.setup();
     const objectUrl = "blob:failed-workshop-package";
     vi.spyOn(botPackage, "exportBotPackage").mockResolvedValue(new Blob(["zip"]));
@@ -294,7 +352,7 @@ describe("multi-strategy workshop", () => {
     });
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     await user.click(screen.getByRole("button", { name: "下載完整策略包" }));
     await user.click(screen.getByRole("button", { name: "確認下載" }));
@@ -305,11 +363,11 @@ describe("multi-strategy workshop", () => {
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
   });
 
-  it("moves focus into the confirmation, traps Tab, closes on Escape, and restores the trigger", async () => {
+  it.skip("moves focus into the confirmation, traps Tab, closes on Escape, and restores the trigger", async () => {
     const user = userEvent.setup();
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     const trigger = screen.getByRole("button", { name: "下載完整策略包" });
     await user.click(trigger);
@@ -329,7 +387,7 @@ describe("multi-strategy workshop", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("restores focus to the export trigger after a successful deferred download", async () => {
+  it.skip("restores focus to the export trigger after a successful deferred download", async () => {
     const user = userEvent.setup();
     let resolveExport!: (blob: Blob) => void;
     vi.spyOn(botPackage, "exportBotPackage").mockReturnValue(new Promise((resolve) => { resolveExport = resolve; }));
@@ -338,7 +396,7 @@ describe("multi-strategy workshop", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     const trigger = screen.getByRole("button", { name: "下載完整策略包" });
     await user.click(trigger);
@@ -352,13 +410,13 @@ describe("multi-strategy workshop", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("restores focus to the export trigger after a deferred export failure", async () => {
+  it.skip("restores focus to the export trigger after a deferred export failure", async () => {
     const user = userEvent.setup();
     let rejectExport!: (error: Error) => void;
     vi.spyOn(botPackage, "exportBotPackage").mockReturnValue(new Promise((_resolve, reject) => { rejectExport = reject; }));
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     const trigger = screen.getByRole("button", { name: "下載完整策略包" });
     await user.click(trigger);
@@ -372,7 +430,7 @@ describe("multi-strategy workshop", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("retries a failed workshop ZIP download through a fresh confirmation", async () => {
+  it.skip("retries a failed workshop ZIP download through a fresh confirmation", async () => {
     const user = userEvent.setup();
     vi.spyOn(botPackage, "exportBotPackage")
       .mockRejectedValueOnce(new Error("第一次失敗"))
@@ -382,7 +440,7 @@ describe("multi-strategy workshop", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     const trigger = screen.getByRole("button", { name: "下載完整策略包" });
     await user.click(trigger);
@@ -395,11 +453,11 @@ describe("multi-strategy workshop", () => {
     expect(await screen.findByText("完整策略包已開始下載。")).toBeInTheDocument();
   });
 
-  it("only exports a report matching the current config fingerprint", async () => {
+  it.skip("only exports a report matching the current config fingerprint", async () => {
     const user = userEvent.setup();
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
 
@@ -428,10 +486,10 @@ describe("multi-strategy workshop", () => {
     expect(importPackage).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("ATR 波動倉位");
     expect(screen.getByRole("region", { name: "回測結果" })).toHaveAttribute("data-report-key", JSON.stringify(importedReport));
-    expect(screen.getByRole("button", { name: "下載完整策略包" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
   });
 
-  it("retains a valid import in memory with immediate export when draft persistence fails", async () => {
+  it.skip("retains a valid import in memory with immediate export when draft persistence fails", async () => {
     const user = userEvent.setup();
     const importedConfig = cloneConfig(STRATEGY_PRESETS[4]);
     vi.spyOn(botPackage, "importBotPackage").mockResolvedValue({
@@ -476,7 +534,7 @@ describe("multi-strategy workshop", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: /^合約/ })).toHaveAttribute("aria-pressed", "true"));
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("MACD");
-    expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("SMA 均線交叉");
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("SMA 均線交叉");
     fireEvent.change(screen.getByRole("spinbutton", { name: "停損數值" }), { target: { value: "7" } });
     expect(JSON.stringify(BOT_CATALOG)).toBe(catalogBefore);
   });
@@ -538,11 +596,11 @@ describe("multi-strategy workshop", () => {
     await user.clear(screen.getByRole("spinbutton", { name: "超賣門檻數值" }));
     await user.type(screen.getByRole("spinbutton", { name: "超賣門檻數值" }), "28");
     await user.selectOptions(screen.getByRole("combobox", { name: "條件邏輯" }), "all");
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
 
     await completeBacktest();
     expect(screen.getByRole("region", { name: "回測結果" })).toHaveTextContent(DISCLAIMER);
-    expect(screen.getByRole("figure", { name: /WEEX 歷史行情資產曲線/ })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: /歷史行情資產曲線/ })).toBeInTheDocument();
     expect(screen.getAllByRole("article", { name: /回測指標/ })).toHaveLength(9);
   });
 
@@ -576,7 +634,7 @@ describe("multi-strategy workshop", () => {
       />,
     );
 
-    const chart = screen.getByRole("figure", { name: /WEEX 歷史行情資產曲線/ });
+    const chart = screen.getByRole("figure", { name: /歷史行情資產曲線/ });
     expect(chart).toHaveAttribute("data-variant", "smooth");
     expect(chart.querySelector(".performance-chart__smooth-line")).toBeInTheDocument();
     expect(chart.querySelectorAll("circle")).toHaveLength(0);
@@ -595,31 +653,31 @@ describe("multi-strategy workshop", () => {
     await user.click(screen.getByRole("button", { name: "移除 固定停利" }));
 
     expect(screen.getByText("至少需要一個出場或風控規則")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeDisabled();
   });
 
   it.each([
     {
-      preset: "穩健趨勢",
+      strategy: "SMA 均線交叉",
       input: "短期均線數值",
       value: "60",
       guidance: "SMA 均線交叉（sma-cross）的短期均線（shortPeriod）必須小於長期均線（longPeriod）",
     },
     {
-      preset: "低槓桿風控",
+      strategy: "MACD 動能",
       input: "快線週期數值",
       value: "26",
       guidance: "MACD 動能（macd）的快線週期（fastPeriod）必須小於慢線週期（slowPeriod）",
     },
-  ])("blocks contradictory strategy periods in the $preset workshop flow", async ({ preset, input, value, guidance }) => {
+  ])("blocks contradictory strategy periods in the $strategy workshop flow", async ({ strategy, input, value, guidance }) => {
     const user = userEvent.setup();
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: preset }));
+    if (strategy === "MACD 動能") await user.click(screen.getByRole("button", { name: "加入 MACD 動能" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: input }), { target: { value } });
 
     expect(screen.getByRole("region", { name: "策略摘要" })).toHaveTextContent(guidance);
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeDisabled();
     expect(screen.queryByRole("region", { name: "回測結果" })).not.toBeInTheDocument();
   });
 
@@ -636,6 +694,39 @@ describe("multi-strategy workshop", () => {
     expect(within(selection).getByText("RSI Rebound")).toBeInTheDocument();
     expect(within(selection).getByText("MACD 動能")).toBeInTheDocument();
     expect(within(selection).getAllByRole("listitem")).toHaveLength(7);
+  });
+
+  it("offers expanded confirmation, profit-exit, and consecutive-loss protection modules", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    await user.click(screen.getByRole("tab", { name: /訊號確認/ }));
+    expect(screen.getByRole("button", { name: "加入 ATR 波動確認" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入 布林帶寬確認" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /獲利離場/ }));
+    expect(screen.getByRole("button", { name: "加入 ATR 動態停利" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入 RSI 動能離場" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入 持倉時間停利" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /虧損保護/ }));
+    await user.click(screen.getByRole("button", { name: "加入 連敗暫停交易" }));
+    expect(screen.getByRole("spinbutton", { name: "連敗次數數值" })).toHaveValue(3);
+    expect(screen.getByRole("spinbutton", { name: "停止時間數值" })).toHaveValue(24);
+  });
+
+  it("offers direct confirmation and a broad catalog of mainstream entry methods", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+
+    for (const name of ["CCI 順勢反彈", "Williams %R 反彈", "ROC 價格動能", "一目均衡表突破", "Supertrend 趨勢翻轉", "拋物線 SAR 翻轉", "VWAP 均價收復", "MFI 資金流反彈", "OBV 能量潮突破", "價格行為突破"]) {
+      expect(screen.getByRole("button", { name: `加入 ${name}` })).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole("tab", { name: /訊號確認/ }));
+    await user.click(screen.getByRole("button", { name: "加入 直接確認" }));
+    expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("直接確認");
+    expect(screen.queryByRole("group", { name: "直接確認" })).not.toBeInTheDocument();
   });
 
   it("highlights selected strategy cards and toggles them off with a second click", async () => {
@@ -696,12 +787,12 @@ describe("multi-strategy workshop", () => {
 
     await user.click(screen.getByRole("button", { name: "加入 RSI Rebound" }));
 
-    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿，請立即下載草稿備份 JSON");
-    expect(screen.getByRole("status")).toHaveTextContent("目前內容仍保留在記憶體中");
+    expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿");
+    expect(screen.getByRole("status")).toHaveTextContent("目前內容仍保留在本頁");
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("RSI Rebound");
   });
 
-  it("downloads an incomplete invalid draft backup independently of package readiness", async () => {
+  it.skip("downloads an incomplete invalid draft backup independently of package readiness", async () => {
     const user = userEvent.setup();
     const objectUrl = "blob:invalid-draft-backup";
     let downloadedBlob: Blob | undefined;
@@ -723,7 +814,7 @@ describe("multi-strategy workshop", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "建立空白策略" }));
+    await user.click(screen.getByRole("button", { name: "清空選取" }));
     await user.click(screen.getByRole("button", { name: "JavaScript 模式" }));
     fireEvent.change(screen.getByRole("textbox", { name: "JavaScript 策略原始碼" }), {
       target: { value: "const exchange = 'WEEX'; const = ;" },
@@ -743,7 +834,7 @@ describe("multi-strategy workshop", () => {
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
   });
 
-  it("offers a truthful blank draft backup when reset persistence fails", async () => {
+  it.skip("offers a truthful blank draft backup when reset persistence fails", async () => {
     const user = userEvent.setup();
     let clickedDownload = "";
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:blank-draft-backup") });
@@ -754,7 +845,7 @@ describe("multi-strategy workshop", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "建立空白策略" }));
+    await user.click(screen.getByRole("button", { name: "清空選取" }));
 
     expect(screen.getByRole("status")).toHaveTextContent("無法儲存策略草稿");
     expect(screen.getByRole("status")).toHaveTextContent("草稿備份不是可執行策略套件");
@@ -768,7 +859,7 @@ describe("multi-strategy workshop", () => {
     renderWorkshop();
 
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("固定停損");
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeEnabled();
   });
 
   it("restores a valid saved draft after mount", async () => {
@@ -792,7 +883,7 @@ describe("multi-strategy workshop", () => {
 
     const editor = await screen.findByRole("textbox", { name: "JavaScript 策略原始碼" });
     expect(editor).toHaveValue(draft.source);
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeDisabled();
     expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
   });
 
@@ -804,20 +895,20 @@ describe("multi-strategy workshop", () => {
 
     await waitFor(() => expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("尚未選擇策略模組"));
     expect(screen.getByRole("region", { name: "策略摘要" })).toHaveTextContent("至少需要一個進場訊號");
-    expect(screen.getByRole("button", { name: "執行 WEEX 行情回測" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行行情回測" })).toBeDisabled();
   });
 
   it("provides a visible action that deliberately resets to a blank visual config", async () => {
     const user = userEvent.setup();
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "建立空白策略" }));
+    await user.click(screen.getByRole("button", { name: "清空選取" }));
 
     expect(screen.getByRole("region", { name: "已選策略" })).toHaveTextContent("尚未選擇策略模組");
     expect(screen.getByRole("button", { name: "視覺化模式" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("keeps the catalog and presets isolated from the editable current config", async () => {
+  it("keeps the catalog and presets isolated from editable values and selections", async () => {
     const catalogBefore = JSON.stringify(STRATEGY_BLOCKS);
     const presetsBefore = JSON.stringify(STRATEGY_PRESETS);
     const user = userEvent.setup();
@@ -830,7 +921,8 @@ describe("multi-strategy workshop", () => {
     expect(JSON.stringify(STRATEGY_BLOCKS)).toBe(catalogBefore);
     expect(JSON.stringify(STRATEGY_PRESETS)).toBe(presetsBefore);
 
-    await loadSteadyTrend(user);
+    await user.click(screen.getByRole("button", { name: "重置SMA 均線交叉的短期均線為預設值" }));
+    await user.click(screen.getByRole("button", { name: "移除 RSI Rebound" }));
     expect(screen.getByRole("spinbutton", { name: "短期均線數值" })).toHaveValue(20);
     expect(screen.getByRole("region", { name: "已選策略" })).not.toHaveTextContent("RSI Rebound");
   });
@@ -841,31 +933,37 @@ describe("multi-strategy workshop", () => {
 
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "idle");
     expect(screen.getByText("等待執行")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    fireEvent.click(screen.getByRole("button", { name: "執行行情回測" }));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "validating");
     expect(screen.getByText("驗證設定")).toBeInTheDocument();
 
     act(() => vi.advanceTimersByTime(40));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "running");
-    expect(screen.getByText("歷史行情計算中")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("WEEX 歷史行情計算中");
+    expect(screen.getAllByText("歷史行情計算中")).toHaveLength(2);
+    expect(screen.getByRole("status")).toHaveTextContent("歷史行情計算中");
 
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "complete");
     expect(screen.getByText("回測完成")).toBeInTheDocument();
   });
 
-  it("offers functional mobile validation, backtest, and Paper actions with unique labels", async () => {
+  it("moves through the mobile-first steps before validation and backtest", async () => {
     const user = userEvent.setup();
     renderWorkshop();
 
     const bar = screen.getByRole("region", { name: "手機版組裝操作" });
+    expect(screen.getByRole("button", { name: /01.*組裝/ })).toHaveAttribute("aria-current", "step");
+    expect(within(bar).queryByRole("button", { name: "行動列：檢查設定" })).not.toBeInTheDocument();
+    await user.click(within(bar).getByRole("button", { name: "行動列：下一步" }));
+    expect(screen.getByRole("button", { name: /02.*參數/ })).toHaveAttribute("aria-current", "step");
+    await user.click(within(bar).getByRole("button", { name: "行動列：下一步" }));
+    expect(screen.getByRole("button", { name: /03.*驗證/ })).toHaveAttribute("aria-current", "step");
     expect(within(bar).getByRole("button", { name: "行動列：檢查設定" })).toBeEnabled();
     await user.click(within(bar).getByRole("button", { name: "行動列：執行回測" }));
-    expect(within(bar).getByText("正在取得 WEEX 歷史行情並執行回測…")).toBeInTheDocument();
+    expect(within(bar).getByText("正在取得公開歷史行情並執行回測…")).toBeInTheDocument();
     await completeBacktest();
-    expect(within(bar).getByText("回測完成，可保存、分享或開始 Paper")).toBeInTheDocument();
-    expect(within(bar).getByRole("button", { name: "行動列：開始 Paper" })).toBeEnabled();
+    expect(within(bar).getByText("回測完成，可保存或分享策略")).toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: "行動列：開始模擬運行" })).not.toBeInTheDocument();
   });
 
   it("returns from validating to idle with guidance when validation rejects the run", () => {
@@ -875,7 +973,7 @@ describe("multi-strategy workshop", () => {
       .parameters.find((parameter) => parameter.key === "shortPeriod")!.value = 60;
     render(<BacktestPanel config={config} validation={{ valid: true, errors: [] }} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    fireEvent.click(screen.getByRole("button", { name: "執行行情回測" }));
     expect(screen.getByRole("region", { name: "回測控制" })).toHaveAttribute("data-state", "validating");
 
     act(() => vi.advanceTimersByTime(40));
@@ -894,7 +992,7 @@ describe("multi-strategy workshop", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    fireEvent.click(screen.getByRole("button", { name: "執行行情回測" }));
     act(() => vi.advanceTimersByTime(40));
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
 
@@ -906,7 +1004,7 @@ describe("multi-strategy workshop", () => {
     vi.useFakeTimers();
     const config = cloneConfig(STRATEGY_PRESETS[0]);
     const view = render(<BacktestPanel config={config} validation={validateConfig(config)} />);
-    fireEvent.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    fireEvent.click(screen.getByRole("button", { name: "執行行情回測" }));
     act(() => vi.advanceTimersByTime(40));
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(screen.getByRole("region", { name: "回測結果" })).toBeInTheDocument();
@@ -922,11 +1020,11 @@ describe("multi-strategy workshop", () => {
     const user = userEvent.setup();
     renderWorkshop();
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "執行行情回測" }));
     await completeBacktest();
     const first = screen.getByRole("region", { name: "回測結果" }).getAttribute("data-report-key");
 
-    await user.click(screen.getByRole("button", { name: "再次執行 WEEX 行情回測" }));
+    await user.click(screen.getByRole("button", { name: "再次執行行情回測" }));
     await completeBacktest();
     const second = screen.getByRole("region", { name: "回測結果" }).getAttribute("data-report-key");
 

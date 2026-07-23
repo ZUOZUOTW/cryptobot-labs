@@ -47,6 +47,41 @@ describe("WEEX historical funding collection", () => {
     });
   });
 
+  it("paginates MARK history backwards when WEEX returns the latest full page", async () => {
+    const interval = 4 * 60 * 60 * 1_000;
+    const earlyFundingTime = 11 * interval;
+    const lateFundingTime = 151 * interval;
+    const transport = new RecordingTransport([
+      ok([
+        rate(lateFundingTime, "0.0001", "cmt_aaveusdt"),
+        rate(earlyFundingTime, "0.0001", "cmt_aaveusdt"),
+      ]),
+      ok(Array.from({ length: 100 }, (_, index) => mark((100 + index) * interval, "200"))),
+      ok(Array.from({ length: 99 }, (_, index) => mark((1 + index) * interval, "100"))),
+    ]);
+
+    const result = await new WeexPublicClient(transport, () => 200 * interval).collectHistoricalFunding({
+      market: "futures",
+      symbol: "AAVEUSDT",
+      startTime: 10 * interval,
+      endTime: 200 * interval,
+      maxMarkAgeMs: 10 * interval,
+      strict: true,
+    });
+
+    expect(transport.requests.map(({ url }) => url)).toEqual([
+      "https://api-contract.weex.com/capi/v2/market/getHistoryFundRate?symbol=cmt_aaveusdt&limit=100",
+      `https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=AAVEUSDT&interval=4h&startTime=0&endTime=${200 * interval}&limit=100&priceType=MARK`,
+      `https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=AAVEUSDT&interval=4h&startTime=0&endTime=${100 * interval - 1}&limit=100&priceType=MARK`,
+    ]);
+    expect(result.complete).toBe(true);
+    expect(result.funding).toEqual([
+      { timestamp: earlyFundingTime, rate: "0.0001", markPrice: "100" },
+      { timestamp: lateFundingTime, rate: "0.0001", markPrice: "200" },
+    ]);
+    expect(result.provenance.markPages).toBe(2);
+  });
+
   it("sorts and deduplicates identical funding rows but rejects conflicting duplicates", async () => {
     const good = new RecordingTransport([
       ok([rate(20, "0.2"), rate(10, "0.1"), rate(20, "0.2")]),
@@ -63,9 +98,24 @@ describe("WEEX historical funding collection", () => {
     })).rejects.toMatchObject({ category: "schema" });
   });
 
+  it("normalizes bounded scientific-notation funding rates from the official API", async () => {
+    const transport = new RecordingTransport([
+      ok([rate(10, "5.5E-7"), rate(20, "-1.25e-6")]),
+      ok([mark(0, "10", 9), mark(10, "20", 19)]),
+    ]);
+    const result = await new WeexPublicClient(transport, () => 100).collectHistoricalFunding({
+      market: "futures", symbol: "BTCUSDT", startTime: 0, endTime: 21, maxMarkAgeMs: 20,
+    });
+    expect(result.funding).toEqual([
+      { timestamp: 10, rate: "0.00000055", markPrice: "10" },
+      { timestamp: 20, rate: "-0.00000125", markPrice: "20" },
+    ]);
+  });
+
   it.each([
     [{ symbol: "cmt_btcusdt", fundingRate: 0.1, fundingTime: 10 }],
     [{ symbol: "cmt_btcusdt", fundingRate: "NaN", fundingTime: 10 }],
+    [{ symbol: "cmt_btcusdt", fundingRate: "1e999", fundingTime: 10 }],
     [{ symbol: "cmt_btcusdt", fundingRate: "0.1", fundingTime: "ten" }],
     [{ symbol: "cmt_btcusdt", fundingRate: "0.1", fundingTime: 10, extra: true }],
     [{ fundingRate: "0.1", fundingTime: 10 }],
@@ -216,7 +266,7 @@ describe("WEEX historical funding collection", () => {
     const interval = 4 * 60 * 60 * 1_000;
     const responses = [ok(rates), ...Array.from({ length: MAX_FUNDING_MARK_PAGES }, (_, page) =>
       ok(Array.from({ length: 100 }, (_, rowIndex) => {
-        const openTime = (page * 100 + rowIndex) * interval;
+        const openTime = ((MAX_FUNDING_MARK_PAGES - page - 1) * 100 + rowIndex) * interval;
         return mark(openTime, "1", openTime + interval - 1);
       })))];
     const transport = new RecordingTransport(responses);

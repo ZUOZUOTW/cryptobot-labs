@@ -13,7 +13,7 @@ describe("CryptoBot Labs production shell", () => {
     ]);
 
     expect(layout).toContain("title: SITE_TITLE");
-    expect(layout).toContain('<html lang="zh-Hant">');
+    expect(layout).toContain('<html dir={localeDirection(initialLocale)} lang={initialLocale} suppressHydrationWarning>');
     expect(layout).toContain("<SiteHeader />");
     expect(layout).toContain("<SiteFooter />");
     expect(layout).toContain('<main className="site-main" id="main-content"');
@@ -32,6 +32,8 @@ describe("CryptoBot Labs production shell", () => {
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
     expect(footer).toContain("模擬回測資料，不代表未來績效");
     expect(footer).not.toContain("WEEX 專用");
-    expect(footer).toContain("正式連線使用 WEEX OAuth");
+    expect(footer).toContain('href="/legal"');
+    expect(footer).toContain("歷史回測或模擬研究資料");
+    expect(footer).not.toContain("OAuth");
   });
 });

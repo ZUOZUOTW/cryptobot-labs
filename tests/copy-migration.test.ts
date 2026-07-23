@@ -27,17 +27,20 @@ async function allUserVisibleSource() {
 }
 
 describe("WEEX-only product copy", () => {
-  it("removes WEEX-only badges without claiming other exchanges", async () => {
+  it("keeps the primary product experience platform-neutral without unsupported exchange claims", async () => {
     const source = await allUserVisibleSource();
 
     expect(source).not.toMatch(/WEEX ONLY|WEEX 專用|WEEX 專屬/i);
-    expect(source).toContain("WEEX 官方 OAuth");
     expect(source).not.toMatch(/支援 Binance|支援多交易所/i);
   });
 
-  it("explains the currently implemented live connection without weakening its adapter boundary", async () => {
-    const source = await allUserVisibleSource();
+  it("retains WEEX only where the implementation or evidence provenance requires it", async () => {
+    const [connections, backtestAdapter] = await Promise.all([
+      readFile(resolve(process.cwd(), "app/connections/page.tsx"), "utf8"),
+      readFile(resolve(process.cwd(), "components/workshop/JavaScriptEditor.tsx"), "utf8"),
+    ]);
 
-    expect(source).toContain("正式版透過 WEEX 官方 OAuth 授權");
+    expect(connections).toContain("WEEX");
+    expect(backtestAdapter).toContain('exchange: \\"WEEX\\"');
   });
 });

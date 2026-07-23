@@ -6,17 +6,14 @@ import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
 import { PackagePanel } from "../../components/workshop/PackagePanel";
 import { StrategyPalette } from "../../components/workshop/StrategyPalette";
-import { StrategySummary } from "../../components/workshop/StrategySummary";
+import { StrategySummary, type SignalFlowCheckState } from "../../components/workshop/StrategySummary";
 import { BOT_CATALOG } from "../../data/bots";
 import { STRATEGY_PRESETS } from "../../data/strategies";
 import { backtestConfigFingerprint } from "../../lib/backtest";
-import { downloadBlob } from "../../lib/browser-download";
 import { loadDraft, saveDraft } from "../../lib/storage";
 import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "../../lib/types";
-import { validateConfig, validateDraftConfig } from "../../lib/strategy-validation";
+import { validateConfig } from "../../lib/strategy-validation";
 import { captureAttribution } from "../../lib/attribution";
-import { BacktestRequestForm } from "../../components/backtests/BacktestRequestForm";
-import { usePlatformAuth } from "../../components/PlatformAuthProvider";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -48,27 +45,37 @@ const blankConfig = (): BotConfig => ({
   name: "未命名策略",
   blocks: [],
 });
-const draftBackupFilename = (config: BotConfig): string => {
-  const slug = config.id.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `${slug || "weex-strategy"}-draft-backup.json`;
-};
 const draftSaveWarning = (reason: string): string => (
-  `${reason}，請立即下載草稿備份 JSON。此草稿備份不是可執行策略套件；目前內容仍保留在記憶體中。`
+  `${reason}；目前內容仍保留在本頁，可調整後再次儲存。`
 );
 type WorkshopMode = "visual" | "javascript";
+type MobileWorkshopStep = "build" | "parameters" | "test" | "publish";
+
+const MOBILE_WORKSHOP_STEPS = [
+  { id: "build", number: "01", label: "組裝" },
+  { id: "parameters", number: "02", label: "參數" },
+  { id: "test", number: "03", label: "驗證" },
+  { id: "publish", number: "04", label: "保存" },
+] as const satisfies ReadonlyArray<{ id: MobileWorkshopStep; number: string; label: string }>;
 
 interface AssociatedReport {
   fingerprint: string;
   report: BacktestReport;
 }
 
+interface AssociatedFlowCheck {
+  fingerprint: string;
+  state: Exclude<SignalFlowCheckState, "untested">;
+}
+
 export default function WorkshopPage() {
-  const { mode: authMode } = usePlatformAuth();
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [draftError, setDraftError] = useState("");
   const [mode, setMode] = useState<WorkshopMode>("visual");
   const [associatedReport, setAssociatedReport] = useState<AssociatedReport | null>(null);
+  const [associatedFlowCheck, setAssociatedFlowCheck] = useState<AssociatedFlowCheck | null>(null);
   const [mobileMessage, setMobileMessage] = useState("");
+  const [mobileStep, setMobileStep] = useState<MobileWorkshopStep>("build");
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -89,6 +96,10 @@ export default function WorkshopPage() {
   const validation = useMemo(() => validateConfig(config), [config]);
   const configFingerprint = useMemo(() => backtestConfigFingerprint(config), [config]);
   const currentReport = associatedReport?.fingerprint === configFingerprint ? associatedReport.report : null;
+  const currentFlowCheck: SignalFlowCheckState = associatedFlowCheck?.fingerprint === configFingerprint
+    ? associatedFlowCheck.state
+    : "untested";
+  const mobileStepIndex = MOBILE_WORKSHOP_STEPS.findIndex((step) => step.id === mobileStep);
 
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
     const next = createNext(config);
@@ -97,7 +108,6 @@ export default function WorkshopPage() {
     setConfig(next);
   };
 
-  const selectPreset = (preset: BotConfig) => updateConfig(() => cloneConfig(preset));
   const addBlock = (block: StrategyBlock) => updateConfig((current) => (
     current.blocks.some((selected) => selected.id === block.id)
       ? current
@@ -149,7 +159,7 @@ export default function WorkshopPage() {
   const updateSource = (source: string) => updateConfig((current) => ({ ...current, source }));
   const acceptReport = (report: BacktestReport) => {
     setAssociatedReport({ fingerprint: configFingerprint, report });
-    setMobileMessage("回測完成，可保存、分享或開始 Paper");
+    setMobileMessage("回測完成，可保存或分享策略");
   };
   const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
     const next = cloneConfig(importedConfig);
@@ -168,13 +178,15 @@ export default function WorkshopPage() {
     setConfig(next);
     setMode("visual");
     setAssociatedReport(null);
-    setMobileMessage("已建立空白策略，請加入進場與出場或風控規則。");
+    setMobileStep("build");
+    setMobileMessage("已清空選取，請重新加入進場與出場或風控規則。");
   };
 
-  const downloadDraftBackup = () => {
-    if (!validateDraftConfig(config).valid) return;
-    const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: "application/json" });
-    downloadBlob(blob, draftBackupFilename(config));
+  const moveToMobileStep = (nextIndex: number) => {
+    const next = MOBILE_WORKSHOP_STEPS[nextIndex];
+    if (!next) return;
+    setMobileStep(next.id);
+    setMobileMessage(`目前步驟：${next.label}`);
   };
 
   return (
@@ -182,63 +194,96 @@ export default function WorkshopPage() {
       <header className="page-intro workshop-page__intro">
         <p className="eyebrow">ORBITAL LAB / QUICK ASSEMBLY</p>
         <h1>多策略組裝車間</h1>
-        <p>從訊號、確認、出場、倉位與風控模組快速組合一套 WEEX 策略，再以 WEEX 公開歷史行情驗證策略想法。</p>
-        <p className="simulation-disclosure" role="note">WEEX 歷史行情回測，不代表未來績效</p>
+        <p>從訊號、確認、出場、倉位與風控模組快速組合策略，再以公開歷史行情驗證策略想法。</p>
+        <p className="simulation-disclosure" role="note">歷史行情回測，不代表未來績效</p>
       </header>
 
       {draftError && (
         <div className="draft-status" role="status">
           <p>{draftError}</p>
-          {validateDraftConfig(config).valid && (
-            <button className="button button--secondary" onClick={downloadDraftBackup} type="button">
-              下載草稿備份 JSON
-            </button>
-          )}
+          <span>目前編輯內容仍保留在頁面中，可調整後再次儲存。</span>
         </div>
       )}
 
-      <div className="workshop-mode" aria-label="編輯模式" role="group">
-        <button aria-pressed={mode === "visual"} onClick={() => selectMode("visual")} type="button">視覺化模式</button>
-        <button aria-pressed={mode === "javascript"} onClick={() => selectMode("javascript")} type="button">JavaScript 模式</button>
-        <button onClick={resetToBlank} type="button">建立空白策略</button>
+      <div className="workshop-toolbar">
+        <div className="workshop-mode" aria-label="編輯模式" role="group">
+          <button aria-pressed={mode === "visual"} onClick={() => selectMode("visual")} type="button">視覺化模式</button>
+          <button aria-pressed={mode === "javascript"} onClick={() => selectMode("javascript")} type="button">JavaScript 模式</button>
+          <button className="workshop-clear" onClick={resetToBlank} type="button">清空選取</button>
+        </div>
       </div>
 
+      <nav className="workshop-stepper" aria-label="手機版組裝步驟">
+        <ol>
+          {MOBILE_WORKSHOP_STEPS.map((step, index) => (
+            <li key={step.id}>
+              <button
+                aria-controls={`workshop-step-${step.id}`}
+                aria-current={mobileStep === step.id ? "step" : undefined}
+                onClick={() => moveToMobileStep(index)}
+                type="button"
+              >
+                <span>{step.number}</span>
+                {step.label}
+              </button>
+            </li>
+          ))}
+        </ol>
+      </nav>
+
       <div className="workshop-grid">
-        {mode === "visual" ? (
-          <StrategyPalette
-            onAdd={addBlock}
-            onMove={moveBlock}
-            onPreset={selectPreset}
-            onRemove={removeBlock}
-            selected={config.blocks}
+        <div className="workshop-step-panel" data-mobile-active={mobileStep === "build"} id="workshop-step-build">
+          {mode === "visual" ? (
+            <StrategyPalette
+              onAdd={addBlock}
+              onMove={moveBlock}
+              onRemove={removeBlock}
+              selected={config.blocks}
+            />
+          ) : (
+            <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config)} onChange={updateSource} />
+          )}
+        </div>
+        <div className="workshop-step-panel" data-mobile-active={mobileStep === "parameters"} id="workshop-step-parameters">
+          <ParameterPanel config={config} onConfigField={updateField} onParameter={updateParameter} />
+        </div>
+        <div className="workshop-grid__results workshop-step-panel" data-mobile-active={mobileStep === "test"} id="workshop-step-test">
+          <StrategySummary
+            config={config}
+            onFlowCheck={(state) => {
+              if (state !== "untested") setAssociatedFlowCheck({ fingerprint: configFingerprint, state });
+            }}
+            validation={validation}
           />
-        ) : (
-          <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config)} onChange={updateSource} />
-        )}
-        <ParameterPanel config={config} onConfigField={updateField} onParameter={updateParameter} />
-        <div className="workshop-grid__results">
-          <StrategySummary config={config} validation={validation} />
           <div className="backtest-track">
-            <p className="backtest-track__label">快速驗證 · WEEX 公開歷史 K 線 · 無需登入</p>
+            <p className="backtest-track__label">快速驗證 · 公開歷史 K 線 · 無需登入</p>
             <BacktestPanel
               config={config}
               onReport={acceptReport}
-              onRun={() => setMobileMessage("正在取得 WEEX 歷史行情並執行回測…")}
+              onRun={() => setMobileMessage("正在取得公開歷史行情並執行回測…")}
               restoredReport={currentReport}
               validation={validation}
             />
-            {authMode === "production" && <BacktestRequestForm compact config={config} />}
           </div>
         </div>
-        <PackagePanel config={config} onImport={acceptImport} report={currentReport} />
+        <div className="workshop-step-panel" data-mobile-active={mobileStep === "publish"} id="workshop-step-publish">
+          <PackagePanel config={config} flowCheckState={currentFlowCheck} onImport={acceptImport} report={currentReport} />
+        </div>
       </div>
 
       <section className="workshop-mobile-actions" aria-label="手機版組裝操作">
-        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可開始 Paper" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
+        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可保存或分享策略" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
         <div>
-          <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行 WEEX 歷史行情回測。" : validation.errors.join("；"))} type="button">檢查</button>
-          <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => document.querySelector<HTMLButtonElement>(".backtest-run")?.click()} type="button">回測</button>
-          <button aria-label="行動列：開始 Paper" disabled={!currentReport} onClick={() => document.querySelector<HTMLButtonElement>('.workshop-primary-actions .button--primary')?.click()} type="button">Paper</button>
+          <button aria-label="行動列：上一步" disabled={mobileStepIndex === 0} onClick={() => moveToMobileStep(mobileStepIndex - 1)} type="button">上一步</button>
+          {mobileStep === "test" && (
+            <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行歷史行情回測。" : validation.errors.join("；"))} type="button">檢查</button>
+          )}
+          {mobileStep === "test" && (
+            <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => document.querySelector<HTMLButtonElement>(".backtest-run")?.click()} type="button">回測</button>
+          )}
+          {mobileStepIndex < MOBILE_WORKSHOP_STEPS.length - 1 && (
+            <button className="workshop-mobile-actions__next" aria-label="行動列：下一步" onClick={() => moveToMobileStep(mobileStepIndex + 1)} type="button">下一步</button>
+          )}
         </div>
       </section>
     </div>

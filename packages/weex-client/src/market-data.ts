@@ -89,6 +89,7 @@ interface RawFundingEvent {
 }
 
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const SIGNED_SCIENTIFIC_DECIMAL = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?[eE]([+-]?\d{1,3})$/;
 const MAX_MARK_PAGE_ROWS = 100;
 const MAX_NUMERIC_STRING_LENGTH = 128;
 
@@ -106,6 +107,36 @@ function normalizeFundingSymbols(symbol: string): { v2: string; v3: string } {
   const core = normalized.startsWith("cmt_") ? normalized.slice(4) : normalized;
   if (!/^[a-z0-9]{4,30}$/.test(core)) throw validationError("Invalid futures symbol");
   return { v2: `cmt_${core}`, v3: core.toUpperCase() };
+}
+
+function normalizeFundingRate(value: unknown, index: number): string {
+  if (typeof value !== "string" || value.length > MAX_NUMERIC_STRING_LENGTH) {
+    throw schemaError(`Invalid funding rate at ${index}`);
+  }
+  if (SIGNED_DECIMAL.test(value)) return value;
+  const match = SIGNED_SCIENTIFIC_DECIMAL.exec(value);
+  if (!match) throw schemaError(`Invalid funding rate at ${index}`);
+  const [, sign, integer, fraction = "", exponentText] = match;
+  const exponent = Number(exponentText);
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > MAX_NUMERIC_STRING_LENGTH) {
+    throw schemaError(`Invalid funding rate at ${index}`);
+  }
+  const digits = `${integer}${fraction}`;
+  const decimalPosition = integer!.length + exponent;
+  const expanded = decimalPosition <= 0
+    ? `0.${"0".repeat(-decimalPosition)}${digits}`
+    : decimalPosition >= digits.length
+      ? `${digits}${"0".repeat(decimalPosition - digits.length)}`
+      : `${digits.slice(0, decimalPosition)}.${digits.slice(decimalPosition)}`;
+  const [whole = "0", decimal = ""] = expanded.split(".");
+  const normalizedWhole = whole.replace(/^0+(?=\d)/, "");
+  const normalizedDecimal = decimal.replace(/0+$/, "");
+  const normalized = normalizedDecimal ? `${normalizedWhole}.${normalizedDecimal}` : normalizedWhole;
+  const result = normalized === "0" ? "0" : `${sign}${normalized}`;
+  if (result.length > MAX_NUMERIC_STRING_LENGTH || !SIGNED_DECIMAL.test(result)) {
+    throw schemaError(`Invalid funding rate at ${index}`);
+  }
+  return result;
 }
 
 function validateFundingRequest(
@@ -146,18 +177,15 @@ function parseFundingRows(body: unknown, expectedSymbol: string): RawFundingEven
     if (typeof row.symbol !== "string" || row.symbol.length > 34 || row.symbol !== expectedSymbol) {
       throw schemaError(`Unexpected funding symbol at ${index}`);
     }
-    if (typeof row.fundingRate !== "string" || row.fundingRate.length > MAX_NUMERIC_STRING_LENGTH ||
-        !SIGNED_DECIMAL.test(row.fundingRate)) {
-      throw schemaError(`Invalid funding rate at ${index}`);
-    }
+    const normalizedRate = normalizeFundingRate(row.fundingRate, index);
     const timestamp = typeof row.fundingTime === "number"
       ? row.fundingTime
       : typeof row.fundingTime === "string" && row.fundingTime.length <= 16 && /^\d+$/.test(row.fundingTime)
         ? Number(row.fundingTime) : NaN;
     if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw schemaError(`Invalid funding time at ${index}`);
     const current = byTime.get(timestamp);
-    if (current && current.rate !== row.fundingRate) throw schemaError(`Conflicting funding rows at ${timestamp}`);
-    byTime.set(timestamp, { timestamp, rate: row.fundingRate });
+    if (current && current.rate !== normalizedRate) throw schemaError(`Conflicting funding rows at ${timestamp}`);
+    byTime.set(timestamp, { timestamp, rate: normalizedRate });
   }
   return [...byTime.values()].sort((left, right) => left.timestamp - right.timestamp);
 }
@@ -406,9 +434,12 @@ export class WeexPublicClient {
 
     const markCandles: Candle[] = [];
     let markPages = 0;
-    let cursor = Math.max(0, request.startTime - maxMarkAgeMs);
+    const markStartTime = Math.max(0, request.startTime - maxMarkAgeMs);
+    let cursorEndTime = request.endTime;
     let terminationReason: "mark-page-limit" | "mark-candle-limit" | undefined;
-    while (requestedFunding.length > 0 && cursor < request.endTime) {
+    // WEEX returns the latest `limit` MARK candles in the requested window.
+    // Walk the window backwards so every page reaches older funding events.
+    while (requestedFunding.length > 0 && cursorEndTime > markStartTime) {
       signal?.throwIfAborted();
       if (markPages >= MAX_FUNDING_MARK_PAGES) {
         terminationReason = "mark-page-limit";
@@ -417,8 +448,8 @@ export class WeexPublicClient {
       const markUrl = new URL(MARK_ENDPOINT, FUTURES_ORIGIN);
       markUrl.searchParams.set("symbol", symbols.v3);
       markUrl.searchParams.set("interval", MARK_INTERVAL);
-      markUrl.searchParams.set("startTime", String(cursor));
-      markUrl.searchParams.set("endTime", String(request.endTime));
+      markUrl.searchParams.set("startTime", String(markStartTime));
+      markUrl.searchParams.set("endTime", String(cursorEndTime));
       markUrl.searchParams.set("limit", String(FUNDING_MARK_PAGE_SIZE));
       markUrl.searchParams.set("priceType", "MARK");
       const response = await this.transport.send({
@@ -436,10 +467,11 @@ export class WeexPublicClient {
         break;
       }
       if (page.length < FUNDING_MARK_PAGE_SIZE) break;
-      const maximumOpenTime = Math.max(...page.map(({ openTime }) => openTime));
-      const nextCursor = maximumOpenTime + MARK_INTERVAL_MS;
-      if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) break;
-      cursor = nextCursor;
+      const minimumOpenTime = Math.min(...page.map(({ openTime }) => openTime));
+      if (minimumOpenTime <= markStartTime) break;
+      const nextEndTime = minimumOpenTime - 1;
+      if (!Number.isSafeInteger(nextEndTime) || nextEndTime >= cursorEndTime) break;
+      cursorEndTime = nextEndTime;
     }
 
     const marks = mergeMarkCandles(markCandles);

@@ -88,15 +88,21 @@ describe("visual historical strategy evaluator", () => {
   it.each([
     ["rsi", [100, 90, 80, 85]],
     ["sma-cross", [10, 10, 10, 10, 10, 10, 10, 10, 10, 1, 20]],
+    ["ema-cross", [10, 9, 8, 7, 6, 5, 20]],
+    ["stochastic", [3, 3, 4, 3, 4]],
     ["macd", [10, 9, 8, 7, 6, 5, 20]],
     ["bollinger-breakout", [10, 10, 10, 10, 10, 12]],
+    ["donchian-breakout", [10, 10, 10, 10, 10, 10, 13]],
     ["grid", [100, 98]],
   ])("turns the %s visual entry block into a deterministic buy signal", async (id, values) => {
     let candidate = withBlocks([id]);
     if (id === "rsi") candidate = setParameter(setParameter(candidate, id, "period", 2), id, "oversold", 30);
     if (id === "sma-cross") candidate = setParameter(setParameter(candidate, id, "shortPeriod", 2), id, "longPeriod", 10);
+    if (id === "ema-cross") candidate = setParameter(setParameter(candidate, id, "shortPeriod", 2), id, "longPeriod", 5);
+    if (id === "stochastic") candidate = setParameter(setParameter(setParameter(candidate, id, "kPeriod", 3), id, "dPeriod", 2), id, "oversold", 40);
     if (id === "macd") candidate = setParameter(setParameter(setParameter(candidate, id, "fastPeriod", 2), id, "slowPeriod", 5), id, "signalPeriod", 2);
     if (id === "bollinger-breakout") candidate = setParameter(setParameter(candidate, id, "period", 5), id, "deviation", 1);
+    if (id === "donchian-breakout") candidate = setParameter(candidate, id, "period", 5);
     if (id === "grid") candidate = setParameter(setParameter(candidate, id, "gridCount", 2), id, "range", 2);
     const evaluator = createVisualHistoricalEvaluator(candidate);
     const first = await evaluator.evaluate(input(candles(values)));
@@ -146,6 +152,40 @@ describe("visual historical strategy evaluator", () => {
     expect((await createVisualHistoricalEvaluator(all).evaluate(input(highVolume))).action).toBe("hold");
     expect((await createVisualHistoricalEvaluator(any).evaluate(input(lowVolume))).action).toBe("hold");
     expect((await createVisualHistoricalEvaluator(any).evaluate(input(highVolume))).action).toBe("buy");
+  });
+
+  it("uses ADX trend strength as a real confirmation filter", async () => {
+    let candidate = withBlocks(["grid", "adx-confirmation"]);
+    candidate = setParameter(setParameter(candidate, "grid", "gridCount", 2), "grid", "range", 2);
+    candidate = setParameter(setParameter(candidate, "adx-confirmation", "period", 3), "adx-confirmation", "minimumStrength", 25);
+    const trending = await createVisualHistoricalEvaluator(candidate).evaluate(input(candles([110, 108, 106, 104, 102, 100, 98])));
+    const flat = await createVisualHistoricalEvaluator(candidate).evaluate(input(candles([100, 98])));
+    expect(trending.action).toBe("buy");
+    expect(flat).toMatchObject({ action: "hold", reason: "confirm:not-triggered" });
+  });
+
+  it("passes an entry signal through the zero-parameter direct confirmation module", async () => {
+    let candidate = withBlocks(["grid", "direct-confirmation"]);
+    candidate = setParameter(setParameter(candidate, "grid", "gridCount", 2), "grid", "range", 2);
+    expect(await createVisualHistoricalEvaluator(candidate).evaluate(input(candles([100, 98]))))
+      .toMatchObject({ action: "buy" });
+  });
+
+  it.each([
+    "cci-rebound",
+    "williams-r-rebound",
+    "roc-momentum",
+    "ichimoku-breakout",
+    "supertrend-reversal",
+    "parabolic-sar",
+    "vwap-reclaim",
+    "mfi-rebound",
+    "obv-breakout",
+    "price-action-breakout",
+  ])("evaluates the %s mainstream entry method with canonical historical candles", async (id) => {
+    const values = Array.from({ length: 240 }, (_, index) => 100 + index * 0.08 + Math.sin(index / 4) * 3);
+    const signal = await createVisualHistoricalEvaluator(withBlocks([id])).evaluate(input(candles(values)));
+    expect(["buy", "sell", "hold"]).toContain(signal.action);
   });
 
   it("uses fixed and ATR position parameters to calculate bounded allocation", async () => {
@@ -238,6 +278,25 @@ describe("visual historical strategy evaluator", () => {
       ...portfolio,
       position: { side: "long", entryPrice: "100", peakPrice: "100", troughPrice: "100", quantity: "1", usedMargin: "100", layerCount: 1 },
     }))).toMatchObject({ action: "close", reason: /maximum-daily-loss/ });
+  });
+
+  it("pauses new entries after configurable consecutive losses and resumes after the cooldown", async () => {
+    let candidate = withBlocks(["dca", "consecutive-loss-pause"]);
+    candidate = setParameter(setParameter(candidate, "dca", "intervalDays", 1), "consecutive-loss-pause", "lossCount", 3);
+    candidate = setParameter(candidate, "consecutive-loss-pause", "pauseHours", 24);
+    const evaluator = createVisualHistoricalEvaluator(candidate);
+    const items = candles([100, 100], undefined, 100 * 3_600_000).map((candle, index) => ({
+      ...candle,
+      openTime: 5 * 86_400_000 + index * 86_400_000,
+      closeTime: 5 * 86_400_000 + (index + 1) * 86_400_000 - 1,
+    }));
+    const now = items.at(-1)!.closeTime;
+    const basePortfolio = { equity: "1000", dayStartEquity: "1000", utcDay: "1970-01-07", consecutiveLosses: 3 } as const;
+
+    expect(await evaluator.evaluate(input(items, "spot", { ...basePortfolio, lastLossAt: now - 3_600_000 })))
+      .toMatchObject({ action: "hold", reason: "consecutive-loss-pause:suppress" });
+    expect((await evaluator.evaluate(input(items, "spot", { ...basePortfolio, lastLossAt: now - 25 * 3_600_000 }))).action)
+      .toBe("buy");
   });
 
   it("uses linear short returns at the exact take-profit and stop-loss boundaries", async () => {

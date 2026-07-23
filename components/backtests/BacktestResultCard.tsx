@@ -59,7 +59,7 @@ export function BacktestResultCard({ backtest }: { backtest: HistoricalBacktestR
       <header>
         <div><p className="eyebrow">VERIFIED EVIDENCE</p><h2 id={`result-${backtest.id}`}>歷史回測</h2></div>
         <div className="evidence-badges" aria-label="績效證據層級">
-          <span>WEEX 公開行情</span><strong>不是實盤績效</strong>
+          <span>公開歷史行情</span><strong>不是實盤績效</strong>
         </div>
       </header>
       <dl className="historical-metrics">

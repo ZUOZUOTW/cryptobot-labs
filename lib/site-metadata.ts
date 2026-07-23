@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
-export const SITE_TITLE = "CryptoBot Labs｜WEEX 自動交易策略實驗室";
-export const SITE_DESCRIPTION = "探索、組裝與分享 WEEX 自動交易策略；先用公開歷史資料回測與 Paper 模擬，再透過 WEEX OAuth 安全準備雲端執行。";
-export const SOCIAL_IMAGE_ALT = "CryptoBot Labs：把交易想法，組成能先模擬的 WEEX 自動策略。";
+export const SITE_TITLE = "CryptoBot Labs｜自動交易策略實驗室";
+export const SITE_DESCRIPTION = "探索、組裝與分享自動交易策略；先用公開歷史資料回測與模擬運行，再安全準備雲端執行。";
+export const SOCIAL_IMAGE_ALT = "CryptoBot Labs：簡單點選，實現自動化策略";
 
 const DEFAULT_SITE_METADATA = {
   title: SITE_TITLE,
@@ -16,7 +16,12 @@ const SOCIAL_IMAGE = {
 } as const;
 
 type HeaderReader = Pick<Headers, "get">;
-type SiteMetadataCopy = typeof DEFAULT_SITE_METADATA;
+type SiteMetadataCopy = {
+  title: string;
+  description: string;
+  locale?: string;
+  imageAlt?: string;
+};
 
 const validPort = (port: string | undefined) => {
   if (port === undefined) return true;
@@ -85,21 +90,27 @@ export function buildSiteMetadata(
     icons: {
       icon: "/favicon.svg",
       shortcut: "/favicon.svg",
+      apple: "/icons/cryptobot-192.png",
+    },
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "black-translucent",
+      title: "CryptoBot",
     },
     openGraph: {
       type: "website",
-      locale: "zh_TW",
+      locale: copy.locale ?? "zh_TW",
       siteName: "CryptoBot Labs",
       title: copy.title,
       description: copy.description,
       ...(origin ? { url: origin } : {}),
-      ...(imageUrl ? { images: [{ url: imageUrl, ...SOCIAL_IMAGE }] } : {}),
+      ...(imageUrl ? { images: [{ url: imageUrl, ...SOCIAL_IMAGE, alt: copy.imageAlt ?? SOCIAL_IMAGE.alt }] } : {}),
     },
     twitter: {
       card: "summary_large_image",
       title: copy.title,
       description: copy.description,
-      ...(imageUrl ? { images: [{ url: imageUrl, ...SOCIAL_IMAGE }] } : {}),
+      ...(imageUrl ? { images: [{ url: imageUrl, ...SOCIAL_IMAGE, alt: copy.imageAlt ?? SOCIAL_IMAGE.alt }] } : {}),
     },
   };
 }

@@ -141,7 +141,7 @@ describe("run control UI", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/api/runs/run_1/commands",expect.objectContaining({
       method:"POST",body:JSON.stringify({type:"pause",reason:"user-paper-control",expectedVersion:2}),
     }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Paper 暫停命令已排隊");
+    expect(await screen.findByRole("status")).toHaveTextContent("模擬運行 暫停命令已排隊");
     expect(screen.getByRole("button",{name:"等待代理回報"})).toBeDisabled();
   });
 

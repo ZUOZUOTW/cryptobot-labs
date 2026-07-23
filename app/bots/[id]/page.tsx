@@ -1,64 +1,54 @@
 import Link from "next/link";
+import Image from "next/image";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { BotDownloadButton } from "../../../components/BotCard";
+import { BotDetailPerformance } from "../../../components/BotDetailPerformance";
 import { StrategyShareActions } from "../../../components/StrategyShareActions";
-import { MetricCard } from "../../../components/MetricCard";
-import { PerformanceChart } from "../../../components/PerformanceChart";
 import { BOT_CATALOG } from "../../../data/bots";
-import { benchmarkSeries } from "../../../lib/benchmark-series";
-import type { BotDefinition } from "../../../lib/types";
-import { activePromoter, DEFAULT_PROMOTER_SLUG } from "../../../data/demo-platform";
+import type { BotDefinition, StrategyGroup } from "../../../lib/types";
+import { resolveRequestLocale } from "../../../lib/i18n/locales";
+import { translateMessage } from "../../../lib/i18n/messages";
 
 interface BotDetailPageProps {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ via?: string | string[] }>;
 }
 
 export async function generateMetadata({ params }: Pick<BotDetailPageProps, "params">): Promise<Metadata> {
-  const { id } = await params;
+  const [{ id }, requestHeaders] = await Promise.all([params, headers()]);
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
   if (!bot) return {};
-  const title = `${bot.name}｜公開 WEEX 策略`;
-  const description = `${bot.description}。${bot.market === "spot" ? "現貨" : "合約"} ${bot.timeframe}，${bot.risk}風險；查看模擬績效、最大回撤與策略規則。`;
-  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: "/og.png", width: 1672, height: 941, alt: `${bot.name} 公開策略預覽` }] }, twitter: { card: "summary_large_image", title, description, images: ["/og.png"] } };
+  const locale = resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
+  const title = translateMessage(locale, `${bot.name}｜公開自動交易策略`);
+  const description = translateMessage(locale, `${bot.description}。${bot.market === "spot" ? "現貨" : "合約"} ${bot.timeframe}，${bot.risk}風險；查看模擬績效、最大回撤與策略規則。`);
+  const imageAlt = translateMessage(locale, `${bot.name} 公開策略預覽`);
+  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: "/og.png", width: 1672, height: 941, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: ["/og.png"] } };
 }
 
 export function generateStaticParams() {
   return BOT_CATALOG.map((bot) => ({ id: bot.id }));
 }
 
-const marketLabel = (bot: BotDefinition) => bot.market === "spot" ? "WEEX 現貨" : "WEEX USDT-M 合約";
+const marketLabel = (bot: BotDefinition) => bot.market === "spot" ? "現貨" : "USDT-M 合約";
+const groupLabel: Record<StrategyGroup, string> = { entry: "進場", confirm: "確認", exit: "離場", position: "倉位", risk: "風控" };
+const parameterSummary = (bot: BotDefinition["blocks"][number]) => bot.parameters
+  .map((parameter) => `${parameter.label} ${parameter.value}${parameter.suffix ?? ""}`)
+  .join(" · ");
 
-const monthlyReturns = (bot: BotDefinition) => bot.equityCurve.map((point, index) => {
-  const previous = bot.equityCurve[index - 1]?.value ?? point.value;
-  const change = previous === 0 ? 0 : ((point.value - previous) / previous) * 100;
-  return { ...point, change };
-});
-
-export default async function BotDetailPage({ params, searchParams }: BotDetailPageProps) {
+export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const { id } = await params;
-  const query = await searchParams;
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
 
   if (!bot) notFound();
-  const requestedVia = Array.isArray(query?.via) ? query?.via[0] : query?.via;
-  const promoter = activePromoter(requestedVia) ?? activePromoter(DEFAULT_PROMOTER_SLUG)!;
-  const workshopHref = `/workshop?bot=${encodeURIComponent(bot.id)}&version=1&via=${encodeURIComponent(promoter.slug)}`;
-
-  const metrics = bot.metrics;
-  const monthly = monthlyReturns(bot);
-  const benchmark = benchmarkSeries(bot);
-  const botFinal = bot.equityCurve.at(-1)?.value ?? 100;
-  const benchmarkFinal = benchmark.at(-1)?.value ?? 100;
-  const difference = botFinal - benchmarkFinal;
+  const workshopHref = `/workshop?bot=${encodeURIComponent(bot.id)}&version=1`;
+  const mascot = bot.risk === "高" ? "/mascots/ai-guardian.webp" : bot.market === "spot" ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp";
 
   return (
     <article className="bot-detail-page">
       <header className="bot-detail-hero site-container">
         <Link className="back-link" href="/bots"><span aria-hidden="true">←</span> 機器人市場</Link>
         <div className="bot-detail-hero__content">
-          <div>
+          <div className="bot-detail-hero__copy">
             <div className="tag-row">
               <span className="market-badge">{marketLabel(bot)} · {bot.timeframe}</span>
               <span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span>
@@ -67,71 +57,45 @@ export default async function BotDetailPage({ params, searchParams }: BotDetailP
             <h1>{bot.name}</h1>
             <p className="bot-detail-hero__lead">{bot.description}</p>
             <div className="tag-row">{bot.tags.map((tag) => <span className="strategy-tag" key={tag}>{tag}</span>)}</div>
+            <div className="bot-detail-hero__actions">
+              <Link className="button button--primary" href={workshopHref}>直接套用</Link>
+              <StrategyShareActions botId={bot.id} botName={bot.name} />
+            </div>
           </div>
-          <div className="bot-detail-hero__actions">
-            <Link className="button button--primary" href={workshopHref}>套用此策略</Link>
-            <StrategyShareActions botId={bot.id} botName={bot.name} via={promoter.slug} />
-            <details className="legacy-package"><summary>下載策略檔案</summary><BotDownloadButton bot={bot} className="button button--secondary" /></details>
-          </div>
+          <aside className="bot-detail-snapshot glass-panel" aria-label="策略摘要">
+            <Image alt="" aria-hidden="true" height="180" src={mascot} width="200" />
+            <p className="eyebrow">STRATEGY SNAPSHOT</p>
+            <dl>
+              <div><dt>市場</dt><dd>{marketLabel(bot)}</dd></div>
+              <div><dt>週期</dt><dd>{bot.timeframe.toUpperCase()}</dd></div>
+              <div><dt>槓桿</dt><dd>{bot.leverage}×</dd></div>
+              <div><dt>條件</dt><dd>{bot.logicMode === "all" ? "全部成立" : "任一成立"}</dd></div>
+              <div><dt>模組</dt><dd>{bot.blocks.length} 個</dd></div>
+              <div><dt>風險</dt><dd>{bot.risk}</dd></div>
+            </dl>
+          </aside>
         </div>
         <div className="strategy-publisher"><span>發布者</span><strong>CryptoBot Labs 研究團隊</strong><span>公開版本 v1 · 允許複製 · Email 不公開</span></div>
         <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
       </header>
 
-      <section className="detail-section site-container" aria-label="完整績效指標">
-        <div className="metric-grid">
-          <MetricCard label="累積收益" value={`+${metrics.totalReturn.toFixed(1)}%`} hint="模擬期間資產淨值變化" tone="mint" />
-          <MetricCard label="年化報酬" value={`+${metrics.annualizedReturn.toFixed(1)}%`} hint="依模擬期間換算的年化值" tone="cyan" />
-          <MetricCard label="最大回撤" value={`${metrics.maxDrawdown.toFixed(1)}%`} hint="模擬高點至低點最大跌幅" tone="danger" />
-          <MetricCard label="勝率" value={`${metrics.winRate.toFixed(1)}%`} hint="獲利交易占全部交易比例" tone="violet" />
-          <MetricCard label="盈虧比" value={metrics.profitFactor.toFixed(2)} hint="總獲利相對總虧損" tone="mint" />
-          <MetricCard label="夏普比率" value={metrics.sharpe.toFixed(2)} hint="模擬風險調整後報酬" tone="cyan" />
-          <MetricCard label="交易次數" value={metrics.trades} hint="365 日模擬期間成交次數" tone="violet" />
-          <MetricCard label="運行天數" value={metrics.runningDays} hint="固定模擬觀察期間" tone="cyan" />
-          <MetricCard label="風險等級" value={bot.risk} hint={`穩定度 ${metrics.stability} / 100`} tone={bot.risk === "高" ? "danger" : "mint"} />
-        </div>
-        <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
-      </section>
+      <BotDetailPerformance bot={bot} />
 
-      <section className="detail-section site-container detail-chart-grid">
-        <div className="detail-performance-comparison">
-          <div className="section-heading"><p className="eyebrow">EQUITY CURVE</p><h2>模擬累積收益</h2></div>
-          <div className="detail-performance-comparison__charts">
-            <PerformanceChart points={bot.equityCurve} label={`${bot.name} 累積收益曲線`} tone={bot.risk === "高" ? "danger" : "mint"} />
-            <PerformanceChart points={benchmark} label="WEEX 市場基準曲線" tone="cyan" />
-          </div>
-          <section aria-label="策略與基準比較摘要" className="benchmark-summary glass-panel">
-            <h3>策略與基準文字比較</h3>
-            <p>{bot.name} 期末淨值 {botFinal.toFixed(1)}；WEEX 市場基準期末淨值 {benchmarkFinal.toFixed(1)}。策略{difference >= 0 ? "領先" : "落後"}基準 {Math.abs(difference).toFixed(1)} 點。</p>
-          </section>
-          <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
+      <section className="detail-section site-container bot-detail-structure" aria-labelledby="strategy-structure-title">
+        <div className="section-heading"><p className="eyebrow">STRATEGY FLOW</p><h2 id="strategy-structure-title">策略結構一目了然</h2><p>依實際執行順序列出所有模組與目前參數，套用後仍可逐項調整。</p></div>
+        <ol className="bot-detail-flow">
+          {bot.blocks.map((block, index) => (
+            <li className="bot-detail-flow__item glass-panel" key={`${block.id}-${index}`}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <div><small>{groupLabel[block.group]}</small><h3>{block.name}</h3><p>{block.description}</p></div>
+              <strong>{parameterSummary(block) || "無額外參數"}</strong>
+            </li>
+          ))}
+        </ol>
+        <div className="bot-detail-capability glass-panel">
+          <div><p className="eyebrow">TRADE CAPABILITY</p><h2>{bot.market === "spot" ? "現貨多頭流程" : "合約雙向流程"}</h2></div>
+          <p>{bot.market === "spot" ? "只模擬買入與退出，不建立空頭部位。" : "依相同的公開規則評估多空方向，不以推估比例呈現不存在的訊號分布。"}</p>
         </div>
-        <div className="direction-panel glass-panel">
-          <p className="eyebrow">TRADE DIRECTION</p><h2>交易方向分布</h2>
-          <dl className="direction-bars">
-            <div><dt>多頭訊號</dt><dd><span style={{ width: bot.market === "spot" ? "100%" : "62%" }} />{bot.market === "spot" ? "100%" : "62%"}</dd></div>
-            <div><dt>空頭訊號</dt><dd><span style={{ width: bot.market === "spot" ? "0%" : "38%" }} />{bot.market === "spot" ? "0%" : "38%"}</dd></div>
-          </dl>
-          <p>{bot.market === "spot" ? "此現貨策略只模擬買入與退出，不建立空頭部位。" : "此合約策略依固定規則模擬多空雙向訊號。"}</p>
-          <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
-        </div>
-      </section>
-
-      <section className="detail-section site-container" aria-labelledby="monthly-title">
-        <div className="section-heading"><p className="eyebrow">MONTHLY PERFORMANCE</p><h2 id="monthly-title">月度表現</h2></div>
-        <div className="table-shell glass-panel">
-          <table aria-label={`${bot.name} 月度表現`}>
-            <thead><tr><th scope="col">月份</th><th scope="col">月末淨值</th><th scope="col">月度變化</th><th scope="col">方向</th></tr></thead>
-            <tbody>{monthly.map((point) => (
-              <tr key={point.label}>
-                <th scope="row">{point.label}</th><td>{point.value.toFixed(1)}</td>
-                <td className={point.change >= 0 ? "value-positive" : "value-negative"}>{point.change >= 0 ? "+" : ""}{point.change.toFixed(1)}%</td>
-                <td>{point.change > 0 ? "上升" : point.change < 0 ? "下降" : "持平"}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
-        <p className="simulation-disclosure" role="note">{bot.disclaimer}</p>
       </section>
 
       <section className="detail-section site-container strategy-guidance">
@@ -141,10 +105,9 @@ export default async function BotDetailPage({ params, searchParams }: BotDetailP
       </section>
 
       <section className="detail-section detail-cta site-container glass-panel">
-        <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始 Paper；原分享版本不會因後續修改而改變。</p></div>
-        <div className="button-row"><Link className="button button--primary" href={workshopHref}>套用此策略</Link><StrategyShareActions botId={bot.id} botName={bot.name} via={promoter.slug} /></div>
+        <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始模擬運行；原分享版本不會因後續修改而改變。</p></div>
+        <div className="button-row"><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} /></div>
       </section>
-      <p className="affiliate-inline-disclosure site-container">此頁推廣來源為 {promoter.displayName}。建立 WEEX 帳戶的連結可能包含推薦關係，您的使用費用不因此增加；實際推薦歸屬以 WEEX 確認為準。<Link href="/disclosures/affiliate">查看完整揭露</Link></p>
     </article>
   );
 }

@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { MODE_LABEL, type RunView } from "./types";
+import { useI18n } from "@/components/I18nProvider";
 
 const STATE_LABEL = { stopped: "已停止", running: "運行中", paused: "已暫停", error: "需要處理" } as const;
 const HEALTH_LABEL = { healthy: "正常", degraded: "異常", paused: "暫停", unknown: "尚無代理證據" } as const;
-const evidenceTime = (value: number) => new Intl.DateTimeFormat("zh-TW", { dateStyle: "short", timeStyle: "short" }).format(value);
-
 export function RunCard({ run }: { run: RunView }) {
+  const { locale } = useI18n();
+  const evidenceTime = (value: number) => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(value);
   return (
     <article className="run-card glass-panel">
       <header className="run-card__header">
@@ -23,7 +24,7 @@ export function RunCard({ run }: { run: RunView }) {
         <p><strong>最後訊號</strong>{run.lastSignal ? `${run.lastSignal.action} · ${run.lastSignal.reason} · ${evidenceTime(run.lastSignal.occurredAt)}` : "尚未收到訊號"}</p>
         <p><strong>風險攔截</strong>{run.riskBlocks.length ? `${run.riskBlocks.length} 筆` : "目前無紀錄"}</p>
       </div>
-      <footer><time dateTime={new Date(run.updatedAt).toISOString()}>更新於 {new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(run.updatedAt)}</time><Link className="button button--secondary button--small" href={`/runs/${encodeURIComponent(run.id)}`}>查看控制中心</Link></footer>
+      <footer><time dateTime={new Date(run.updatedAt).toISOString()}>更新於 {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(run.updatedAt)}</time><Link className="button button--secondary button--small" href={`/runs/${encodeURIComponent(run.id)}`}>查看控制中心</Link></footer>
     </article>
   );
 }

@@ -103,8 +103,11 @@ export const StrategyInputSchema = z.strictObject({
     utcDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     dailyLossBreached: z.boolean().optional(),
     availableEquity: z.string().regex(signedDecimalPattern).optional(),
+    consecutiveLosses: z.number().int().nonnegative().optional(),
+    lastLossAt: finiteTimestampSchema.optional(),
     position: z.strictObject({
       side: z.enum(["long", "short"]),
+      entryTime: finiteTimestampSchema.optional(),
       entryPrice: PositiveDecimalStringSchema,
       peakPrice: PositiveDecimalStringSchema,
       troughPrice: PositiveDecimalStringSchema,

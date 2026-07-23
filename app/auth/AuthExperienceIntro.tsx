@@ -20,7 +20,7 @@ export function AuthExperienceIntro({ demo = false }: { demo?: boolean }) {
           alt="CryptoBot 安全守護機器人"
           height="420"
           priority
-          src="/mascots/ai-guardian.png"
+          src="/mascots/ai-guardian.webp"
           unoptimized
           width="420"
         />

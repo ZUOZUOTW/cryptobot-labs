@@ -27,6 +27,15 @@ const TIMEFRAME_OPTIONS = [
   { value: "1d", label: "1 天", detail: "趨勢" },
 ] as const;
 
+function ResetIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20">
+      <path d="M5.2 6.1A6 6 0 1 1 4 10" />
+      <path d="M2.8 3.8v4.1h4.1" />
+    </svg>
+  );
+}
+
 interface ParameterPanelProps {
   config: BotConfig;
   onConfigField: <Key extends keyof Pick<BotConfig, "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
@@ -77,15 +86,15 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
   }, [config.leverage, config.market, maximumLeverage, onConfigField]);
 
   const catalogMessage = catalogStatus === "live"
-    ? `已同步 WEEX · ${pairs.length} 個交易對`
+    ? `已同步 API 可交易產品 · ${pairs.length} 個交易對`
     : catalogStatus === "loading"
-      ? `正在同步 WEEX · 先顯示 ${pairs.length} 個公告交易對`
-      : `WEEX 暫時無法連線 · 顯示 ${pairs.length} 個公告交易對`;
+      ? `正在同步 API 可交易產品 · 先顯示 ${pairs.length} 個交易對`
+      : `即時資料暫時無法連線 · 顯示 ${pairs.length} 個 API 可交易對`;
   const leverageSource = catalogStatus === "live"
-    ? "WEEX 即時產品資料"
+    ? "即時產品資料"
     : catalogStatus === "loading"
-      ? "正在同步 WEEX 產品資料"
-      : "WEEX 公告備援資料";
+      ? "正在同步產品資料"
+      : "產品備援資料";
 
   return (
     <section className="workshop-panel parameter-panel glass-panel" aria-labelledby="parameter-title">
@@ -94,7 +103,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
           <p className="eyebrow">02 / PARAMETERS</p>
           <h2 id="parameter-title">快速參數</h2>
         </div>
-        <span className="exchange-badge"><span className="exchange-badge__signal" aria-hidden="true" />WEEX</span>
+        <span className="exchange-badge"><span className="exchange-badge__signal" aria-hidden="true" />LIVE DATA</span>
       </div>
 
       <fieldset className="market-controls">
@@ -164,7 +173,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
           role="region"
         >
           <div className="leverage-limit-card__value">
-            <span>WEEX 最大支援槓桿</span>
+            <span>此商品最大支援槓桿</span>
             <strong>{maximumLeverage}<small>×</small></strong>
           </div>
           <div className="leverage-limit-card__copy">
@@ -177,7 +186,20 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
         </div>
         <div className="parameter-row__label">
           <label htmlFor="leverage-slider">槓桿</label>
-          <span>目前設定 {config.leverage}×</span>
+          <div className="parameter-row__tools">
+            <span>目前設定 {config.leverage}×</span>
+            <button
+              aria-label="重置槓桿為 1 倍"
+              className="parameter-reset"
+              disabled={config.leverage === 1}
+              onClick={() => onConfigField("leverage", 1)}
+              title="重置為 1 倍"
+              type="button"
+            >
+              <ResetIcon />
+              <span className="parameter-reset__label">重設</span>
+            </button>
+          </div>
         </div>
         <div className="parameter-row__inputs">
           <input
@@ -206,40 +228,54 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
       </div>
 
       <div className="block-parameters">
-        {config.blocks.map((block, blockIndex) => (
+        {config.blocks.map((block, blockIndex) => block.parameters.length > 0 && (
           <fieldset key={block.id}>
             <legend>{block.id === "rsi" ? "RSI Rebound" : block.name}</legend>
-            {block.parameters.map((parameter) => (
-              <div className="parameter-row" key={parameter.key}>
-                <div className="parameter-row__label">
-                  <label htmlFor={`${block.id}-${parameter.key}-slider`}>{parameter.label}</label>
-                  <span className="parameter-row__common">
-                    常用 {commonParameterValue(block.id, parameter.key) ?? parameter.value}{parameter.suffix}
-                  </span>
+            {block.parameters.map((parameter) => {
+              const defaultValue = commonParameterValue(block.id, parameter.key) ?? parameter.value;
+              return (
+                <div className="parameter-row" key={parameter.key}>
+                  <div className="parameter-row__label">
+                    <label htmlFor={`${block.id}-${parameter.key}-slider`}>{parameter.label}</label>
+                    <div className="parameter-row__tools">
+                      <span className="parameter-row__common">預設 {defaultValue}{parameter.suffix}</span>
+                      <button
+                        aria-label={`重置${block.name}的${parameter.label}為預設值`}
+                        className="parameter-reset"
+                        disabled={parameter.value === defaultValue}
+                        onClick={() => onParameter(blockIndex, parameter.key, defaultValue)}
+                        title={`重置為 ${defaultValue}${parameter.suffix ?? ""}`}
+                        type="button"
+                      >
+                        <ResetIcon />
+                        <span className="parameter-reset__label">重設</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="parameter-row__inputs">
+                    <input
+                      aria-label={`${parameter.label}滑桿`}
+                      id={`${block.id}-${parameter.key}-slider`}
+                      max={parameter.max}
+                      min={parameter.min}
+                      onChange={(event) => onParameter(blockIndex, parameter.key, Number(event.target.value))}
+                      step={parameter.step}
+                      type="range"
+                      value={parameter.value}
+                    />
+                    <input
+                      aria-label={`${parameter.label}數值`}
+                      max={parameter.max}
+                      min={parameter.min}
+                      onChange={(event) => onParameter(blockIndex, parameter.key, Number(event.target.value))}
+                      step={parameter.step}
+                      type="number"
+                      value={parameter.value}
+                    />
+                  </div>
                 </div>
-                <div className="parameter-row__inputs">
-                  <input
-                    aria-label={`${parameter.label}滑桿`}
-                    id={`${block.id}-${parameter.key}-slider`}
-                    max={parameter.max}
-                    min={parameter.min}
-                    onChange={(event) => onParameter(blockIndex, parameter.key, Number(event.target.value))}
-                    step={parameter.step}
-                    type="range"
-                    value={parameter.value}
-                  />
-                  <input
-                    aria-label={`${parameter.label}數值`}
-                    max={parameter.max}
-                    min={parameter.min}
-                    onChange={(event) => onParameter(blockIndex, parameter.key, Number(event.target.value))}
-                    step={parameter.step}
-                    type="number"
-                    value={parameter.value}
-                  />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </fieldset>
         ))}
       </div>

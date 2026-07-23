@@ -77,7 +77,7 @@ describe("connections control surface", () => {
     expect(within(progress).getAllByRole("listitem")).toHaveLength(4);
     expect(await screen.findByRole("link", { name: "選擇穩健策略並開始模擬" })).toHaveAttribute("href",
       "/workshop?bot=orbit-dca&onboarding=paper");
-    expect(screen.getByText("預設 Paper 模式")).toBeInTheDocument();
+    expect(screen.getByText("預設模擬模式")).toBeInTheDocument();
     expect(screen.getByText("實盤需再次同意風險")).toBeInTheDocument();
   });
 

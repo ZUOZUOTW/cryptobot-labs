@@ -69,15 +69,15 @@ export function CreateRunPanel({ backtest, config }: { backtest: HistoricalBackt
       if (!response.ok || typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) {
         throw new Error("run_failed");
       }
-      setRunId(id); setState("done"); setMessage("Paper 運行已建立並送至本機代理；不會直接啟用實盤交易。");
+      setRunId(id); setState("done"); setMessage("模擬運行已建立並送至本機代理；不會直接啟用實盤交易。");
     } catch { setState("error"); setMessage("無法建立運行；裝置或策略版本可能已更新，請重試。"); }
   };
 
   if (!backtest.result || backtest.status !== "succeeded") return null;
   return <section className="create-run-panel glass-panel" aria-labelledby={`create-run-${backtest.id}`}>
     <div><p className="eyebrow">DEPLOY TO LOCAL AGENT</p><h2 id={`create-run-${backtest.id}`}>建立交易機器人運行</h2>
-      <p>選擇已配對電腦並設定完整風險上限。新運行固定從 Paper 模擬開始，不會直接送出真實訂單。</p></div>
-    {!open && <button className="button button--primary" onClick={() => void load()} type="button">選擇裝置並建立 Paper 運行</button>}
+      <p>選擇已配對電腦並設定完整風險上限。新運行固定從模擬模式開始，不會直接送出真實訂單。</p></div>
+    {!open && <button className="button button--primary" onClick={() => void load()} type="button">選擇裝置並建立模擬運行</button>}
     {open && <>
       {state === "loading" && <p role="status">正在載入已配對裝置…</p>}
       {state === "unauthorized" && <p>請先登入才能建立運行。 <Link href="/auth?return_to=%2Fworkshop">重新登入</Link></p>}
@@ -89,9 +89,9 @@ export function CreateRunPanel({ backtest, config }: { backtest: HistoricalBackt
             <option key={device.id} value={device.id}>{device.name} · {device.platform === "macos" ? "macOS" : "Windows"}{device.connected ? " · WEEX 已驗證" : " · 尚未驗證 WEEX"}</option>)}</select></label>
         <RiskPolicyForm disabled={state === "submitting"} onChange={(next) => { setRisk(next); attempt.current = null;
           if (state === "error") setState("ready"); }} value={risk} />
-        <p className="create-run-panel__mode">執行方式選擇「在上限內自動」後，未來通過獨立實盤解鎖時才允許自動下單；Paper 階段只會模擬。</p>
+        <p className="create-run-panel__mode">執行方式選擇「在上限內自動」後，未來通過獨立實盤解鎖時才允許自動下單；目前階段只會模擬。</p>
         <button className="button button--primary" disabled={!canCreate || isSubmitting}
-          onClick={() => void create()} type="button">{isSubmitting ? "建立並排隊中…" : "建立 Paper 運行"}</button>
+          onClick={() => void create()} type="button">{isSubmitting ? "建立並排隊中…" : "建立模擬運行"}</button>
       </>}
     </>}
     {message && <p className="control-feedback" role={state === "error" ? "alert" : "status"}>{message}</p>}

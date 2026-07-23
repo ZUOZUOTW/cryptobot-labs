@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { signOutPlatform, usePlatformAuth } from "./PlatformAuthProvider";
+import { LanguageSwitcher } from "./LanguageSwitcher";
+import { PwaInstallButton } from "./PwaInstallButton";
 
 const NAVIGATION_LINKS = [
   { href: "/bots", label: "探索策略" },
@@ -44,7 +46,8 @@ export function SiteHeader() {
         </nav>
 
         <div className="site-header__actions">
-          {user ? <details className="user-menu"><summary>{user.displayName}</summary><div><Link href="/connections">WEEX 連線</Link>{mode === "demo" && <Link href="/admin/users">展示後台</Link>}<button onClick={() => { void signOutPlatform(mode); }} type="button">登出</button></div></details>
+          <LanguageSwitcher />
+          {user ? <details className="user-menu"><summary>{user.displayName}</summary><div><Link href="/connections">交易連線</Link>{mode === "demo" && <Link href="/admin/users">展示後台</Link>}<button onClick={() => { void signOutPlatform(mode); }} type="button">登出</button></div></details>
             : <Link className="button button--primary button--small header-login" href="/auth?return_to=%2F">登入</Link>}
           <button
             aria-controls="mobile-navigation"
@@ -68,7 +71,8 @@ export function SiteHeader() {
         id="mobile-navigation"
       >
         <NavigationLinks />
-        {user ? <Link className="site-nav__link" href="/connections">WEEX 連線</Link> : <Link className="site-nav__link" href="/auth?return_to=%2F">登入</Link>}
+        {user ? <Link className="site-nav__link" href="/connections">交易連線</Link> : <Link className="site-nav__link" href="/auth?return_to=%2F">登入</Link>}
+        <PwaInstallButton />
       </nav>
     </header>
   );

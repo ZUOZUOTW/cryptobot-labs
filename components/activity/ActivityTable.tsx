@@ -4,19 +4,21 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { parseActivityList } from "./activity-parser";
 import type { ActivityActor, ActivityItem } from "./types";
+import { useI18n } from "@/components/I18nProvider";
 
 type LoadState = "loading" | "ready" | "error" | "unauthorized";
 type MoreState = "idle" | "loading" | "error";
 
-const localTimestamp = (value: number) => new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium", timeStyle: "medium",
-}).format(new Date(value));
 const hashPreview = (value: string | null) => value ? `${value.slice(0, 12)}…` : "—";
 const shown = (value: string | null) => value ?? "—";
 const actorLabel = (value: ActivityActor) => value === "device" ? "裝置" : "使用者";
 const epoch = (value: string) => value ? new Date(value).getTime() : null;
 
 export function ActivityTable() {
+  const { locale } = useI18n();
+  const localTimestamp = (value: number) => new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium", timeStyle: "medium",
+  }).format(new Date(value));
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [state, setState] = useState<LoadState>("loading");

@@ -76,7 +76,9 @@ test("removes the starter preview and retains the production shell contract", as
   assert.match(layout, /<html lang="zh-Hant">/);
   assert.match(layout, /<SiteHeader \/>/);
   assert.match(layout, /<SiteFooter \/>/);
-  assert.doesNotMatch(layout, /codex-preview|_sites-preview|themeColor|\bViewport\b/);
+  assert.doesNotMatch(layout, /codex-preview|_sites-preview/);
+  assert.match(layout, /name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/);
+  assert.match(layout, /name="theme-color" content="#06070b"/);
 
   await assert.rejects(access(new URL("public/_sites-preview", templateRoot)));
 });

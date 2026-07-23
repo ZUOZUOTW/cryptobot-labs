@@ -6,6 +6,7 @@ import { EmergencyStopDialog, type EmergencyCommand } from "./EmergencyStopDialo
 import { LiveUnlockDialog, type LivePermissions } from "./LiveUnlockDialog";
 import { parseRunView } from "./run-parser";
 import { MODE_LABEL, type RunView } from "./types";
+import { useI18n } from "@/components/I18nProvider";
 
 const key = () => typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `ui-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 export const permissionsForDevice = (value: unknown, deviceId: string, market: "spot" | "futures"): LivePermissions | null => {
@@ -16,9 +17,9 @@ export const permissionsForDevice = (value: unknown, deviceId: string, market: "
   if (!detail || detail.status !== "verified" || typeof detail.hasLocalCredential !== "boolean" || !permissions || permissions.read !== true || permissions.withdrawal !== false || typeof permissions.spotTrade !== "boolean" || typeof permissions.futuresTrade !== "boolean") return null;
   return { verified: true, hasLocalCredential: detail.hasLocalCredential, read: true, trade: market === "spot" ? permissions.spotTrade : permissions.futuresTrade, withdrawal: false };
 };
-const evidenceTime = (value: number) => new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(value);
-
 export function RunDetailPanel({ runId }: { runId: string }) {
+  const { locale } = useI18n();
+  const evidenceTime = (value: number) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(value);
   const [run, setRun] = useState<RunView | null>(null);
   const [permissions, setPermissions] = useState<LivePermissions | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error" | "unauthorized">("loading");
@@ -55,11 +56,11 @@ export function RunDetailPanel({ runId }: { runId: string }) {
     if (!response.ok) { setLifecyclePending(false); setFeedback("控制命令未被接受，請重新整理運行證據後再試。"); return; }
     if (input.type === "resume-paper" || input.type === "resume-demo" || input.type === "resume-live"
       || input.type === "enable-futures-demo" || input.type === "pause") {
-      setFeedback(input.type === "resume-paper" ? "Paper 開始命令已排隊，等待本機代理回報運行證據。"
+      setFeedback(input.type === "resume-paper" ? "模擬運行開始命令已排隊，等待本機代理回報運行證據。"
         : input.type === "resume-demo" ? "WEEX Demo 啟動命令已排隊，等待本機代理完成安全檢查。"
         : input.type === "resume-live" ? "實盤啟動命令已排隊；本機代理通過即時安全檢查後才會啟動。"
         : input.type === "enable-futures-demo" ? "合約 Demo 啟用命令已排隊；代理確認後重新整理即可啟動。"
-        : `${run.mode === "live" ? "實盤" : run.mode === "futures-demo" ? "WEEX Demo" : "Paper"} 暫停命令已排隊，等待本機代理回報暫停證據。`);
+        : `${run.mode === "live" ? "實盤" : run.mode === "futures-demo" ? "WEEX 測試環境" : "模擬運行"} 暫停命令已排隊，等待本機代理回報暫停證據。`);
       return;
     }
     await load();

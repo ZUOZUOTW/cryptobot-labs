@@ -54,7 +54,7 @@ describe("historical backtest UI", () => {
   it("uses exact evidence labels and never presents historical evidence as live performance", () => {
     render(<BacktestResultCard backtest={succeededBacktest} />);
     expect(screen.getByText("歷史回測")).toBeInTheDocument();
-    expect(screen.getByText("WEEX 公開行情")).toBeInTheDocument();
+    expect(screen.getByText("公開歷史行情")).toBeInTheDocument();
     expect(screen.getByText("不是實盤績效")).toBeInTheDocument();
     expect(screen.getByText(/完整資料/)).toBeInTheDocument();
     expect(screen.getByText(/資料缺口 0/)).toBeInTheDocument();
@@ -64,7 +64,7 @@ describe("historical backtest UI", () => {
     expect(screen.getByText(/清算另採盤中極值/)).toBeInTheDocument();
     expect(screen.getByText(/資金費率在事件時間先套用/)).toBeInTheDocument();
     expect(screen.getByText(/模型上限 500×/)).toBeInTheDocument();
-    expect(screen.getByText(/非 WEEX 分層精確模型/)).toBeInTheDocument();
+    expect(screen.getByText(/固定保守估算模型/)).toBeInTheDocument();
     expect(screen.getAllByText(/實盤績效/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/^實盤$/)).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: /權益曲線/ })).toBeInTheDocument();
@@ -77,7 +77,7 @@ describe("historical backtest UI", () => {
     const user = userEvent.setup();
     const view = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} />);
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 歷史回測" }));
+    await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/strategies");
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ config: STRATEGY_PRESETS[0] });
@@ -90,7 +90,7 @@ describe("historical backtest UI", () => {
     expect(screen.getByText("不是實盤績效")).toBeInTheDocument();
     view.rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], leverage: 2, source: "return;" }} />);
     expect(screen.queryByText("不是實盤績效")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "執行 WEEX 歷史回測" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "執行進階歷史回測" })).toBeDisabled();
   });
 
   it("reuses request-bound idempotency keys after a lost response and rotates them after success", async () => {
@@ -108,16 +108,16 @@ describe("historical backtest UI", () => {
     const user = userEvent.setup();
     render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} />);
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 歷史回測" }));
+    await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     expect(await screen.findByText(/暫時無法執行/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 歷史回測" }));
+    await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     expect(await screen.findByText("不是實盤績效")).toBeInTheDocument();
 
     const key = (call: number) => new Headers((fetchMock.mock.calls[call]?.[1] as RequestInit).headers).get("Idempotency-Key");
     expect(key(0)).toBe(key(2));
     expect(key(1)).toBe(key(3));
 
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 歷史回測" }));
+    await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
     expect(key(4)).not.toBe(key(2));
     expect(key(5)).not.toBe(key(3));
@@ -127,11 +127,11 @@ describe("historical backtest UI", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 401 }));
     const user = userEvent.setup();
     const { rerender } = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} />);
-    await user.click(screen.getByRole("button", { name: "執行 WEEX 歷史回測" }));
+    await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     expect(await screen.findByRole("link", { name: "登入" })).toHaveAttribute("href", "/auth?return_to=%2Fbacktests");
 
     rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], source: "fetch('https://example.com')" }} />);
-    const button = screen.getByRole("button", { name: "執行 WEEX 歷史回測" });
+    const button = screen.getByRole("button", { name: "執行進階歷史回測" });
     expect(button).toBeDisabled();
     expect(screen.getByText(/JavaScript.*隔離沙箱/)).toBeInTheDocument();
     fireEvent.click(button);
@@ -147,7 +147,7 @@ describe("historical backtest UI", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({backtest:{...succeededBacktest,strategyVersionId:"version-js",result:{...succeededBacktest.result,scriptHash:"d".repeat(64)}}}),{status:201}));
     const user=userEvent.setup();
     render(<BacktestRequestForm config={custom}/>);
-    const button=screen.getByRole("button",{name:"執行 WEEX 歷史回測"});
+    const button=screen.getByRole("button",{name:"執行進階歷史回測"});
     expect(button).toBeEnabled();
     await user.click(button);
     await waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -192,14 +192,27 @@ describe("historical backtest UI", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ report: quickReport }), { status: 200 }));
     const user = userEvent.setup();
     render(<WorkshopPage />);
-    expect(screen.getByText("快速驗證 · WEEX 公開歷史 K 線 · 無需登入")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "保存、分享與開始 Paper" })).toBeInTheDocument();
-    const quickButton = screen.getByRole("button", { name: "執行 WEEX 行情回測" });
+    expect(screen.getByText("快速驗證 · 公開歷史 K 線 · 無需登入")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "保存與分享策略" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "保存策略" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "建立分享連結" })).toBeInTheDocument();
+    expect(document.querySelector('img[src*="ai-strategy-vault-v1.webp"]')).toBeInTheDocument();
+    expect(document.querySelector('img[src*="ai-version-broadcast-v1.webp"]')).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "開始模擬運行" })).not.toBeInTheDocument();
+    const quickButton = screen.getByRole("button", { name: "執行行情回測" });
+    expect(screen.getByRole("spinbutton", { name: "手續費率" })).toHaveValue(0.001);
+    expect(screen.getByRole("spinbutton", { name: "滑價率" })).toHaveValue(0.0005);
+    expect(screen.getByRole("combobox", { name: "資金費率" })).toHaveValue("none");
+    expect(screen.getByRole("combobox", { name: "資料缺口" })).toHaveValue("fail");
+    expect(screen.queryByRole("heading", { name: "進階歷史回測" })).not.toBeInTheDocument();
     await user.click(quickButton);
     expect(await screen.findByRole("region", { name: "回測結果" })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/weex/historical-backtest");
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ config: STRATEGY_PRESETS[0] });
-    expect(screen.getAllByText("WEEX 歷史行情回測，不代表未來績效").length).toBeGreaterThanOrEqual(2);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      config: STRATEGY_PRESETS[0],
+      assumptions: { feeRate: "0.001", slippageRate: "0.0005", fundingMode: "none", gapPolicy: "fail" },
+    });
+    expect(screen.getByText("WEEX 歷史行情回測，不代表未來績效")).toBeInTheDocument();
   });
 });

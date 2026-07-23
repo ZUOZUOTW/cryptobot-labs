@@ -22,6 +22,7 @@ import {
   parseIntervalMs,
   validateCandleDataset,
 } from "../../packages/weex-client/src";
+import type { PublicHistoricalBacktestAssumptions } from "../weex-historical-client";
 
 export const PUBLIC_HISTORICAL_ENGINE_VERSION = "cryptobot-labs-weex-public-v1";
 export const WEEX_HISTORICAL_DISCLAIMER = "WEEX 歷史行情回測，不代表未來績效" as const;
@@ -33,10 +34,17 @@ const DATA_LAG_ALLOWANCE_MS = 2 * 60 * 1_000;
 const MAX_PUBLIC_CANDLES = 720;
 
 export interface PublicHistoricalPerformanceDependencies {
-  marketData?: Pick<WeexPublicClient, "collectHistoricalCandles">;
+  marketData?: Pick<WeexPublicClient, "collectHistoricalCandles" | "collectHistoricalFunding">;
   now?: () => number;
   createSandbox?: () => Promise<StrategySandbox>;
 }
+
+const DEFAULT_ASSUMPTIONS: PublicHistoricalBacktestAssumptions = {
+  feeRate: PUBLIC_HISTORICAL_FEE_RATE,
+  slippageRate: PUBLIC_HISTORICAL_SLIPPAGE_RATE,
+  fundingMode: "none",
+  gapPolicy: "fail",
+};
 
 const round = (value: number): number => Number(value.toFixed(2));
 const sha256 = async (value: string): Promise<string> => {
@@ -44,7 +52,7 @@ const sha256 = async (value: string): Promise<string> => {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 
-function exactDataset(dataset: HistoricalDataset, config: BotConfig, startTime: number, endTime: number): HistoricalDataset {
+function exactDataset(dataset: HistoricalDataset, config: BotConfig, startTime: number, endTime: number, gapPolicy: "fail" | "disclose"): HistoricalDataset {
   const intervalMs = parseIntervalMs(config.timeframe);
   const candles = dataset.candles
     .filter((candle) => candle.openTime >= startTime && candle.openTime < endTime)
@@ -55,7 +63,7 @@ function exactDataset(dataset: HistoricalDataset, config: BotConfig, startTime: 
   const exactCoverage = first === startTime && last === endTime - 1
     && candles.every((candle, index) => index === 0 || candle.openTime - candles[index - 1]!.openTime === intervalMs)
     && validation.ordered && validation.duplicates.length === 0
-    && validation.gaps.length === 0 && validation.incompleteCount === 0;
+    && (gapPolicy === "disclose" || (validation.gaps.length === 0 && validation.incompleteCount === 0));
   if (!exactCoverage || candles.length < 2) throw new Error("WEEX 歷史行情未完整覆蓋指定回測區間");
   return {
     request: { market: config.market, symbol: config.symbol, interval: config.timeframe, startTime, endTime },
@@ -115,7 +123,7 @@ function chartPoints(result: HistoricalBacktestResult, initialCapital: number): 
   const step = Math.max(1, Math.ceil(result.equityCurve.length / maximumPoints));
   const selected = result.equityCurve.filter((_, index) => index % step === 0 || index === result.equityCurve.length - 1);
   return selected.map(({ timestamp, equity }) => ({
-    label: new Date(timestamp).toLocaleDateString("zh-TW", { month: "2-digit", day: "2-digit", timeZone: "UTC" }),
+    label: new Date(timestamp).toISOString().slice(5, 10).replace("-", "/"),
     value: round(Number(equity) / initialCapital * 100),
   }));
 }
@@ -147,6 +155,7 @@ export async function runWeexHistoricalPerformance(
   config: BotConfig,
   dependencies: PublicHistoricalPerformanceDependencies = {},
   suppliedDataset?: HistoricalDataset,
+  assumptions: PublicHistoricalBacktestAssumptions = DEFAULT_ASSUMPTIONS,
 ): Promise<BacktestReport> {
   const normalizedConfig = JSON.parse(JSON.stringify(config)) as BotConfig;
   const validation = validateConfig(normalizedConfig);
@@ -163,7 +172,20 @@ export async function runWeexHistoricalPerformance(
     endTime: window.endTime,
     limit: window.limit,
   });
-  const dataset = exactDataset(collected, normalizedConfig, window.startTime, window.endTime);
+  const normalizedAssumptions = {
+    ...assumptions,
+    fundingMode: normalizedConfig.market === "spot" ? "none" as const : assumptions.fundingMode,
+  };
+  const dataset = exactDataset(collected, normalizedConfig, window.startTime, window.endTime, normalizedAssumptions.gapPolicy);
+  const fundingDataset = normalizedAssumptions.fundingMode === "historical"
+    ? await marketData.collectHistoricalFunding({
+      market: "futures",
+      symbol: normalizedConfig.symbol,
+      startTime: window.startTime,
+      endTime: window.endTime,
+      strict: true,
+    })
+    : null;
   const configHash = await sha256(safeCanonicalJsonStringify(normalizedConfig, "public historical config", 262_144));
   const prepared = await evaluatorFor(normalizedConfig, dependencies.createSandbox);
   const initialCapital = 10_000;
@@ -174,12 +196,12 @@ export async function runWeexHistoricalPerformance(
       dataset,
       evaluator: prepared.evaluator,
       initialCapital: String(initialCapital),
-      feeRate: PUBLIC_HISTORICAL_FEE_RATE,
-      slippageRate: PUBLIC_HISTORICAL_SLIPPAGE_RATE,
+      feeRate: normalizedAssumptions.feeRate,
+      slippageRate: normalizedAssumptions.slippageRate,
       leverage: String(normalizedConfig.leverage),
       ...(maintenanceMarginRate === undefined ? {} : { maintenanceMarginRate }),
-      funding: [],
-      gapPolicy: "fail",
+      funding: fundingDataset?.funding ?? [],
+      gapPolicy: normalizedAssumptions.gapPolicy,
       engineVersion: PUBLIC_HISTORICAL_ENGINE_VERSION,
       configHash,
       strategyHash: prepared.strategyHash,
@@ -198,9 +220,9 @@ export async function runWeexHistoricalPerformance(
     collectedAt: dataset.provenance.collectedAt,
     candleCount: dataset.candles.length,
     complete: dataset.complete,
-    feeRate: PUBLIC_HISTORICAL_FEE_RATE,
-    slippageRate: PUBLIC_HISTORICAL_SLIPPAGE_RATE,
-    fundingIncluded: false,
+    feeRate: normalizedAssumptions.feeRate,
+    slippageRate: normalizedAssumptions.slippageRate,
+    fundingIncluded: fundingDataset !== null,
     datasetDigest: result.provenance.datasetDigest,
     engineVersion: PUBLIC_HISTORICAL_ENGINE_VERSION,
   };

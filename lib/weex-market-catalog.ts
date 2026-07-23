@@ -36,6 +36,8 @@ TONUSDT JUPUSDT USDCUSDT SUIUSDT FETUSDT SOLUSDT DOTUSDT TRXUSDT UNIUSDT DOGEUSD
 XLMUSDT BCHUSDT APTUSDT ADAUSDT HBARUSDT
 `.trim().split(/\s+/);
 
+export const WEEX_API_TRADING_SYMBOLS_SOURCE = "https://www.weex.com/zh-TW/help/articles/help_article_69145";
+
 const symbolAssets = (symbol: string): Pick<WeexTradingPair, "baseAsset" | "quoteAsset"> => {
   const quoteAsset = symbol.endsWith("USDT") ? "USDT" : "";
   return { baseAsset: quoteAsset ? symbol.slice(0, -quoteAsset.length) : symbol, quoteAsset };
@@ -53,6 +55,15 @@ export const WEEX_HELP_ARTICLE_SYMBOLS: Readonly<Record<Market, readonly string[
   spot: SPOT_SYMBOLS,
   futures: FUTURES_SYMBOLS,
 };
+
+const apiTradingSymbolSets: Readonly<Record<Market, ReadonlySet<string>>> = {
+  spot: new Set(SPOT_SYMBOLS),
+  futures: new Set(FUTURES_SYMBOLS),
+};
+
+export const isWeexApiTradingSymbol = (market: Market, symbol: string): boolean => (
+  apiTradingSymbolSets[market].has(symbol.trim().toUpperCase().replace(/^CMT_/, "").replace(/[\/_-]/g, ""))
+);
 
 export const FALLBACK_WEEX_MARKET_CATALOG: WeexMarketCatalog = {
   spot: SPOT_SYMBOLS.map((symbol) => fallbackPair(symbol, "spot")),
@@ -87,13 +98,16 @@ export function parseWeexMarketCatalog(
 
   const spot = uniquePairs(spotRows.flatMap((value): WeexTradingPair[] => {
     const symbol = canonicalSymbol(value);
-    return symbol ? [{ symbol, ...symbolAssets(symbol), maxLeverage: 1 }] : [];
+    return symbol && isWeexApiTradingSymbol("spot", symbol)
+      ? [{ symbol, ...symbolAssets(symbol), maxLeverage: 1 }]
+      : [];
   }));
   const futures = uniquePairs(futuresRows.flatMap((value): WeexTradingPair[] => {
     const item = record(value);
     const symbol = canonicalSymbol(item?.displaySymbol) ?? canonicalSymbol(item?.symbol);
     const maxLeverage = typeof item?.maxLeverage === "number" ? item.maxLeverage : Number(item?.maxLeverage);
-    if (!symbol || !Number.isInteger(maxLeverage) || maxLeverage < 1 || maxLeverage > 1_000) return [];
+    if (!symbol || !isWeexApiTradingSymbol("futures", symbol)
+      || !Number.isInteger(maxLeverage) || maxLeverage < 1 || maxLeverage > 1_000) return [];
     const baseAsset = canonicalSymbol(item?.baseAsset) ?? symbolAssets(symbol).baseAsset;
     const quoteAsset = canonicalSymbol(item?.quoteAsset) ?? symbolAssets(symbol).quoteAsset;
     return [{ symbol, baseAsset, quoteAsset, maxLeverage }];

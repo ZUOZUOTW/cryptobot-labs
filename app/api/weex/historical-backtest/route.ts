@@ -1,26 +1,26 @@
 import { HttpProblem, readStrictJson } from "../../../../lib/server/http";
 import { runWeexHistoricalPerformance } from "../../../../lib/server/weex-historical-performance";
 import { hasBotConfigShape, validateConfig } from "../../../../lib/strategy-validation";
-import type { BotConfig } from "../../../../lib/types";
+import type { BacktestReport, BotConfig } from "../../../../lib/types";
 import { backtestConfigFingerprint } from "../../../../lib/backtest";
-import { runBacktest } from "../../../../lib/backtest";
-import { demoModeEnabled } from "../../../../lib/server/demo-mode";
+import type { PublicHistoricalBacktestAssumptions } from "../../../../lib/weex-historical-client";
 
 export const runtime = "nodejs";
 const CACHE_MS = 5 * 60 * 1_000;
 const resultCache = new Map<string, { expiresAt: number; report: Awaited<ReturnType<typeof runWeexHistoricalPerformance>> }>();
 const pending = new Map<string, Promise<Awaited<ReturnType<typeof runWeexHistoricalPerformance>>>>();
 
-const cachedBacktest = async (config: BotConfig) => {
-  const key = backtestConfigFingerprint(config);
+interface PublicBacktestRequest { config: BotConfig; assumptions: PublicHistoricalBacktestAssumptions }
+const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/;
+
+const cachedBacktest = async ({ config, assumptions }: PublicBacktestRequest) => {
+  const key = `${backtestConfigFingerprint(config)}:${JSON.stringify(assumptions)}`;
   const now = Date.now();
   const cached = resultCache.get(key);
   if (cached && cached.expiresAt > now) return cached.report;
   let request = pending.get(key);
   if (!request) {
-    request = demoModeEnabled()
-      ? Promise.resolve(runBacktest(config))
-      : runWeexHistoricalPerformance(config);
+    request = runWeexHistoricalPerformance(config, {}, undefined, assumptions);
     pending.set(key, request);
   }
   try {
@@ -36,14 +36,30 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
 });
 
-const parseRequest = (value: unknown): BotConfig => {
+const parseRequest = (value: unknown): PublicBacktestRequest => {
   if (value === null || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value as object).length !== 1 || !("config" in value)) throw new Error("invalid_request");
+    || Object.keys(value as object).some((key) => key !== "config" && key !== "assumptions") || !("config" in value)) throw new Error("invalid_request");
   const config = (value as { config?: unknown }).config;
   if (!hasBotConfigShape(config) || config.exchange !== "WEEX") throw new Error("invalid_strategy");
   const validation = validateConfig(config);
   if (!validation.valid) throw new Error("invalid_strategy");
-  return config as BotConfig;
+  const supplied = (value as { assumptions?: unknown }).assumptions;
+  if (supplied === null || typeof supplied !== "object" || Array.isArray(supplied)) throw new Error("invalid_request");
+  const assumptions = supplied as Partial<PublicHistoricalBacktestAssumptions>;
+  if (Object.keys(assumptions).some((key) => !["feeRate", "slippageRate", "fundingMode", "gapPolicy"].includes(key))
+    || typeof assumptions.feeRate !== "string" || !DECIMAL.test(assumptions.feeRate) || Number(assumptions.feeRate) > 0.05
+    || typeof assumptions.slippageRate !== "string" || !DECIMAL.test(assumptions.slippageRate) || Number(assumptions.slippageRate) > 0.1
+    || !["none", "historical"].includes(String(assumptions.fundingMode))
+    || !["fail", "disclose"].includes(String(assumptions.gapPolicy))) throw new Error("invalid_request");
+  return {
+    config: config as BotConfig,
+    assumptions: {
+      feeRate: assumptions.feeRate,
+      slippageRate: assumptions.slippageRate,
+      fundingMode: config.market === "spot" ? "none" : assumptions.fundingMode!,
+      gapPolicy: assumptions.gapPolicy!,
+    },
+  };
 };
 
 const requireRequestOrigin = (request: Request): void => {
@@ -65,23 +81,26 @@ const requireRequestOrigin = (request: Request): void => {
   if (fetchSite !== null && fetchSite !== "same-origin") throw new HttpProblem(403, "forbidden_origin");
 };
 
-export async function POST(request: Request): Promise<Response> {
+const createWeexHistoricalBacktestHandler = (
+  executeBacktest: (request: PublicBacktestRequest) => Promise<BacktestReport> = cachedBacktest,
+) => async (request: Request): Promise<Response> => {
   try {
     requireRequestOrigin(request);
-    const config = await readStrictJson(request, { maximumBytes: 262_144, parse: parseRequest });
-    const demo = demoModeEnabled();
-    const report = await cachedBacktest(config);
-    return json({
-      report: demo ? { ...report, disclaimer: `DEMO_MODE：${report.disclaimer}` } : report,
-      demo,
-    });
+    const parsed = await readStrictJson(request, { maximumBytes: 262_144, parse: parseRequest });
+    const report = await executeBacktest(parsed);
+    if (report.evidence?.provider !== "WEEX" || report.evidence.level !== "historical" || !report.evidence.complete) {
+      throw new Error("WEEX historical evidence is incomplete");
+    }
+    return json({ report, demo: false });
   } catch (error) {
     if (error instanceof HttpProblem) return json({ error: { code: error.code } }, error.status);
     const message = error instanceof Error ? error.message : "";
     if (/invalid_strategy|策略設定無效/.test(message)) return json({ error: { code: "invalid_strategy" } }, 422);
-    if (/完整覆蓋|historical/i.test(message)) return json({ error: { code: "weex_history_incomplete" } }, 422);
+    if (/完整覆蓋|historical|history coverage/i.test(message)) return json({ error: { code: "weex_history_incomplete" } }, 422);
     if (/origin|Content-Type|request|json|payload/i.test(message)) return json({ error: { code: "invalid_request" } }, 400);
     console.error("[weex-public-backtest] failed", error instanceof Error ? { name: error.name, message: error.message } : { message: "unknown" });
     return json({ error: { code: "weex_history_unavailable" } }, 503);
   }
-}
+};
+
+export const POST = createWeexHistoricalBacktestHandler();

@@ -7,13 +7,10 @@ import { benchmarkSeries } from "../lib/benchmark-series";
 import BotsPage from "../app/bots/page";
 import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
-import { BotDownloadButton } from "../components/BotCard";
 import { StrategyShareActions } from "../components/StrategyShareActions";
 import { BOT_CATALOG } from "../data/bots";
-import { runBacktest } from "../lib/backtest";
-import * as botPackage from "../lib/bot-package";
 import { signInDemo } from "../lib/demo-auth";
-import type { BotConfig, WeexHistoricalPerformance } from "../lib/types";
+import type { WeexHistoricalPerformance } from "../lib/types";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -30,17 +27,18 @@ const REAL_RETURNS: Record<string, number> = {
   "leverage-guardian": -19.5,
   "breakout-hunter": -24.9,
 };
+const historicalReturn = (botId: string) => REAL_RETURNS[botId] ?? 1;
 
 const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id, {
-  metrics: { ...bot.metrics, totalReturn: REAL_RETURNS[bot.id] },
-  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + (REAL_RETURNS[bot.id] * index / Math.max(bot.equityCurve.length - 1, 1)) })),
+  metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
+  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)) })),
   generatedAt: "2026-07-13T12:00:00.000Z",
   disclaimer: "WEEX 歷史行情回測，不代表未來績效",
   evidence: {
     level: "historical", provider: "WEEX", market: bot.market, symbol: bot.symbol, interval: bot.timeframe,
     startTime: 1_751_846_400_000, endTime: 1_754_438_400_000, collectedAt: 1_754_438_400_000,
     candleCount: bot.market === "spot" ? 180 : 720, complete: true, feeRate: "0.001", slippageRate: "0.0005",
-    fundingIncluded: false, datasetDigest: `${bot.id}-digest`, engineVersion: "test",
+    fundingIncluded: false, datasetDigest: "d".repeat(64), engineVersion: "test",
   },
 }]));
 
@@ -66,7 +64,7 @@ describe("landing page", () => {
   it("introduces the approved WEEX-recommended discovery flow", () => {
     render(<Home />);
 
-    expect(screen.getByRole("heading", { level: 1, name: "把交易想法，組成能先模擬的自動策略。" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "簡單點選，實現自動化策略" })).toBeInTheDocument();
     expect(screen.queryByText("WEEX 專用 · 先模擬")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "探索策略" })).toHaveAttribute("href", "/bots");
     expect(screen.getByRole("link", { name: "從空白組裝" })).toHaveAttribute("href", "/workshop?new=1");
@@ -77,11 +75,14 @@ describe("landing page", () => {
 
     const flow = screen.getByRole("region", { name: "三步驟開始使用" });
     expect(within(flow).getAllByRole("listitem")).toHaveLength(3);
-    expect(screen.getByRole("heading", { name: "多策略，自由組裝。" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "用 JavaScript 寫下你的交易邏輯。" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "自由組裝各種策略" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "策略模組依序加入並完成組裝的動畫" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "支援匯入交易策略代碼" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "交易策略代碼輸入、掃描並完成匯入驗證的動畫" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "熱門機器人" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "近期績效排行榜" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "不用貼 API Key，也能安全準備自動執行。" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "近期績效排行榜" })).not.toBeInTheDocument();
+    expect(screen.queryByText("SECURE CONNECTION")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "查看安全連線流程" })).not.toBeInTheDocument();
   });
 
   it("uses an explicit blank-workshop flag for the landing CTA", () => {
@@ -98,24 +99,21 @@ describe("landing page", () => {
     expect(within(featured).getByText("動能鍛造者")).toBeInTheDocument();
     expect(within(featured).queryByText("突破獵手")).not.toBeInTheDocument();
     expect(within(featured).getByText("+15.4%")).toBeInTheDocument();
-    expect(within(featured).getAllByText("累積收益")).toHaveLength(3);
+    expect(within(featured).getAllByText("交易績效")).toHaveLength(3);
     expect(within(featured).getAllByText("最大回撤")).toHaveLength(3);
     expect(within(featured).getAllByText("勝率")).toHaveLength(3);
     expect(within(featured).getAllByRole("link", { name: /查看策略/ })).toHaveLength(3);
     expect(within(featured).getAllByRole("link", { name: /直接套用/ })).toHaveLength(3);
-    expect(within(featured).getAllByRole("button", { name: /快速下載/ })).toHaveLength(3);
-    expect(within(featured).getAllByText("WEEX 歷史行情回測，不代表未來績效")).toHaveLength(3);
+    expect(within(featured).queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
+    expect(within(featured).getAllByText("公開歷史行情回測，不代表未來績效")).toHaveLength(3);
   });
 
-  it("uses the same WEEX historical ranking for the homepage preview", async () => {
+  it("keeps the removed ranking preview off the homepage", async () => {
     render(<Home />);
 
-    const preview = await screen.findByRole("region", { name: "近期績效排行榜" });
-    expect(within(preview).getAllByRole("listitem")).toHaveLength(3);
-    expect(within(preview).getByText("動能鍛造者")).toBeInTheDocument();
-    expect(within(preview).getByText("+15.4%")).toBeInTheDocument();
-    expect(within(preview).getByText(/資料說明：近 30 天 WEEX 公開歷史 K 線/)).toBeInTheDocument();
-    expect(within(preview).getByRole("link", { name: "查看完整排行榜" })).toHaveAttribute("href", "/leaderboard");
+    await screen.findByRole("region", { name: "熱門機器人" });
+    expect(screen.queryByRole("region", { name: "近期績效排行榜" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "查看完整排行榜" })).not.toBeInTheDocument();
   });
 
   it("does not fall back to simulated featured rankings when WEEX data fails", async () => {
@@ -143,13 +141,15 @@ describe("bot catalog route", () => {
     expect(screen.getByRole("link", { name: "登入繼續探索" })).toHaveAttribute("href", "/auth?return_to=%2Fbots");
     expect(screen.queryByText(/另外\s*\d+\s*組策略/)).not.toBeInTheDocument();
     expect(screen.getByText("目前顯示 6 組符合策略")).toBeInTheDocument();
-    expect(container.querySelectorAll("[data-member-preview-card]")).toHaveLength(3);
-    expect(container.querySelector(".catalog-member-preview")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".catalog-member-preview")).not.toBeInTheDocument();
+    expect(container.querySelector(".catalog-member-backdrop")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelectorAll(".catalog-member-backdrop__card")).toHaveLength(3);
+    expect(container.querySelectorAll(".catalog-member-backdrop__card img")).toHaveLength(3);
     const dataNote = await screen.findByText("研究資料說明");
     const resultsGrid = container.querySelector(".bot-grid");
     const memberVault = container.querySelector(".catalog-member-vault");
-    expect(resultsGrid?.nextElementSibling).toBe(dataNote.closest(".research-data-note--catalog"));
-    expect(dataNote.closest(".research-data-note--catalog")?.nextElementSibling).toBe(memberVault);
+    expect(resultsGrid?.nextElementSibling).toBe(memberVault);
+    expect(memberVault?.nextElementSibling).toBe(dataNote.closest(".research-data-note--catalog"));
     await user.click(screen.getByRole("button", { name: /^現貨/ }));
     expect(screen.getAllByRole("article")).toHaveLength(5);
     expect(screen.queryByText("動能鍛造者")).not.toBeInTheDocument();
@@ -165,9 +165,9 @@ describe("bot catalog route", () => {
     act(() => signInDemo({ displayName: "策略會員", email: "member@example.test", provider: "email" }));
     render(<BotsPage />);
 
-    expect(screen.getAllByRole("article")).toHaveLength(10);
+    expect(screen.getAllByRole("article")).toHaveLength(20);
     expect(screen.queryByRole("heading", { name: "登入後，繼續探索完整策略庫" })).not.toBeInTheDocument();
-    expect(screen.getByText("顯示 10 / 10 組符合策略")).toBeInTheDocument();
+    expect(screen.getByText("顯示 20 / 20 組符合策略")).toBeInTheDocument();
   });
 
   it("sorts visible bots from derived catalog data", async () => {
@@ -178,7 +178,7 @@ describe("bot catalog route", () => {
     await waitFor(() => expect(screen.getAllByRole("heading", { level: 3 })[0]).toHaveTextContent("動能鍛造者"));
 
     await user.selectOptions(screen.getByRole("combobox", { name: "排序方式" }), "drawdown-asc");
-    expect(screen.getAllByRole("heading", { level: 3 })[0]).toHaveTextContent("軌道定投");
+    expect(screen.getAllByRole("heading", { level: 3 })[0]).toHaveTextContent("布林脈衝");
     expect(screen.getByText("目前顯示 6 組符合策略")).toBeInTheDocument();
   });
 
@@ -241,120 +241,6 @@ describe("bot catalog route", () => {
     expect(screen.queryByRole("button", { name: /取消收藏/ })).not.toBeInTheDocument();
   });
 
-  it("quick-downloads an importable deterministic strategy package end to end", async () => {
-    const bot = BOT_CATALOG[0];
-    const objectUrl = "blob:orbit-dca-package";
-    let clickedDownload = "";
-    let clickedHref = "";
-    let clickedWhileConnected = false;
-    let downloadedBlob: Blob | undefined;
-    let resolveClick!: () => void;
-    const clickObserved = new Promise<void>((resolve) => { resolveClick = resolve; });
-    const createObjectURL = vi.fn((blob: Blob) => {
-      expect(blob).toBeInstanceOf(Blob);
-      downloadedBlob = blob;
-      return objectUrl;
-    });
-    const revokeObjectURL = vi.fn();
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
-    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
-      clickedDownload = this.download;
-      clickedHref = this.href;
-      clickedWhileConnected = this.isConnected;
-      resolveClick();
-    });
-
-    const user = userEvent.setup();
-    render(<BotDownloadButton bot={bot} />);
-    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
-    await user.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
-    expect(dialog).toHaveTextContent("無法獨立交易");
-    expect(createObjectURL).not.toHaveBeenCalled();
-    await user.click(within(dialog).getByRole("button", { name: "確認下載" }));
-    await clickObserved;
-
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(clickedWhileConnected).toBe(true);
-    expect(clickedDownload).toBe("orbit-dca-weex-strategy.zip");
-    expect(clickedHref).toBe(objectUrl);
-    expect(document.body.querySelector('a[download="orbit-dca-weex-strategy.zip"]')).toBeNull();
-
-    const expectedConfig: BotConfig = {
-      id: bot.id,
-      name: bot.name,
-      exchange: bot.exchange,
-      market: bot.market,
-      symbol: bot.symbol,
-      timeframe: bot.timeframe,
-      logicMode: bot.logicMode,
-      leverage: bot.leverage,
-      blocks: bot.blocks,
-      ...(bot.source === undefined ? {} : { source: bot.source }),
-    };
-    const imported = await botPackage.importBotPackage(new File([downloadedBlob!], clickedDownload, { type: "application/zip" }));
-    expect(imported).toEqual({ config: expectedConfig, report: runBacktest(expectedConfig) });
-    expect(imported.report.metrics.totalReturn).not.toBe(bot.metrics.totalReturn);
-    expect(bot.metrics.totalReturn).toBe(48.6);
-
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
-    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "success");
-    expect(trigger).toHaveFocus();
-  });
-
-  it("makes quick-download confirmation keyboard complete and restores focus", async () => {
-    const bot = BOT_CATALOG[0];
-    const user = userEvent.setup();
-    render(<BotDownloadButton bot={bot} />);
-    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
-    await user.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
-    const cancel = within(dialog).getByRole("button", { name: "取消" });
-    const confirm = within(dialog).getByRole("button", { name: "確認下載" });
-    await waitFor(() => expect(cancel).toHaveFocus());
-    await user.tab({ shift: true });
-    expect(confirm).toHaveFocus();
-    await user.tab();
-    expect(cancel).toHaveFocus();
-    await user.keyboard("{Escape}");
-    expect(dialog).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
-  });
-
-  it("uses alert/danger for quick-download failures and status/success for completion", async () => {
-    const bot = BOT_CATALOG[0];
-    const user = userEvent.setup();
-    vi.spyOn(botPackage, "exportBotPackage").mockRejectedValueOnce(new Error("ZIP 失敗"));
-    render(<BotDownloadButton bot={bot} />);
-    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
-    await user.click(trigger);
-    await user.click(screen.getByRole("button", { name: "確認下載" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveAttribute("data-tone", "danger");
-  });
-
-  it("offers five individual files when a quick ZIP download fails", async () => {
-    const bot = BOT_CATALOG[0];
-    vi.spyOn(botPackage, "exportBotPackage").mockRejectedValue(new Error("ZIP 產生失敗"));
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:single-file") });
-    const revokeObjectURL = vi.fn();
-    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    const user = userEvent.setup();
-    render(<BotDownloadButton bot={bot} />);
-
-    const trigger = screen.getByRole("button", { name: `快速下載 ${bot.name}` });
-    await user.click(trigger);
-    await user.click(screen.getByRole("button", { name: "確認下載" }));
-
-    expect(await screen.findByText("ZIP 下載失敗，可改為分別下載 5 個檔案。")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveAttribute("data-tone", "danger");
-    expect(trigger).toHaveFocus();
-    expect(screen.getAllByRole("button", { name: /下載單一檔案/ })).toHaveLength(5);
-    await user.click(screen.getByRole("button", { name: "下載單一檔案 bot-config.json" }));
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:single-file"));
-  });
 });
 
 describe("bot detail route", () => {
@@ -385,8 +271,8 @@ describe("bot detail route", () => {
       const view = await BotDetailPage({ params: Promise.resolve({ id: bot.id }) });
       const { unmount } = render(view);
       expect(screen.getByRole("heading", { level: 1, name: bot.name })).toBeInTheDocument();
-      expect(screen.getAllByRole("link", { name: "套用此策略" }).every((link) => link.getAttribute("href") === `/workshop?bot=${bot.id}&version=1&via=cryptobot-labs`)).toBe(true);
-      expect(screen.getAllByRole("button", { name: `快速下載 ${bot.name}` }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole("link", { name: "直接套用" }).every((link) => link.getAttribute("href") === `/workshop?bot=${bot.id}&version=1`)).toBe(true);
+      expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
       unmount();
     }
   });
@@ -395,17 +281,17 @@ describe("bot detail route", () => {
     const view = await BotDetailPage({ params: Promise.resolve({ id: "orbit-dca" }) });
     render(view);
 
-    const metrics = screen.getByRole("region", { name: "完整績效指標" });
+    const metrics = await screen.findByRole("region", { name: "完整績效指標" });
     expect(within(metrics).getAllByRole("article")).toHaveLength(9);
-    expect(within(metrics).getByText("模擬回測資料，不代表未來績效")).toBeInTheDocument();
-    expect(screen.getByRole("figure", { name: /軌道定投 累積收益曲線/ })).toBeInTheDocument();
-    expect(screen.getByRole("figure", { name: /WEEX 市場基準曲線/ })).toBeInTheDocument();
+    expect(within(metrics).getByText("WEEX 歷史行情回測，不代表未來績效")).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: /軌道定投 交易績效曲線/ })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: /市場基準曲線/ })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "策略與基準比較摘要" })).toHaveTextContent("期末淨值");
-    expect(screen.getByRole("table", { name: "軌道定投 月度表現" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "軌道定投 分段表現" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "策略原理" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "適用市場" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "風險說明" })).toBeInTheDocument();
-    expect(screen.getAllByText("模擬回測資料，不代表未來績效").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("WEEX 歷史行情回測，不代表未來績效").length).toBeGreaterThan(0);
   });
 
   it("derives a deterministic benchmark series beside each bot", () => {

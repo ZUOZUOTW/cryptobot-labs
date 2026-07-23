@@ -6,10 +6,11 @@ import { BotCard } from "../../components/BotCard";
 import { BOT_CATALOG } from "../../data/bots";
 import type { Market, RiskLevel, WeexHistoricalPerformance } from "../../lib/types";
 import { loadDiscoveryPreferences, saveDiscoveryPreferences, type DiscoveryPreferences } from "../../lib/preferences";
-import { loadWeexBotPerformance } from "../../lib/weex-historical-client";
+import { isVerifiedWeexPerformance, loadWeexBotPerformance } from "../../lib/weex-historical-client";
 import { captureAttribution } from "../../lib/attribution";
 import { demoAuthPath } from "../../lib/demo-auth";
 import { usePlatformUser } from "../../components/PlatformAuthProvider";
+import { useI18n } from "../../components/I18nProvider";
 
 type MarketFilter = Market | "all";
 type RiskFilter = RiskLevel | "all";
@@ -19,6 +20,7 @@ const TAGS = Array.from(new Set(BOT_CATALOG.flatMap((bot) => bot.tags))).sort((a
 const TIMEFRAMES = Array.from(new Set(BOT_CATALOG.map((bot) => bot.timeframe))).sort();
 
 export default function BotsPage() {
+  const { locale } = useI18n();
   const user = usePlatformUser();
   const [market, setMarket] = useState<MarketFilter>("all");
   const [risk, setRisk] = useState<RiskFilter>("all");
@@ -51,6 +53,13 @@ export default function BotsPage() {
     let cancelled = false;
     void loadWeexBotPerformance().then((result) => {
       if (cancelled) return;
+      const complete = !result.demo && BOT_CATALOG.every((bot) => isVerifiedWeexPerformance(result.performances[bot.id]));
+      if (!complete) {
+        setPerformances({});
+        setDemoPerformance(result.demo);
+        setPerformanceState("error");
+        return;
+      }
       setPerformances(result.performances);
       setPerformanceUpdatedAt(result.updatedAt);
       setDemoPerformance(result.demo);
@@ -167,7 +176,7 @@ export default function BotsPage() {
           <span>排序方式</span>
           <select value={sort} onChange={(event) => { const value = event.target.value as SortOption; setSort(value); persist({ sort: value }); }}>
             <option value="recommended">熱門推薦：完成度與風險調整</option>
-            <option value="return-desc">累積收益：高到低</option>
+            <option value="return-desc">交易績效：高到低</option>
             <option value="drawdown-asc">最大回撤：低到高</option>
             <option value="win-rate-desc">勝率：高到低</option>
             <option value="stability-desc">穩定度：高到低</option>
@@ -176,7 +185,7 @@ export default function BotsPage() {
       </section>
 
       {preferenceError && <p className="catalog-preference-status" role="status">{preferenceError}，目前篩選仍可繼續使用。</p>}
-      {demoPerformance && <p className="catalog-preference-status" role="note">DEMO_MODE：目前顯示固定的合成模擬範例，不會呼叫 WEEX 行情 API；所有績效都不代表未來結果。</p>}
+      {demoPerformance && <p className="catalog-preference-status" role="note">目前是展示環境，未載入真實行情績效，因此不顯示替代或合成數據。</p>}
       {performanceState !== "ready" && (
         <p className="catalog-preference-status" role={performanceState === "error" ? "alert" : "status"}>
           {performanceState === "error" ? "近期績效暫時無法取得；未顯示替代或虛構數據。" : "正在計算近期績效…"}
@@ -200,14 +209,22 @@ export default function BotsPage() {
               performanceStatus={performanceState === "ready" && !demoPerformance && !performances[bot.id] ? "error" : performanceState}
             />)}
           </section>
-          {performanceState === "ready" && performanceUpdatedAt && (
-            <p className="research-data-note research-data-note--catalog" role="note">
-              <strong>研究資料說明</strong>
-              <span>近 30 天 WEEX 公開歷史 K 線，現貨採 4h、合約採 1h；手續費與滑價使用統一研究假設，未計資金費率。更新於 {new Date(performanceUpdatedAt).toLocaleString("zh-TW")}；回測不代表未來績效。</span>
-            </p>
-          )}
           {hasMemberResults && (
             <section className="catalog-member-vault" aria-label="會員策略庫預覽">
+              <div className="catalog-member-backdrop" aria-hidden="true">
+                {[
+                  { image: "/mascots/ai-observer.webp", tone: "violet" },
+                  { image: "/mascots/ai-builder.webp", tone: "cyan" },
+                  { image: "/mascots/ai-guardian.webp", tone: "mint" },
+                ].map((card) => (
+                  <div className="catalog-member-backdrop__card" data-tone={card.tone} key={card.image}>
+                    <img alt="" height="128" src={card.image} width="148" />
+                    <div className="catalog-member-backdrop__skeleton">
+                      <span /><span /><span />
+                    </div>
+                  </div>
+                ))}
+              </div>
               <section className="catalog-login-gate glass-panel" aria-labelledby="catalog-login-title">
                 <div className="catalog-login-gate__signal" aria-hidden="true"><span>MEMBER</span><strong>+</strong></div>
                 <div className="catalog-login-gate__copy">
@@ -220,24 +237,16 @@ export default function BotsPage() {
                 </div>
                 <div className="catalog-login-gate__action">
                   <Link className="button button--primary" href={demoAuthPath("/bots")}>登入繼續探索</Link>
-                  <small>不需連接 WEEX 即可瀏覽</small>
+                  <small>不需連接交易帳戶即可瀏覽</small>
                 </div>
               </section>
-              <div aria-hidden="true" className="catalog-member-preview" inert>
-                {["signal", "range", "momentum"].map((variant, index) => (
-                  <article className="catalog-member-preview__card" data-member-preview-card data-variant={variant} key={variant}>
-                    <div className="catalog-member-preview__top"><span>MEMBER STRATEGY</span><b>0{index + 1}</b></div>
-                    <div className="catalog-member-preview__identity"><strong>進階策略模型</strong><span>市場 · 週期 · 風險</span></div>
-                    <div className="catalog-member-preview__chart"><span /><span /><span /><span /><span /></div>
-                    <dl>
-                      <div><dt>累積收益</dt><dd>—</dd></div>
-                      <div><dt>最大回撤</dt><dd>—</dd></div>
-                      <div><dt>交易次數</dt><dd>—</dd></div>
-                    </dl>
-                  </article>
-                ))}
-              </div>
             </section>
+          )}
+          {performanceState === "ready" && performanceUpdatedAt && (
+            <p className="research-data-note research-data-note--catalog" role="note">
+              <strong>研究資料說明</strong>
+              <span>近 30 天 WEEX 公開歷史 K 線，現貨採 4h、合約採 1h；手續費與滑價使用統一研究假設，未計資金費率。更新於 {new Date(performanceUpdatedAt).toLocaleString(locale)}；回測不代表未來績效。</span>
+            </p>
           )}
         </>
       ) : (

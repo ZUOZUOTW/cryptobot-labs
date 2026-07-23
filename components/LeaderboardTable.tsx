@@ -3,21 +3,27 @@
 import Link from "next/link";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { BOT_CATALOG } from "../data/bots";
+import { useI18n } from "./I18nProvider";
 import type { BotDefinition, EquityPoint, WeexHistoricalPerformance } from "../lib/types";
-import { loadWeexBotPerformance } from "../lib/weex-historical-client";
+import { isVerifiedWeexPerformance, loadWeexBotPerformance } from "../lib/weex-historical-client";
 import styles from "./LeaderboardTable.module.css";
 
-export type LeaderboardSort = "return" | "stability" | "drawdown" | "sharpe";
+export type LeaderboardSort = "return" | "winRate" | "trades" | "stability" | "drawdown" | "sharpe";
+type SortDirection = "ascending" | "descending";
 
 const SORT_LABELS: Readonly<Record<LeaderboardSort, string>> = {
-  return: "累積收益",
+  return: "交易績效",
+  winRate: "勝率",
+  trades: "交易次數",
   stability: "穩定度",
   drawdown: "最大回撤",
   sharpe: "夏普比率",
 };
 
 const SORT_BUTTON_LABELS: Readonly<Record<LeaderboardSort, string>> = {
-  return: "累積收益",
+  return: "交易績效",
+  winRate: "勝率",
+  trades: "交易次數",
   stability: "穩定度",
   drawdown: "低回撤",
   sharpe: "夏普比率",
@@ -31,10 +37,11 @@ const BATTLE_COLORS = [
 ] as const;
 
 const BATTLE_MASCOTS = [
-  "/mascots/ai-guardian.png",
-  "/mascots/ai-observer.png",
-  "/mascots/ai-builder.png",
+  "/mascots/ai-guardian.webp",
+  "/mascots/ai-observer.webp",
+  "/mascots/ai-builder.webp",
 ] as const;
+const BATTLE_CHART_LIMIT = 10;
 
 const battleVisual = (botId: string) => {
   const catalogIndex = Math.max(0, BOT_CATALOG.findIndex((bot) => bot.id === botId));
@@ -48,13 +55,22 @@ interface RankedBot extends BotDefinition {
   historicalPerformance: WeexHistoricalPerformance;
 }
 
-function rankBots(bots: readonly RankedBot[], sort: LeaderboardSort): RankedBot[] {
+const defaultSortDirection = (sort: LeaderboardSort): SortDirection => sort === "drawdown" ? "ascending" : "descending";
+
+const metricValue = (bot: RankedBot, sort: LeaderboardSort) => {
+  if (sort === "winRate") return bot.metrics.winRate;
+  if (sort === "trades") return bot.metrics.trades;
+  if (sort === "stability") return bot.metrics.stability;
+  if (sort === "drawdown") return Math.abs(bot.metrics.maxDrawdown);
+  if (sort === "sharpe") return bot.metrics.sharpe;
+  return bot.metrics.totalReturn;
+};
+
+function rankBots(bots: readonly RankedBot[], sort: LeaderboardSort, direction = defaultSortDirection(sort)): RankedBot[] {
   return [...bots].toSorted((a, b) => {
-    let difference: number;
-    if (sort === "stability") difference = b.metrics.stability - a.metrics.stability;
-    else if (sort === "drawdown") difference = Math.abs(a.metrics.maxDrawdown) - Math.abs(b.metrics.maxDrawdown);
-    else if (sort === "sharpe") difference = b.metrics.sharpe - a.metrics.sharpe;
-    else difference = b.metrics.totalReturn - a.metrics.totalReturn;
+    const difference = direction === "ascending"
+      ? metricValue(a, sort) - metricValue(b, sort)
+      : metricValue(b, sort) - metricValue(a, sort);
     return difference || a.id.localeCompare(b.id);
   });
 }
@@ -62,20 +78,56 @@ function rankBots(bots: readonly RankedBot[], sort: LeaderboardSort): RankedBot[
 const signedPercent = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
 const drawdownPercent = (value: number) => `${value.toFixed(1)}%`;
 
-const comparisonValue = (bot: RankedBot, sort: LeaderboardSort) => {
-  if (sort === "stability") return bot.metrics.stability;
-  if (sort === "drawdown") return Math.abs(bot.metrics.maxDrawdown);
-  if (sort === "sharpe") return bot.metrics.sharpe;
-  return bot.metrics.totalReturn;
-};
+const comparisonValue = metricValue;
 
 const comparisonLabel = (bot: RankedBot, sort: LeaderboardSort) => {
   const value = comparisonValue(bot, sort);
   if (sort === "return") return signedPercent(value);
+  if (sort === "winRate") return `${value.toFixed(1)}%`;
+  if (sort === "trades") return Math.round(value).toLocaleString();
   if (sort === "stability") return `${value.toFixed(0)} / 100`;
   if (sort === "drawdown") return `${value.toFixed(1)}%`;
   return value.toFixed(2);
 };
+
+const chartMetricLabel = (value: number, sort: LeaderboardSort) => {
+  if (sort === "return") return signedPercent(value);
+  if (sort === "winRate") return `${value.toFixed(1)}%`;
+  if (sort === "trades") return Math.round(value).toLocaleString();
+  if (sort === "drawdown") return `${value.toFixed(1)}%`;
+  if (sort === "stability") return value.toFixed(0);
+  return value.toFixed(2);
+};
+
+function progressiveMetric(values: readonly number[], sort: LeaderboardSort): number {
+  if (values.length < 2) return 0;
+  const first = Math.max(values[0] ?? 100, 0.0001);
+  if (sort === "return") return ((values.at(-1)! / first) - 1) * 100;
+  let peak = values[0] ?? 100;
+  let maximumDrawdown = 0;
+  for (const value of values) {
+    peak = Math.max(peak, value);
+    maximumDrawdown = Math.max(maximumDrawdown, peak === 0 ? 0 : ((peak - value) / peak) * 100);
+  }
+  if (sort === "drawdown") return maximumDrawdown;
+  const returns = values.slice(1).map((value, index) => values[index] === 0 ? 0 : value / values[index]! - 1);
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const deviation = Math.sqrt(returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / returns.length);
+  if (sort === "sharpe") return deviation === 0 ? 0 : (mean / deviation) * Math.sqrt(returns.length);
+  const positiveRatio = returns.filter((value) => value > 0).length / returns.length;
+  const volatilityScore = Math.max(0, 1 - deviation * Math.sqrt(returns.length));
+  const drawdownScore = Math.max(0, 1 - maximumDrawdown / 100);
+  return Math.min(100, Math.max(0, volatilityScore * 50 + positiveRatio * 25 + drawdownScore * 25));
+}
+
+function battleMetricSeries(bot: RankedBot, sort: LeaderboardSort) {
+  return bot.equityCurve.map((point, index) => ({
+    label: point.label,
+    value: index === bot.equityCurve.length - 1
+      ? comparisonValue(bot, sort)
+      : progressiveMetric(bot.equityCurve.slice(0, index + 1).map((item) => item.value), sort),
+  }));
+}
 
 function smoothPath(coordinates: Array<{ x: number; y: number }>): string {
   if (coordinates.length === 0) return "";
@@ -99,11 +151,11 @@ function ArenaTrend({ label, points, compact = false }: { label: string; points:
   const maximum = Math.max(...values);
   const spread = Math.max(maximum - minimum, 1);
   const coordinates = points.map((point, index) => ({
-    x: 6 + (index * 168) / Math.max(points.length - 1, 1),
+    x: (index * 180) / Math.max(points.length - 1, 1),
     y: 47 - ((point.value - minimum) / spread) * 39,
   }));
   const line = smoothPath(coordinates);
-  const area = coordinates.length === 0 ? "" : `${line} L 174 52 L 6 52 Z`;
+  const area = coordinates.length === 0 ? "" : `${line} L 180 52 L 0 52 Z`;
 
   return (
     <svg aria-label={label} className={`arena-trend${compact ? " arena-trend--compact" : ""}`} preserveAspectRatio="none" role="img" viewBox="0 0 180 54">
@@ -127,30 +179,18 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
   const plotBottom = 438;
   const chartRight = 934;
   const labelX = 986;
-  const normalizedSeries = bots.map((bot) => {
-    const firstValue = bot.equityCurve[0]?.value ?? 100;
-    return bot.equityCurve.map((point, index) => ({
-      label: point.label,
-      value: index === bot.equityCurve.length - 1
-        ? bot.metrics.totalReturn
-        : ((point.value / Math.max(firstValue, 0.0001)) - 1) * 100,
-    }));
-  });
-  const values = normalizedSeries.flatMap((points) => points.map((point) => point.value));
+  const plottedSort: LeaderboardSort = sort === "winRate" || sort === "trades" ? "return" : sort;
+  const metricSeries = bots.map((bot) => battleMetricSeries(bot, plottedSort));
+  const values = metricSeries.flatMap((points) => points.map((point) => point.value));
   const rawMinimum = Math.min(0, ...values);
   const rawMaximum = Math.max(0, ...values);
-  const tickStep = Math.max(5, Math.ceil((rawMaximum - rawMinimum) / 20) * 5);
-  let maximum = Math.ceil(rawMaximum / tickStep) * tickStep;
-  let minimum = maximum - tickStep * 4;
-  if (minimum > rawMinimum) {
-    const shift = Math.ceil((minimum - rawMinimum) / tickStep) * tickStep;
-    maximum -= shift;
-    minimum -= shift;
-  }
-  const spread = Math.max(maximum - minimum, 5);
+  const padding = Math.max((rawMaximum - rawMinimum) * 0.08, plottedSort === "sharpe" ? 0.2 : 1);
+  const minimum = plottedSort === "return" ? rawMinimum - padding : 0;
+  const maximum = Math.max(rawMaximum + padding, plottedSort === "stability" ? 100 : plottedSort === "sharpe" ? 1 : 5);
+  const spread = Math.max(maximum - minimum, 0.001);
   const yForValue = (value: number) => paddingTop + ((maximum - value) / spread) * (plotBottom - paddingTop);
-  const yTicks = Array.from({ length: 5 }, (_, index) => maximum - tickStep * index);
-  const longestTimeline = normalizedSeries.reduce((longest, points) => points.length > longest.length ? points : longest, normalizedSeries[0] ?? []);
+  const yTicks = Array.from({ length: 5 }, (_, index) => maximum - (spread / 4) * index);
+  const longestTimeline = metricSeries.reduce((longest, points) => points.length > longest.length ? points : longest, metricSeries[0] ?? []);
   const xTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
     const pointIndex = Math.round(ratio * Math.max(longestTimeline.length - 1, 0));
     return {
@@ -159,7 +199,7 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
     };
   });
   const series = bots.map((bot, index) => {
-    const curve = normalizedSeries[index] ?? [];
+    const curve = metricSeries[index] ?? [];
     const visual = battleVisual(bot.id);
     const coordinates = curve.map((point, pointIndex) => ({
       x: paddingLeft + (pointIndex / Math.max(curve.length - 1, 1)) * (chartRight - paddingLeft),
@@ -178,14 +218,18 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
   const labelStep = orderedLabels.length > 1 ? (plotBottom - paddingTop) / (orderedLabels.length - 1) : 0;
   const labelYById = new Map(orderedLabels.map((item, index) => [item.bot.id, paddingTop + index * labelStep]));
   const baselineY = yForValue(0);
+  const aggregateSort = sort === "winRate" || sort === "trades";
+  const chartTitle = aggregateSort
+    ? `依${SORT_LABELS[sort]}排序的近 30 天機器人交易績效戰況；點擊折線或線端標籤可查看機器人詳情`
+    : `近 30 天機器人${SORT_LABELS[sort]}戰況；點擊折線或線端標籤可查看機器人詳情`;
 
   return (
     <div className={`battle-chart glass-panel ${styles.battleChart}`}>
       <div className={styles.battleToolbar}>
         <div className={styles.battleStatus}>
           <span aria-hidden="true" />
-          <strong>10 組策略即時對照</strong>
-          <small>WEEX HISTORICAL BACKTEST</small>
+          <strong>前 {bots.length} 組策略即時對照</strong>
+          <small>VERIFIED HISTORICAL BACKTEST</small>
         </div>
         <div className={styles.sortDock}>
           <span className={styles.sortLabel}>戰況排序</span>
@@ -207,19 +251,19 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
         </div>
         <div className={styles.battleMeta} aria-label="圖表設定">
           <span>近 30 天</span>
-          <span>累積收益 %</span>
+          <span>{aggregateSort ? `${SORT_LABELS[sort]}排序 · 交易績效 %` : `${SORT_LABELS[sort]}${sort === "return" || sort === "drawdown" ? " %" : ""}`}</span>
         </div>
       </div>
       <div className={styles.plotScroller}>
-        <svg aria-label="近 30 天機器人累積收益戰況；點擊折線或線端標籤可查看機器人詳情" className={`battle-chart__plot ${styles.plot}`} fill="none" role="img" viewBox={`0 0 ${width} ${height}`}>
-          <rect className={styles.profitZone} height={Math.max(baselineY - paddingTop, 0)} width={chartRight - paddingLeft} x={paddingLeft} y={paddingTop} />
-          <rect className={styles.lossZone} height={Math.max(plotBottom - baselineY, 0)} width={chartRight - paddingLeft} x={paddingLeft} y={baselineY} />
+        <svg aria-label={chartTitle} className={`battle-chart__plot ${styles.plot}`} fill="none" role="img" viewBox={`0 0 ${width} ${height}`}>
+          {plottedSort === "return" && <rect className={styles.profitZone} height={Math.max(baselineY - paddingTop, 0)} width={chartRight - paddingLeft} x={paddingLeft} y={paddingTop} />}
+          {plottedSort === "return" && <rect className={styles.lossZone} height={Math.max(plotBottom - baselineY, 0)} width={chartRight - paddingLeft} x={paddingLeft} y={baselineY} />}
           {yTicks.map((value) => {
             const y = yForValue(value);
             return (
               <g key={value}>
                 <line className={`battle-chart__gridline ${styles.gridline}`} x1={paddingLeft} x2={chartRight} y1={y} y2={y} />
-                <text className={`battle-chart__axis-label ${styles.axisLabel}`} textAnchor="end" x={paddingLeft - 12} y={y}>{signedPercent(value)}</text>
+                <text className={`battle-chart__axis-label ${styles.axisLabel}`} textAnchor="end" x={paddingLeft - 12} y={y}>{chartMetricLabel(value, plottedSort)}</text>
               </g>
             );
           })}
@@ -229,8 +273,8 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
               <text className={`battle-chart__axis-label ${styles.timeLabel}`} textAnchor={index === 0 ? "start" : index === xTicks.length - 1 ? "end" : "middle"} x={tick.x} y={472}>{tick.label}</text>
             </g>
           ))}
-          <line className={styles.baseline} x1={paddingLeft} x2={chartRight} y1={baselineY} y2={baselineY} />
-          <text className={styles.baselineLabel} x={paddingLeft + 10} y={baselineY - 9}>STARTING EQUITY</text>
+          {plottedSort === "return" && <line className={styles.baseline} x1={paddingLeft} x2={chartRight} y1={baselineY} y2={baselineY} />}
+          {plottedSort === "return" && <text className={styles.baselineLabel} x={paddingLeft + 10} y={baselineY - 9}>STARTING EQUITY</text>}
           <line className={styles.labelRail} x1={chartRight + 24} x2={chartRight + 24} y1={paddingTop} y2={plotBottom} />
           {series.map(({ bot, color, endpoint, mascot, path }, index) => {
             const labelY = labelYById.get(bot.id) ?? endpoint.y;
@@ -240,7 +284,7 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
             } as CSSProperties;
 
             return (
-              <a aria-label={`查看 ${bot.name}，累積收益 ${signedPercent(bot.metrics.totalReturn)}`} className={`battle-chart__series ${styles.series}`} data-bot-id={bot.id} href={`/bots/${bot.id}`} key={bot.id} style={style}>
+              <a aria-label={`查看 ${bot.name}，${SORT_LABELS[sort]} ${comparisonLabel(bot, sort)}`} className={`battle-chart__series ${styles.series}`} data-bot-id={bot.id} href={`/bots/${bot.id}`} key={bot.id} style={style}>
                 <path className={`battle-chart__hit ${styles.hit}`} d={path} fill="none" stroke="transparent" />
                 <path className={`battle-chart__line ${styles.line}`} d={path} fill="none" pathLength="1" stroke={color} vectorEffect="non-scaling-stroke" />
                 <path className={styles.endConnector} d={`M ${endpoint.x} ${endpoint.y} L ${chartRight + 24} ${labelY} L ${labelX - 8} ${labelY}`} stroke={color} vectorEffect="non-scaling-stroke" />
@@ -251,7 +295,7 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
                   <circle className={styles.avatarRing} cx={labelX + 22} cy={labelY} fill="#071121" r="14" stroke={color} />
                   <image height="27" href={mascot} preserveAspectRatio="xMidYMid slice" width="30" x={labelX + 7} y={labelY - 14} />
                   <text aria-hidden="true" className={`battle-chart__end-label ${styles.endLabel}`} fill={color} x={labelX + 43} y={labelY - 4}>{bot.name}</text>
-                  <text aria-hidden="true" className={styles.endValue} data-result={bot.metrics.totalReturn >= 0 ? "profit" : "loss"} x={labelX + 43} y={labelY + 12}>{signedPercent(bot.metrics.totalReturn)}</text>
+                  <text aria-hidden="true" className={styles.endValue} data-result={sort === "return" ? (bot.metrics.totalReturn >= 0 ? "profit" : "loss") : "metric"} x={labelX + 43} y={labelY + 12}>{comparisonLabel(bot, sort)}</text>
                 </g>
               </a>
             );
@@ -263,7 +307,7 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
           <Link className={styles.legendLink} href={`/bots/${bot.id}`} key={bot.id} style={{ "--battle-color": battleVisual(bot.id).color } as CSSProperties}>
             <span aria-hidden="true" className={styles.swatch} />
             <strong className={styles.legendName}>{bot.name}</strong>
-            <em className={styles.legendResult} data-result={bot.metrics.totalReturn >= 0 ? "profit" : "loss"}>{signedPercent(bot.metrics.totalReturn)}</em>
+            <em className={styles.legendResult} data-result={sort === "return" ? (bot.metrics.totalReturn >= 0 ? "profit" : "loss") : "metric"}>{comparisonLabel(bot, sort)}</em>
           </Link>
         ))}
       </div>
@@ -272,7 +316,9 @@ function BattleChart({ bots, onSortChange, sort }: { bots: readonly RankedBot[];
 }
 
 export function LeaderboardTable() {
+  const { locale } = useI18n();
   const [sort, setSort] = useState<LeaderboardSort>("return");
+  const [tableSort, setTableSort] = useState<{ direction: SortDirection; key: LeaderboardSort }>({ direction: "descending", key: "return" });
   const [performanceState, setPerformanceState] = useState<"loading" | "ready" | "error">("loading");
   const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
   const [performanceUpdatedAt, setPerformanceUpdatedAt] = useState("");
@@ -284,6 +330,12 @@ export function LeaderboardTable() {
     let cancelled = false;
     void loadWeexBotPerformance().then((result) => {
       if (cancelled) return;
+      const complete = !result.demo && BOT_CATALOG.every((bot) => isVerifiedWeexPerformance(result.performances[bot.id]));
+      if (!complete) {
+        setPerformances({});
+        setPerformanceState("error");
+        return;
+      }
       setPerformances(result.performances);
       setPerformanceUpdatedAt(result.updatedAt);
       setPerformanceState("ready");
@@ -304,6 +356,8 @@ export function LeaderboardTable() {
     }] : [];
   }), [performances]);
   const rankedBots = useMemo(() => rankBots(realBots, sort), [realBots, sort]);
+  const tableBots = useMemo(() => rankBots(realBots, tableSort.key, tableSort.direction), [realBots, tableSort]);
+  const battleBots = rankedBots.slice(0, BATTLE_CHART_LIMIT);
   const podium = rankedBots.slice(0, 3);
   const returnValues = rankedBots.map((bot) => bot.metrics.totalReturn);
   const minimumReturn = Math.min(...returnValues, 0);
@@ -327,7 +381,30 @@ export function LeaderboardTable() {
       }
     });
     previousPositions.current = nextPositions;
-  }, [rankedBots]);
+  }, [tableBots]);
+
+  const changeBattleSort = (nextSort: LeaderboardSort) => {
+    setSort(nextSort);
+    setTableSort({ direction: defaultSortDirection(nextSort), key: nextSort });
+  };
+
+  const changeTableSort = (key: LeaderboardSort) => {
+    setTableSort((current) => ({
+      direction: current.key === key
+        ? (current.direction === "descending" ? "ascending" : "descending")
+        : defaultSortDirection(key),
+      key,
+    }));
+  };
+
+  const sortableHeader = (key: LeaderboardSort, label: string) => (
+    <th aria-sort={tableSort.key === key ? tableSort.direction : "none"} scope="col">
+      <button aria-label={label} className="leaderboard-table__sort-button" onClick={() => changeTableSort(key)} type="button">
+        <span>{label}</span>
+        <span aria-hidden="true">{tableSort.key === key ? (tableSort.direction === "descending" ? "↓" : "↑") : "↕"}</span>
+      </button>
+    </th>
+  );
 
   return (
     <div className="leaderboard-experience">
@@ -335,7 +412,7 @@ export function LeaderboardTable() {
         <section className="leaderboard-data-state glass-panel" aria-live="polite" role={performanceState === "error" ? "alert" : "status"}>
           <p className="eyebrow">MARKET DATA</p>
           <h2>{performanceState === "error" ? "近期績效暫時無法取得" : "正在計算近期績效"}</h2>
-          <p>{performanceState === "error" ? "沒有顯示替代或虛構數據，請稍後重新載入。" : "正在整理 10 組策略的公開歷史 K 線回測結果。"}</p>
+          <p>{performanceState === "error" ? "沒有顯示替代或虛構數據，請稍後重新載入。" : `正在整理 ${BOT_CATALOG.length} 組策略的公開歷史 K 線回測結果。`}</p>
           {performanceState === "error" && <button className="button button--secondary" onClick={() => { setPerformanceState("loading"); setReloadKey((value) => value + 1); }} type="button">重新載入</button>}
         </section>
       ) : (
@@ -346,12 +423,12 @@ export function LeaderboardTable() {
               {podium.map((bot, index) => (
                 <article className="podium-card glass-panel" data-rank={index + 1} key={bot.id}>
                   <span className="podium-card__rank" aria-label={`第 ${index + 1} 名`}>0{index + 1}</span>
-                  <img alt="" aria-hidden="true" className="podium-card__mascot" height="180" src={index === 0 ? "/mascots/ai-guardian.png" : index === 1 ? "/mascots/ai-observer.png" : "/mascots/ai-builder.png"} width="200" />
-                  <div className="podium-card__identity"><p className="eyebrow">{bot.exchange} / {bot.symbol}</p><h3><Link href={`/bots/${bot.id}`}>{bot.name}</Link></h3><span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span></div>
+                  <img alt="" aria-hidden="true" className="podium-card__mascot" decoding="async" height="180" src={index === 0 ? "/mascots/ai-guardian.webp" : index === 1 ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp"} width="200" />
+                  <div className="podium-card__identity"><p className="eyebrow">{bot.symbol} / {bot.timeframe.toUpperCase()}</p><h3><Link href={`/bots/${bot.id}`}>{bot.name}</Link></h3><span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span></div>
                   <div className="podium-card__trend"><span>PERFORMANCE TREND</span><ArenaTrend label={`${bot.name} 近 30 天趨勢`} points={bot.equityCurve} /></div>
                   <dl>
                     <div><dt>{SORT_LABELS[sort]}</dt><dd>{comparisonLabel(bot, sort)}</dd></div>
-                    <div><dt>累積收益</dt><dd>{signedPercent(bot.metrics.totalReturn)}</dd></div>
+                    <div><dt>勝率</dt><dd>{bot.metrics.winRate.toFixed(1)}%</dd></div>
                     <div><dt>交易次數</dt><dd>{bot.metrics.trades}</dd></div>
                   </dl>
                 </article>
@@ -361,7 +438,7 @@ export function LeaderboardTable() {
 
           <section className="leaderboard-section" aria-label="機器人交易戰況">
             <div className="section-heading"><p className="eyebrow">TRADING BATTLE / CLICK A LINE</p><h2>機器人交易戰況</h2></div>
-            <BattleChart bots={rankedBots} onSortChange={setSort} sort={sort} />
+            <BattleChart bots={battleBots} onSortChange={changeBattleSort} sort={sort} />
           </section>
 
           <section className={`leaderboard-insights ${styles.insights}`} style={{ display: "block" }}>
@@ -388,18 +465,18 @@ export function LeaderboardTable() {
           </section>
 
           <section className="leaderboard-section" aria-labelledby="complete-ranking-title">
-            <div className="section-heading"><p className="eyebrow">FULL RANKING / 10 BOTS</p><h2 id="complete-ranking-title">完整績效排名</h2></div>
+            <div className="section-heading"><p className="eyebrow">FULL RANKING / {BOT_CATALOG.length} BOTS</p><h2 id="complete-ranking-title">完整績效排名</h2></div>
             <div className="table-shell glass-panel leaderboard-table-shell">
               <table aria-label="完整機器人績效排名" className="leaderboard-table">
-                <thead><tr><th scope="col">排名</th><th scope="col">機器人</th><th scope="col">累積收益</th><th scope="col">趨勢</th><th scope="col">交易次數</th><th scope="col">穩定度</th><th scope="col">最大回撤</th><th scope="col">夏普比率</th><th scope="col">風險</th></tr></thead>
+                <thead><tr><th scope="col">排名</th><th scope="col">機器人</th>{sortableHeader("return", "交易績效")}<th scope="col">趨勢</th>{sortableHeader("winRate", "勝率")}{sortableHeader("trades", "交易次數")}{sortableHeader("stability", "穩定度")}{sortableHeader("drawdown", "最大回撤")}{sortableHeader("sharpe", "夏普比率")}<th scope="col">風險</th></tr></thead>
                 <tbody>
-                  {rankedBots.map((bot, index) => (
+                  {tableBots.map((bot, index) => (
                     <tr className="leaderboard-table__row" data-bot-id={bot.id} key={bot.id} ref={(node) => { if (node) rowNodes.current.set(bot.id, node); else rowNodes.current.delete(bot.id); }}>
                       <td><span className="leaderboard-table__rank">{String(index + 1).padStart(2, "0")}</span></td>
-                      <th scope="row"><Link href={`/bots/${bot.id}`}>{bot.name}</Link><small>{bot.exchange} · {bot.market === "spot" ? "現貨" : "合約"}</small></th>
+                      <th scope="row"><Link href={`/bots/${bot.id}`}>{bot.name}</Link><small>{bot.symbol} · {bot.market === "spot" ? "現貨" : "合約"}</small></th>
                       <td className={bot.metrics.totalReturn >= 0 ? "value-positive" : "value-negative"}>{signedPercent(bot.metrics.totalReturn)}</td>
                       <td className="leaderboard-table__trend"><ArenaTrend compact label={`${bot.name} 排名趨勢`} points={bot.equityCurve} /></td>
-                      <td>{bot.metrics.trades}</td><td>{bot.metrics.stability.toFixed(0)}</td><td className="value-negative">{drawdownPercent(bot.metrics.maxDrawdown)}</td><td>{bot.metrics.sharpe.toFixed(2)}</td><td><span className="risk-badge" data-risk={bot.risk}>{bot.risk}</span></td>
+                      <td>{bot.metrics.winRate.toFixed(1)}%</td><td>{bot.metrics.trades}</td><td>{bot.metrics.stability.toFixed(0)}</td><td className="value-negative">{drawdownPercent(bot.metrics.maxDrawdown)}</td><td>{bot.metrics.sharpe.toFixed(2)}</td><td><span className="risk-badge" data-risk={bot.risk}>{bot.risk}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -408,7 +485,7 @@ export function LeaderboardTable() {
           </section>
 
           <p className="research-data-note" role="note">
-            資料說明：近 30 天 WEEX 公開歷史 K 線，現貨採 4h、合約採 1h；手續費與滑價使用統一研究假設，未計資金費率。更新於 {new Date(performanceUpdatedAt).toLocaleString("zh-TW")}；回測不代表未來績效。
+            資料說明：近 30 天 WEEX 公開歷史 K 線，現貨採 4h、合約採 1h；手續費與滑價使用統一研究假設，未計資金費率。更新於 {new Date(performanceUpdatedAt).toLocaleString(locale)}；回測不代表未來績效。
           </p>
         </>
       )}

@@ -1,6 +1,7 @@
 import { parse } from "acorn";
 import { STRATEGY_BLOCKS } from "../data/strategies";
 import type { BotConfig } from "./types";
+import { isWeexApiTradingSymbol } from "./weex-market-catalog";
 
 export interface ValidationResult {
   valid: boolean;
@@ -471,6 +472,9 @@ export const validateConfig = (value: unknown): ValidationResult => {
   const errors: string[] = [];
 
   if (config.exchange !== "WEEX") errors.push("目前可用的實盤連線為 WEEX API");
+  if (!isWeexApiTradingSymbol(config.market, config.symbol)) {
+    errors.push(`${config.symbol} 不在 WEEX API 公告支援的${config.market === "spot" ? "現貨" : "合約"}交易對中`);
+  }
   errors.push(...canonicalBlockErrors(config as BotConfig, true));
   if (!config.blocks.some((block) => block.group === "entry")) errors.push("至少需要一個進場訊號");
   if (!config.blocks.some((block) => block.group === "exit" || block.group === "risk")) {
@@ -494,6 +498,14 @@ export const validateConfig = (value: unknown): ValidationResult => {
       const longPeriod = parameterValue(strategy, "longPeriod");
       if (shortPeriod !== undefined && longPeriod !== undefined && shortPeriod >= longPeriod) {
         errors.push("SMA 均線交叉（sma-cross）的短期均線（shortPeriod）必須小於長期均線（longPeriod）");
+      }
+    }
+
+    if (strategy.id === "ema-cross") {
+      const shortPeriod = parameterValue(strategy, "shortPeriod");
+      const longPeriod = parameterValue(strategy, "longPeriod");
+      if (shortPeriod !== undefined && longPeriod !== undefined && shortPeriod >= longPeriod) {
+        errors.push("EMA 指數均線交叉（ema-cross）的短期 EMA（shortPeriod）必須小於長期 EMA（longPeriod）");
       }
     }
 

@@ -119,6 +119,130 @@ const crossover = (previousLeft: number | undefined, previousRight: number | und
   return 0;
 };
 
+const stochasticKAt = (candles: readonly Candle[], period: number, end = candles.length): number | undefined => {
+  if (end < period) return undefined;
+  const window = candles.slice(end - period, end);
+  const high = Math.max(...window.map((candle) => positiveNumber(candle.high)));
+  const low = Math.min(...window.map((candle) => positiveNumber(candle.low)));
+  if (high === low) return 50;
+  return ((positiveNumber(candles[end - 1]!.close) - low) / (high - low)) * 100;
+};
+
+const stochasticDAt = (candles: readonly Candle[], kPeriod: number, dPeriod: number, end = candles.length): number | undefined => {
+  const values: number[] = [];
+  for (let offset = dPeriod - 1; offset >= 0; offset -= 1) {
+    const value = stochasticKAt(candles, kPeriod, end - offset);
+    if (value === undefined) return undefined;
+    values.push(value);
+  }
+  return average(values);
+};
+
+const adxAt = (candles: readonly Candle[], period: number): number | undefined => {
+  if (candles.length < period * 2 + 1) return undefined;
+  const dxValues: number[] = [];
+  for (let end = candles.length - period + 1; end <= candles.length; end += 1) {
+    let trueRange = 0;
+    let positiveMovement = 0;
+    let negativeMovement = 0;
+    for (let index = end - period; index < end; index += 1) {
+      const current = candles[index]!;
+      const previous = candles[index - 1]!;
+      const high = positiveNumber(current.high);
+      const low = positiveNumber(current.low);
+      const previousHigh = positiveNumber(previous.high);
+      const previousLow = positiveNumber(previous.low);
+      const previousClose = positiveNumber(previous.close);
+      trueRange += Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose));
+      const upMove = high - previousHigh;
+      const downMove = previousLow - low;
+      if (upMove > downMove && upMove > 0) positiveMovement += upMove;
+      if (downMove > upMove && downMove > 0) negativeMovement += downMove;
+    }
+    if (trueRange === 0) {
+      dxValues.push(0);
+      continue;
+    }
+    const positiveDi = (positiveMovement / trueRange) * 100;
+    const negativeDi = (negativeMovement / trueRange) * 100;
+    const total = positiveDi + negativeDi;
+    dxValues.push(total === 0 ? 0 : (Math.abs(positiveDi - negativeDi) / total) * 100);
+  }
+  return average(dxValues);
+};
+
+const midpointAt = (candles: readonly Candle[], period: number, end = candles.length): number | undefined => {
+  if (end < period) return undefined;
+  const window = candles.slice(end - period, end);
+  return (Math.max(...window.map((item) => positiveNumber(item.high))) + Math.min(...window.map((item) => positiveNumber(item.low)))) / 2;
+};
+
+const cciAt = (candles: readonly Candle[], period: number, end = candles.length): number | undefined => {
+  if (end < period) return undefined;
+  const typical = candles.slice(end - period, end).map((item) => (positiveNumber(item.high) + positiveNumber(item.low) + positiveNumber(item.close)) / 3);
+  const mean = average(typical);
+  const deviation = average(typical.map((value) => Math.abs(value - mean)));
+  return deviation === 0 ? 0 : (typical.at(-1)! - mean) / (0.015 * deviation);
+};
+
+const williamsAt = (candles: readonly Candle[], period: number, end = candles.length): number | undefined => {
+  if (end < period) return undefined;
+  const window = candles.slice(end - period, end);
+  const high = Math.max(...window.map((item) => positiveNumber(item.high)));
+  const low = Math.min(...window.map((item) => positiveNumber(item.low)));
+  return high === low ? -50 : -100 * (high - positiveNumber(candles[end - 1]!.close)) / (high - low);
+};
+
+const vwapAt = (candles: readonly Candle[], period: number, end = candles.length): number | undefined => {
+  if (end < period) return undefined;
+  const window = candles.slice(end - period, end);
+  const volume = window.reduce((sum, item) => sum + positiveNumber(item.volume), 0);
+  return volume === 0 ? undefined : window.reduce((sum, item) => sum + ((positiveNumber(item.high) + positiveNumber(item.low) + positiveNumber(item.close)) / 3) * positiveNumber(item.volume), 0) / volume;
+};
+
+const mfiAt = (candles: readonly Candle[], period: number, end = candles.length): number | undefined => {
+  if (end <= period) return undefined;
+  let positiveFlow = 0;
+  let negativeFlow = 0;
+  for (let index = end - period; index < end; index += 1) {
+    const typical = (positiveNumber(candles[index]!.high) + positiveNumber(candles[index]!.low) + positiveNumber(candles[index]!.close)) / 3;
+    const priorTypical = (positiveNumber(candles[index - 1]!.high) + positiveNumber(candles[index - 1]!.low) + positiveNumber(candles[index - 1]!.close)) / 3;
+    const flow = typical * positiveNumber(candles[index]!.volume);
+    if (typical >= priorTypical) positiveFlow += flow; else negativeFlow += flow;
+  }
+  return negativeFlow === 0 ? 100 : 100 - 100 / (1 + positiveFlow / negativeFlow);
+};
+
+const obvSeries = (candles: readonly Candle[]): number[] => {
+  const result = [0];
+  for (let index = 1; index < candles.length; index += 1) {
+    const change = positiveNumber(candles[index]!.close) - positiveNumber(candles[index - 1]!.close);
+    result.push(result[index - 1]! + Math.sign(change) * positiveNumber(candles[index]!.volume));
+  }
+  return result;
+};
+
+const parabolicSarSeries = (candles: readonly Candle[], acceleration: number, maximum: number): number[] => {
+  if (candles.length === 0) return [];
+  let bullish = candles.length < 2 || positiveNumber(candles[1]!.close) >= positiveNumber(candles[0]!.close);
+  let sar = bullish ? positiveNumber(candles[0]!.low) : positiveNumber(candles[0]!.high);
+  let extreme = bullish ? positiveNumber(candles[0]!.high) : positiveNumber(candles[0]!.low);
+  let factor = acceleration;
+  const result = [sar];
+  for (let index = 1; index < candles.length; index += 1) {
+    sar += factor * (extreme - sar);
+    const high = positiveNumber(candles[index]!.high);
+    const low = positiveNumber(candles[index]!.low);
+    if ((bullish && low < sar) || (!bullish && high > sar)) {
+      bullish = !bullish; sar = extreme; extreme = bullish ? high : low; factor = acceleration;
+    } else if ((bullish && high > extreme) || (!bullish && low < extreme)) {
+      extreme = bullish ? high : low; factor = Math.min(maximum, factor + acceleration);
+    }
+    result.push(sar);
+  }
+  return result;
+};
+
 const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle[]): Direction => {
   const values = closes(candles);
   const current = values.at(-1)!;
@@ -145,6 +269,24 @@ const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle
         smaAt(values, short),
         smaAt(values, long),
       );
+    }
+    case "ema-cross": {
+      const fast = emaSeries(values, parameter(block, "shortPeriod"));
+      const slow = emaSeries(values, parameter(block, "longPeriod"));
+      return crossover(fast.at(-2), slow.at(-2), fast.at(-1), slow.at(-1));
+    }
+    case "stochastic": {
+      const kPeriod = parameter(block, "kPeriod");
+      const dPeriod = parameter(block, "dPeriod");
+      const oversold = parameter(block, "oversold");
+      const priorK = stochasticKAt(candles, kPeriod, candles.length - 1);
+      const priorD = stochasticDAt(candles, kPeriod, dPeriod, candles.length - 1);
+      const currentK = stochasticKAt(candles, kPeriod);
+      const currentD = stochasticDAt(candles, kPeriod, dPeriod);
+      if ([priorK, priorD, currentK, currentD].some((value) => value === undefined)) return 0;
+      if (priorK! <= priorD! && currentK! > currentD! && Math.min(priorK!, currentK!) <= oversold) return 1;
+      const overbought = 100 - oversold;
+      return priorK! >= priorD! && currentK! < currentD! && Math.max(priorK!, currentK!) >= overbought ? -1 : 0;
     }
     case "macd": {
       const fastPeriod = parameter(block, "fastPeriod");
@@ -173,6 +315,18 @@ const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle
       if (previous <= prior[1] && current > now[1]) return 1;
       return previous >= prior[0] && current < now[0] ? -1 : 0;
     }
+    case "donchian-breakout": {
+      const period = parameter(block, "period");
+      if (candles.length < period + 2) return 0;
+      const priorWindow = candles.slice(-period - 1, -1);
+      const earlierWindow = candles.slice(-period - 2, -2);
+      const priorHigh = Math.max(...priorWindow.map((candle) => positiveNumber(candle.high)));
+      const priorLow = Math.min(...priorWindow.map((candle) => positiveNumber(candle.low)));
+      const earlierHigh = Math.max(...earlierWindow.map((candle) => positiveNumber(candle.high)));
+      const earlierLow = Math.min(...earlierWindow.map((candle) => positiveNumber(candle.low)));
+      if (previous <= earlierHigh && current > priorHigh) return 1;
+      return previous >= earlierLow && current < priorLow ? -1 : 0;
+    }
     case "grid": {
       const step = parameter(block, "range") / 100 / parameter(block, "gridCount");
       const change = current / previous - 1;
@@ -182,6 +336,78 @@ const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle
     case "dca": {
       const interval = parameter(block, "intervalDays") * 86_400_000;
       return Math.floor(candles.at(-1)!.closeTime / interval) > Math.floor(candles.at(-2)!.closeTime / interval) ? 1 : 0;
+    }
+    case "cci-rebound": {
+      const prior = cciAt(candles, parameter(block, "period"), candles.length - 1);
+      const now = cciAt(candles, parameter(block, "period"));
+      const threshold = parameter(block, "oversold");
+      if (prior === undefined || now === undefined) return 0;
+      if (prior <= threshold && now > threshold) return 1;
+      return prior >= -threshold && now < -threshold ? -1 : 0;
+    }
+    case "williams-r-rebound": {
+      const prior = williamsAt(candles, parameter(block, "period"), candles.length - 1);
+      const now = williamsAt(candles, parameter(block, "period"));
+      const threshold = parameter(block, "oversold");
+      if (prior === undefined || now === undefined) return 0;
+      if (prior <= threshold && now > threshold) return 1;
+      return prior >= -100 - threshold && now < -100 - threshold ? -1 : 0;
+    }
+    case "roc-momentum": {
+      const period = parameter(block, "period");
+      if (values.length <= period + 1) return 0;
+      const roc = (end: number) => (values[end - 1]! / values[end - 1 - period]! - 1) * 100;
+      return crossover(roc(values.length - 1), parameter(block, "threshold"), roc(values.length), parameter(block, "threshold"));
+    }
+    case "ichimoku-breakout": {
+      const conversion = midpointAt(candles, parameter(block, "conversionPeriod"));
+      const base = midpointAt(candles, parameter(block, "basePeriod"));
+      const span = midpointAt(candles, parameter(block, "spanPeriod"));
+      if (conversion === undefined || base === undefined || span === undefined) return 0;
+      const cloudHigh = Math.max((conversion + base) / 2, span);
+      const cloudLow = Math.min((conversion + base) / 2, span);
+      return current > cloudHigh && conversion > base ? 1 : current < cloudLow && conversion < base ? -1 : 0;
+    }
+    case "supertrend-reversal": {
+      const period = parameter(block, "atrPeriod");
+      const atr = trueRangeAverage(candles, period);
+      const priorAtr = trueRangeAverage(candles.slice(0, -1), period);
+      if (atr === undefined || priorAtr === undefined) return 0;
+      const multiplier = parameter(block, "multiplier");
+      const currentMid = (positiveNumber(candles.at(-1)!.high) + positiveNumber(candles.at(-1)!.low)) / 2;
+      const priorMid = (positiveNumber(candles.at(-2)!.high) + positiveNumber(candles.at(-2)!.low)) / 2;
+      if (previous <= priorMid + multiplier * priorAtr && current > currentMid + multiplier * atr) return 1;
+      return previous >= priorMid - multiplier * priorAtr && current < currentMid - multiplier * atr ? -1 : 0;
+    }
+    case "parabolic-sar": {
+      const sar = parabolicSarSeries(candles, parameter(block, "acceleration"), parameter(block, "maximumAcceleration"));
+      return crossover(previous, sar.at(-2), current, sar.at(-1));
+    }
+    case "vwap-reclaim":
+      return crossover(previous, vwapAt(candles, parameter(block, "period"), candles.length - 1), current, vwapAt(candles, parameter(block, "period")));
+    case "mfi-rebound": {
+      const prior = mfiAt(candles, parameter(block, "period"), candles.length - 1);
+      const now = mfiAt(candles, parameter(block, "period"));
+      const threshold = parameter(block, "oversold");
+      if (prior === undefined || now === undefined) return 0;
+      if (prior <= threshold && now > threshold) return 1;
+      return prior >= 100 - threshold && now < 100 - threshold ? -1 : 0;
+    }
+    case "obv-breakout": {
+      const period = parameter(block, "period");
+      const obv = obvSeries(candles);
+      if (obv.length < period + 2) return 0;
+      const window = obv.slice(-period - 1, -1);
+      return obv.at(-1)! > Math.max(...window) ? 1 : obv.at(-1)! < Math.min(...window) ? -1 : 0;
+    }
+    case "price-action-breakout": {
+      const lookback = parameter(block, "lookback");
+      if (candles.length < lookback + 1) return 0;
+      const window = candles.slice(-lookback - 1, -1);
+      const buffer = parameter(block, "buffer") / 100;
+      const high = Math.max(...window.map((item) => positiveNumber(item.high)));
+      const low = Math.min(...window.map((item) => positiveNumber(item.low)));
+      return current > high * (1 + buffer) ? 1 : current < low * (1 - buffer) ? -1 : 0;
     }
     default:
       return 0;
@@ -193,6 +419,31 @@ const volumeConfirmed = (block: Readonly<StrategyBlock>, candles: readonly Candl
   if (candles.length <= period) return false;
   const priorVolumes = candles.slice(-period - 1, -1).map((candle) => positiveNumber(candle.volume));
   return positiveNumber(candles.at(-1)!.volume) >= average(priorVolumes) * parameter(block, "multiplier");
+};
+
+const confirmationPassed = (block: Readonly<StrategyBlock>, candles: readonly Candle[]): boolean => {
+  if (block.id === "direct-confirmation") return true;
+  if (block.id === "volume-confirmation") return volumeConfirmed(block, candles);
+  if (block.id === "adx-confirmation") {
+    const value = adxAt(candles, parameter(block, "period"));
+    return value !== undefined && value >= parameter(block, "minimumStrength");
+  }
+  if (block.id === "atr-volatility-confirmation") {
+    const atr = trueRangeAverage(candles, parameter(block, "period"));
+    const close = candles.at(-1) ? positiveNumber(candles.at(-1)!.close) : 0;
+    return atr !== undefined && close > 0 && atr / close * 100 >= parameter(block, "minimumVolatility");
+  }
+  if (block.id === "bollinger-bandwidth-confirmation") {
+    const period = parameter(block, "period");
+    const values = closes(candles);
+    if (values.length < period) return false;
+    const window = values.slice(-period);
+    const mean = average(window);
+    const standardDeviation = Math.sqrt(average(window.map((value) => (value - mean) ** 2)));
+    const bandwidth = mean === 0 ? 0 : parameter(block, "deviation") * standardDeviation * 2 / mean * 100;
+    return bandwidth >= parameter(block, "minimumBandwidth");
+  }
+  return false;
 };
 
 const trueRangeAverage = (candles: readonly Candle[], period: number): number | undefined => {
@@ -241,6 +492,12 @@ const riskExit = (config: Readonly<BotConfig>, input: Readonly<StrategyInput>): 
   if (dailyLoss && (portfolio.dailyLossBreached === true || equity <= dayStartEquity * (1 - parameter(dailyLoss, "maximumDailyLoss") / 100))) {
     return position ? "maximum-daily-loss:close" : "maximum-daily-loss:suppress";
   }
+  const lossPause = config.blocks.find((block) => block.id === "consecutive-loss-pause");
+  if (!position && lossPause && portfolio.consecutiveLosses !== undefined && portfolio.lastLossAt !== undefined &&
+      portfolio.consecutiveLosses >= parameter(lossPause, "lossCount") &&
+      input.now < portfolio.lastLossAt + parameter(lossPause, "pauseHours") * 3_600_000) {
+    return "consecutive-loss-pause:suppress";
+  }
   if (!position) return undefined;
 
   const close = positiveNumber(input.candles.at(-1)!.close);
@@ -248,6 +505,20 @@ const riskExit = (config: Readonly<BotConfig>, input: Readonly<StrategyInput>): 
   const signedReturn = position.side === "long" ? close / entry - 1 : 1 - close / entry;
   const takeProfit = config.blocks.find((block) => block.id === "take-profit");
   if (takeProfit && signedReturn >= parameter(takeProfit, "takeProfit") / 100) return "take-profit";
+  const atrTakeProfit = config.blocks.find((block) => block.id === "atr-take-profit");
+  if (atrTakeProfit) {
+    const atr = trueRangeAverage(input.candles, parameter(atrTakeProfit, "atrPeriod"));
+    if (atr !== undefined && signedReturn >= atr / entry * parameter(atrTakeProfit, "atrMultiple")) return "atr-take-profit";
+  }
+  const rsiProfitExit = config.blocks.find((block) => block.id === "rsi-profit-exit");
+  if (rsiProfitExit && signedReturn >= parameter(rsiProfitExit, "minimumProfit") / 100) {
+    const rsi = rsiAt(closes(input.candles), parameter(rsiProfitExit, "period"));
+    const threshold = parameter(rsiProfitExit, "overbought");
+    if (rsi !== undefined && (position.side === "long" ? rsi >= threshold : rsi <= 100 - threshold)) return "rsi-profit-exit";
+  }
+  const timedProfitExit = config.blocks.find((block) => block.id === "timed-profit-exit");
+  if (timedProfitExit && position.entryTime !== undefined && signedReturn >= parameter(timedProfitExit, "minimumProfit") / 100 &&
+      input.now >= position.entryTime + parameter(timedProfitExit, "holdingHours") * 3_600_000) return "timed-profit-exit";
   const stopLoss = config.blocks.find((block) => block.id === "stop-loss");
   if (stopLoss && signedReturn <= -parameter(stopLoss, "stopLoss") / 100) return "stop-loss";
   const trailing = config.blocks.find((block) => block.id === "trailing-stop");
@@ -311,11 +582,11 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
         direction = bullish === bearish ? 0 : bullish > bearish ? 1 : -1;
       }
       const confirmations = config.blocks
-        .filter((block) => block.id === "volume-confirmation")
-        .map((block) => volumeConfirmed(block, input.candles));
+        .filter((block) => block.group === "confirm")
+        .map((block) => confirmationPassed(block, input.candles));
       const confirmed = confirmations.length === 0 || (config.logicMode === "all" ? confirmations.every(Boolean) : confirmations.some(Boolean));
       if (direction === 0 || !confirmed || (direction === -1 && config.market === "spot" && !input.portfolio?.position)) {
-        const reason = direction === 0 ? `entry:${config.logicMode}:not-triggered` : !confirmed ? "confirm:volume:not-triggered" : "spot:bearish-signal-suppressed";
+        const reason = direction === 0 ? `entry:${config.logicMode}:not-triggered` : !confirmed ? "confirm:not-triggered" : "spot:bearish-signal-suppressed";
         return { id: `visual-${input.now}-hold`, action: "hold", reason, createdAt: input.now };
       }
       const action = direction === 1 ? "buy" : "sell";

@@ -6,7 +6,7 @@ import type { BotConfig } from "../../lib/types";
 
 export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | "symbol" | "timeframe">) => [
   "/**",
-  " * CryptoBot Labs 的 WEEX 模擬策略範例。",
+  " * CryptoBot Labs 的模擬策略範例。",
   " * 回測與雲端執行器只會在隔離沙箱中執行此函式。",
   " */",
   "export const strategy = {",

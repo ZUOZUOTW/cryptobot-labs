@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { captureAttribution } from "../lib/attribution";
+import { useState } from "react";
 
-export function StrategyShareActions({ botId, botName, via }: { botId: string; botName: string; via: string }) {
+export function StrategyShareActions({ botId, botName }: { botId: string; botName: string; via?: string }) {
   const [message, setMessage] = useState("");
-  useEffect(() => { captureAttribution(via); }, [via]);
-  const shareUrl = () => `${window.location.origin}/bots/${encodeURIComponent(botId)}?via=${encodeURIComponent(via)}`;
+  const shareUrl = () => `${window.location.origin}/bots/${encodeURIComponent(botId)}`;
   const copy = async () => {
     const url = shareUrl();
     try { await navigator.clipboard.writeText(url); setMessage("分享連結已複製"); }

@@ -4,12 +4,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { BacktestResultCard, requestOf } from "./BacktestResultCard";
 import type { HistoricalBacktestRecord, HistoricalBacktestStatus } from "./BacktestResultCard";
+import { useI18n } from "@/components/I18nProvider";
 
 const STATUS: Record<HistoricalBacktestStatus, string> = {
   queued: "排隊中", "fetching-data": "取得行情中", running: "計算中", succeeded: "已完成", failed: "失敗",
 };
 const SAFE_ERRORS: Record<string, string> = {
-  data_fetch_failed: "WEEX 公開行情暫時無法取得",
+  data_fetch_failed: "公開行情暫時無法取得",
   historical_dataset_incomplete: "歷史行情資料不完整",
   historical_funding_incomplete: "歷史資金費率資料不完整",
   backtest_execution_failed: "回測計算未完成",
@@ -21,6 +22,7 @@ const validList = (value: unknown): value is { items: HistoricalBacktestRecord[]
 );
 
 export function BacktestHistory() {
+  const { locale } = useI18n();
   const [items, setItems] = useState<HistoricalBacktestRecord[]>([]);
   const [selected, setSelected] = useState<HistoricalBacktestRecord | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error" | "unauthorized">("loading");
@@ -79,7 +81,7 @@ export function BacktestHistory() {
         {state === "loading" && <p className="historical-empty">正在載入你的歷史回測…</p>}
         {state === "error" && <div className="historical-empty"><p>無法載入歷史回測。</p><button className="button button--secondary" onClick={() => void load(null)} type="button" aria-label="重試載入">重試載入</button></div>}
         {state === "unauthorized" && <p className="historical-empty">登入狀態已過期。 <Link href="/auth?return_to=%2Fbacktests">重新登入</Link></p>}
-        {state === "ready" && items.length === 0 && <p className="historical-empty">尚無歷史回測。先到組裝車間選擇策略，再建立第一份 WEEX 行情證據。</p>}
+        {state === "ready" && items.length === 0 && <p className="historical-empty">尚無歷史回測。先到組裝車間選擇策略，再建立第一份行情證據。</p>}
       </div>
       {state === "ready" && items.length > 0 && (
         <ul className="history-list" aria-label="歷史回測紀錄">
@@ -87,8 +89,8 @@ export function BacktestHistory() {
             const request = requestOf(item);
             const code = item.error?.code ?? item.errorCode ?? "";
             return <li key={item.id}>
-              <div><strong>{request?.symbol ?? "WEEX 策略"}</strong><span>{request?.interval ?? "—"} · {request?.market === "futures" ? "合約" : "現貨"}</span></div>
-              <div><span className={`history-status history-status--${item.status}`}>{STATUS[item.status]}</span><time dateTime={new Date(item.createdAt).toISOString()}>{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(item.createdAt)}</time></div>
+              <div><strong>{request?.symbol ?? "交易策略"}</strong><span>{request?.interval ?? "—"} · {request?.market === "futures" ? "合約" : "現貨"}</span></div>
+              <div><span className={`history-status history-status--${item.status}`}>{STATUS[item.status]}</span><time dateTime={new Date(item.createdAt).toISOString()}>{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(item.createdAt)}</time></div>
               {item.status === "failed" && <p>{SAFE_ERRORS[code] ?? "此回測未能完成"}</p>}
               {item.status === "succeeded" && <button className="button button--ghost button--small" onClick={() => void loadDetail(item.id)} type="button">查看完整結果</button>}
             </li>;

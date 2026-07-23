@@ -17,6 +17,7 @@
   "dependencies": {
     "@cryptobot-labs/weex-client": "workspace:*",
     "@jitl/quickjs-singlefile-cjs-release-sync": "0.32.0",
+    "@remotion/player": "^4.0.489",
     "acorn": "8.16.0",
     "drizzle-orm": "0.45.2",
     "jszip": "^3.10.1",
@@ -26,7 +27,8 @@
     "quickjs-emscripten-core": "0.32.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "react-icons": "^5.7.0"
+    "react-icons": "^5.7.0",
+    "remotion": "^4.0.489"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",

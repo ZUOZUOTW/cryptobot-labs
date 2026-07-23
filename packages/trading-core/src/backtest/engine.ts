@@ -202,6 +202,8 @@ export async function runHistoricalBacktest(
   let fundingCursor = 0;
   let appliedFundingEvents = 0;
   let netFunding = decimal(0);
+  let consecutiveLosses = 0;
+  let lastLossAt: number | undefined;
   const trades: HistoricalTrade[] = [];
   const equityCurve: EquityPoint[] = [];
   const signalEvents: SignalEvent[] = [];
@@ -235,6 +237,13 @@ export async function runHistoricalBacktest(
       exitReason: reason,
     });
     if (rate.eq(1)) {
+      if (realizedPnl.lt(0)) {
+        consecutiveLosses += 1;
+        lastLossAt = timestamp;
+      } else if (realizedPnl.gt(0)) {
+        consecutiveLosses = 0;
+        lastLossAt = undefined;
+      }
       position = undefined;
     } else {
       position.quantity = position.quantity.minus(quantity);
@@ -440,9 +449,12 @@ export async function runHistoricalBacktest(
             0,
             (market === "spot" ? balance : equity).minus(position?.usedMargin ?? 0),
           )),
+          consecutiveLosses,
+          ...(lastLossAt === undefined ? {} : { lastLossAt }),
           ...(position ? {
             position: Object.freeze({
               side: position.side,
+              entryTime: position.entryTime,
               entryPrice: decimalString(position.entryPrice),
               peakPrice: decimalString(position.peakPrice),
               troughPrice: decimalString(position.troughPrice),

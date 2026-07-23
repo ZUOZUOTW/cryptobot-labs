@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { buildSiteMetadata, requestOrigin } from "../lib/site-metadata";
 
 const readProjectFile = (path: string) => readFile(resolve(process.cwd(), path), "utf8");
-const EXPECTED_TITLE = "CryptoBot Labs｜WEEX 自動交易策略實驗室";
-const EXPECTED_DESCRIPTION = "探索、組裝與分享 WEEX 自動交易策略；先用公開歷史資料回測與 Paper 模擬，再透過 WEEX OAuth 安全準備雲端執行。";
-const EXPECTED_IMAGE_ALT = "CryptoBot Labs：把交易想法，組成能先模擬的 WEEX 自動策略。";
+const EXPECTED_TITLE = "CryptoBot Labs｜自動交易策略實驗室";
+const EXPECTED_DESCRIPTION = "探索、組裝與分享自動交易策略；先用公開歷史資料回測與模擬運行，再安全準備雲端執行。";
+const EXPECTED_IMAGE_ALT = "CryptoBot Labs：簡單點選，實現自動化策略";
 
 describe("production metadata", () => {
   const rawHeaders = (host: string | null, forwardedHost: string | null = null, forwardedProto: string | null = null) => ({
@@ -115,6 +115,17 @@ describe("final responsive and maintenance contracts", () => {
     expect(workshopStyles).toMatch(/\.market-controls select\s*\{\s*min-height: 3rem;/);
   });
 
+  it("renders the member strategy gate as a responsive liquid-glass surface", async () => {
+    const globalStyles = await readProjectFile("app/globals.css");
+
+    expect(globalStyles).toMatch(/\.catalog-login-gate\s*\{[^}]*border-radius: 1\.65rem;[^}]*backdrop-filter: blur\(32px\) saturate\(175%\);/s);
+    expect(globalStyles).toMatch(/\.catalog-login-gate::before\s*\{[^}]*radial-gradient[^}]*filter: blur\(12px\);/s);
+    expect(globalStyles).toMatch(/\.catalog-login-gate__signal\s*\{[^}]*backdrop-filter: blur\(18px\) saturate\(180%\);/s);
+    expect(globalStyles).toMatch(/\.catalog-member-backdrop\s*\{[^}]*position: absolute;[^}]*grid-template-columns: repeat\(3,/s);
+    expect(globalStyles).toMatch(/\.catalog-member-backdrop__card\s*\{[^}]*filter: blur\(5px\) saturate\(88%\);/s);
+    expect(globalStyles).toMatch(/@media \(max-width: 38rem\) \{[\s\S]*?\.catalog-login-gate \{ grid-template-columns: 1fr;/);
+  });
+
   it("uses exact mobile single-column and sticky workshop action rules", async () => {
     const [globalStyles, workshopStyles] = await Promise.all([
       readProjectFile("app/globals.css"),
@@ -137,22 +148,30 @@ describe("final responsive and maintenance contracts", () => {
     expect(workshopStyles).toMatch(/\.javascript-editor textarea:focus-visible\s*\{\s*outline: 2px solid var\(--cyan\);\s*outline-offset: 2px;/);
   });
 
-  it("loads the focused workshop stylesheet after the global foundation", async () => {
-    const [layout, globalStyles, metadataSource] = await Promise.all([
+  it("loads the focused workshop stylesheet only on routes that use it", async () => {
+    const [layout, globalStyles, metadataSource, workshopLayout, backtestsLayout, connectionsLayout, runsLayout] = await Promise.all([
       readProjectFile("app/layout.tsx"),
       readProjectFile("app/globals.css"),
       readProjectFile("lib/site-metadata.ts"),
+      readProjectFile("app/workshop/layout.tsx"),
+      readProjectFile("app/backtests/layout.tsx"),
+      readProjectFile("app/connections/layout.tsx"),
+      readProjectFile("app/runs/layout.tsx"),
     ]);
 
-    expect(layout.indexOf('import "./globals.css"')).toBeLessThan(layout.indexOf('import "./workshop.css"'));
+    expect(layout).toContain('import "./globals.css"');
+    expect(layout).not.toContain('import "./workshop.css"');
+    for (const routeLayout of [workshopLayout, backtestsLayout, connectionsLayout, runsLayout]) {
+      expect(routeLayout).toContain('import "../workshop.css"');
+    }
     expect(globalStyles).not.toContain("/* Multi-strategy workshop */");
     expect(layout).toContain("title: SITE_TITLE");
     expect(layout).toContain("description: SITE_DESCRIPTION");
     expect(metadataSource).toContain("export const SITE_TITLE");
     expect(metadataSource).toContain("export const SITE_DESCRIPTION");
     expect(metadataSource).toContain("export const SOCIAL_IMAGE_ALT");
-    expect(metadataSource.match(/CryptoBot Labs｜WEEX 自動交易策略實驗室/g)).toHaveLength(1);
-    expect(metadataSource.match(/CryptoBot Labs：把交易想法，組成能先模擬的 WEEX 自動策略。/g)).toHaveLength(1);
+    expect(metadataSource.match(/CryptoBot Labs｜自動交易策略實驗室/g)).toHaveLength(1);
+    expect(metadataSource.match(/CryptoBot Labs：簡單點選，實現自動化策略/g)).toHaveLength(1);
   });
 
   it("documents the repository's pnpm workflow", async () => {

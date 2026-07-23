@@ -28,6 +28,7 @@ export interface StrategySignal {
 
 export interface StrategyPositionSnapshot {
   side: "long" | "short";
+  entryTime?: number;
   entryPrice: string;
   peakPrice: string;
   troughPrice: string;
@@ -42,6 +43,8 @@ export interface StrategyPortfolioSnapshot {
   utcDay: string;
   dailyLossBreached?: boolean;
   availableEquity?: string;
+  consecutiveLosses?: number;
+  lastLossAt?: number;
   position?: Readonly<StrategyPositionSnapshot>;
 }
 

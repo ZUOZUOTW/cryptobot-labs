@@ -69,11 +69,11 @@ export function ConnectionSetupFlow() {
       <section className={`connection-stage simulation-launch${verified ? " is-ready" : ""}`} id="connection-step-4" aria-labelledby="simulation-start-title">
         <div className="connection-stage__heading">
           <span className="connection-step">04</span>
-          <div><p className="eyebrow">PAPER FIRST</p><h2 id="simulation-start-title">開始模擬運行</h2>
-            <p>{verified ? "連線已通過安全檢查。選擇策略、設定風險上限後，第一個運行固定使用 Paper 模擬。" : "完成配對與 WEEX 權限驗證後，才會解鎖快速模擬運行入口。"}</p></div>
+          <div><p className="eyebrow">SIMULATION FIRST</p><h2 id="simulation-start-title">開始模擬運行</h2>
+            <p>{verified ? "連線已通過安全檢查。選擇策略、設定風險上限後，第一個運行固定使用模擬模式。" : "完成配對與 WEEX 權限驗證後，才會解鎖快速模擬運行入口。"}</p></div>
         </div>
         <div className="simulation-launch__guardrails" aria-label="模擬運行安全規則">
-          <span>預設 Paper 模式</span><span>不送出真實訂單</span><span>實盤需再次同意風險</span>
+          <span>預設模擬模式</span><span>不送出真實訂單</span><span>實盤需再次同意風險</span>
         </div>
         <div className="button-row">
           {verified ? <Link className="button button--primary" href="/workshop?bot=orbit-dca&onboarding=paper">選擇穩健策略並開始模擬</Link>

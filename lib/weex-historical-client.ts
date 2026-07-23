@@ -2,6 +2,19 @@ import type { BacktestReport, BotConfig, WeexHistoricalPerformance } from "./typ
 import { backtestConfigFingerprint } from "./backtest";
 
 interface HistoricalBacktestResponse { report?: BacktestReport; demo?: boolean; error?: { code?: string; message?: string } }
+export interface PublicHistoricalBacktestAssumptions {
+  feeRate: string;
+  slippageRate: string;
+  fundingMode: "none" | "historical";
+  gapPolicy: "fail" | "disclose";
+}
+
+export const DEFAULT_PUBLIC_HISTORICAL_ASSUMPTIONS: PublicHistoricalBacktestAssumptions = {
+  feeRate: "0.001",
+  slippageRate: "0.0005",
+  fundingMode: "none",
+  gapPolicy: "fail",
+};
 interface BotPerformanceResponse { performances?: Record<string, WeexHistoricalPerformance>; updatedAt?: string; demo?: boolean }
 let botPerformanceRequest: Promise<{ performances: Record<string, WeexHistoricalPerformance>; updatedAt: string; demo: boolean }> | null = null;
 const backtestRequests = new Map<string, Promise<BacktestReport>>();
@@ -12,18 +25,32 @@ const errorMessage = (body: HistoricalBacktestResponse | null): string => {
   return body?.error?.message || "暫時無法取得 WEEX 歷史行情，請稍後重試。";
 };
 
-export async function runWeexHistoricalBacktest(config: BotConfig): Promise<BacktestReport> {
-  const key = backtestConfigFingerprint(config);
+export const isVerifiedWeexPerformance = (performance: WeexHistoricalPerformance | undefined): performance is WeexHistoricalPerformance => Boolean(
+  performance
+  && performance.evidence.provider === "WEEX"
+  && performance.evidence.level === "historical"
+  && performance.evidence.complete
+  && /^[a-f0-9]{64}$/i.test(performance.evidence.datasetDigest),
+);
+
+export async function runWeexHistoricalBacktest(
+  config: BotConfig,
+  assumptions: PublicHistoricalBacktestAssumptions = DEFAULT_PUBLIC_HISTORICAL_ASSUMPTIONS,
+): Promise<BacktestReport> {
+  const normalizedAssumptions = { ...assumptions, fundingMode: config.market === "spot" ? "none" as const : assumptions.fundingMode };
+  const key = `${backtestConfigFingerprint(config)}:${JSON.stringify(normalizedAssumptions)}`;
   const existing = backtestRequests.get(key);
   if (existing) return existing;
   if (backtestRequests.size >= 20) backtestRequests.delete(backtestRequests.keys().next().value!);
   const pending = (async () => {
     const response = await fetch("/api/weex/historical-backtest", {
-      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ config }),
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ config, assumptions: normalizedAssumptions }),
     });
     let body: HistoricalBacktestResponse | null = null;
     try { body = await response.json() as HistoricalBacktestResponse; } catch { body = null; }
-    if (!response.ok || !body?.report || (body.demo !== true && body.report.evidence?.provider !== "WEEX")) throw new Error(errorMessage(body));
+    const evidence = body?.report?.evidence;
+    if (!response.ok || !body?.report || body.demo === true || evidence?.provider !== "WEEX"
+      || evidence.level !== "historical" || !evidence.complete) throw new Error(errorMessage(body));
     return body.report;
   })().finally(() => { backtestRequests.delete(key); });
   backtestRequests.set(key, pending);

@@ -28,20 +28,42 @@ describe("strategy catalog", () => {
       "rsi",
       "macd",
       "sma-cross",
+      "ema-cross",
+      "stochastic",
+      "donchian-breakout",
       "bollinger-breakout",
       "grid",
       "dca",
+      "cci-rebound",
+      "williams-r-rebound",
+      "roc-momentum",
+      "ichimoku-breakout",
+      "supertrend-reversal",
+      "parabolic-sar",
+      "vwap-reclaim",
+      "mfi-rebound",
+      "obv-breakout",
+      "price-action-breakout",
+      "direct-confirmation",
       "volume-confirmation",
+      "adx-confirmation",
+      "atr-volatility-confirmation",
+      "bollinger-bandwidth-confirmation",
       "take-profit",
+      "atr-take-profit",
+      "rsi-profit-exit",
+      "timed-profit-exit",
       "stop-loss",
       "trailing-stop",
       "fixed-position",
       "atr-sizing",
       "maximum-daily-loss",
+      "consecutive-loss-pause",
     ]);
 
     for (const block of STRATEGY_BLOCKS) {
-      expect(block.parameters.length).toBeGreaterThan(0);
+      if (block.id === "direct-confirmation") expect(block.parameters).toHaveLength(0);
+      else expect(block.parameters.length).toBeGreaterThan(0);
       for (const parameter of block.parameters) {
         expect(parameter.min).toBeLessThan(parameter.max);
         expect(parameter.value).toBeGreaterThanOrEqual(parameter.min);
@@ -65,6 +87,13 @@ describe("strategy catalog", () => {
   it("supports wider fixed exit and risk ranges", () => {
     expect(cloneBlock("take-profit").parameters[0]).toMatchObject({ min: 0.5, max: 1000, value: 8 });
     expect(cloneBlock("stop-loss").parameters[0]).toMatchObject({ min: 0.5, max: 100, value: 3 });
+  });
+
+  it("provides adjustable consecutive-loss pause controls", () => {
+    expect(cloneBlock("consecutive-loss-pause").parameters).toMatchObject([
+      { key: "lossCount", label: "連敗次數", value: 3, min: 2, max: 20, suffix: "次" },
+      { key: "pauseHours", label: "停止時間", value: 24, min: 1, max: 720, suffix: "小時" },
+    ]);
   });
 });
 

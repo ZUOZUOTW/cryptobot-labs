@@ -101,7 +101,7 @@ export function ConnectionsPanel({ onSnapshot }: { onSnapshot?: (items: Connecti
   };
   const command = async (device: ConnectionDevice, type: "revalidate-connection" | "erase-local-credentials") => {
     setFeedback("");
-    if (!device.commandTarget) { setFeedback("此裝置尚無可用部署。請先建立一個 Paper 運行，再送出連線維護命令。"); return; }
+    if (!device.commandTarget) { setFeedback("此裝置尚無可用部署。請先建立一個模擬運行，再送出連線維護命令。"); return; }
     try {
       const key = typeof crypto !== "undefined" && "randomUUID" in crypto
         ? `connection-${crypto.randomUUID()}` : `connection-${Date.now()}-${Math.random().toString(16).slice(2)}`;

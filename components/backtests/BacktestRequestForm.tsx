@@ -14,12 +14,12 @@ const INTERVAL_MS: Readonly<Record<string, number>> = {
   "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
 };
 const ERROR_MESSAGES: Readonly<Record<string, string>> = {
-  invalid_historical_range: "回測區間不符合 WEEX 歷史行情限制，請縮短區間。",
-  historical_dataset_incomplete: "WEEX 公開行情無法完整覆蓋此區間，請調整區間或資料缺口政策。",
+  invalid_historical_range: "回測區間不符合歷史行情限制，請縮短區間。",
+  historical_dataset_incomplete: "公開行情無法完整覆蓋此區間，請調整區間或資料缺口政策。",
   historical_funding_incomplete: "此區間的歷史資金費率資料不完整。",
   strategy_request_mismatch: "策略版本與目前市場設定不一致，請重新送出。",
   invalid_strategy_configuration: "JavaScript 策略格式或輸出不符合安全規範。",
-  data_fetch_failed: "目前無法取得 WEEX 公開行情，請稍後重試。",
+  data_fetch_failed: "目前無法取得公開行情，請稍後重試。",
   backtest_execution_failed: "歷史回測未能完成，請檢查設定後重試。",
   invalid_economic_parameters: "初始資金、成本或槓桿設定超出歷史回測可計算範圍。",
   strategy_service_unavailable: "歷史回測儲存服務目前無法連線，請稍後再試。",
@@ -160,10 +160,10 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
   return (
     <section className={`historical-request glass-panel${compact ? " historical-request--compact" : ""}`} aria-labelledby="historical-request-title" id="formal-backtest-request">
       <div className="workshop-panel__heading">
-        <div><p className="eyebrow">WEEX PUBLIC MARKET DATA</p><h2 id="historical-request-title">WEEX 歷史回測</h2></div>
+        <div><p className="eyebrow">PUBLIC MARKET DATA</p><h2 id="historical-request-title">進階歷史回測</h2></div>
         <span className="workshop-count">歷史證據</span>
       </div>
-      <p className="historical-request__lead">使用 WEEX 公開歷史行情計算；不需要 API Key，也不會建立或送出訂單。</p>
+      <p className="historical-request__lead">使用公開歷史行情計算；不需要 API Key，也不會建立或送出訂單。</p>
       {config.source !== undefined && <p className="historical-notice" role="note">JavaScript 會在無網路、無檔案與無憑證權限的隔離沙箱中執行，回測結果會記錄程式碼雜湊。</p>}
       <fieldset className="historical-fields" disabled={state === "ensuring" || state === "running"}>
         <label><span>開始時間</span><input type="datetime-local" value={start} onChange={(event) => change(setStart, event.target.value)} /></label>
@@ -171,12 +171,12 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
         <label><span>初始資金（USDT）</span><input inputMode="decimal" min="1" max="100000000" step="100" type="number" value={initialCapital} onChange={(event) => change(setInitialCapital, event.target.value)} /></label>
         <label><span>手續費率</span><input inputMode="decimal" min="0" max="0.05" step="0.0001" type="number" value={feeRate} onChange={(event) => change(setFeeRate, event.target.value)} /></label>
         <label><span>滑價率</span><input inputMode="decimal" min="0" max="0.1" step="0.0001" type="number" value={slippageRate} onChange={(event) => change(setSlippageRate, event.target.value)} /></label>
-        <label><span>資金費率</span><select disabled={config.market === "spot"} value={config.market === "spot" ? "none" : fundingMode} onChange={(event) => change(setFundingMode, event.target.value as "none" | "historical")}><option value="historical">WEEX 歷史資金費率</option><option value="none">不計入</option></select></label>
+        <label><span>資金費率</span><select disabled={config.market === "spot"} value={config.market === "spot" ? "none" : fundingMode} onChange={(event) => change(setFundingMode, event.target.value as "none" | "historical")}><option value="historical">歷史資金費率</option><option value="none">不計入</option></select></label>
         <label><span>資料缺口</span><select value={gapPolicy} onChange={(event) => change(setGapPolicy, event.target.value as "fail" | "disclose")}><option value="fail">遇缺口即停止</option><option value="disclose">揭露缺口並繼續</option></select></label>
         <div className="historical-config"><span>市場 / 槓桿</span><strong>{config.symbol} · {config.market === "spot" ? "現貨" : "合約"} · {config.leverage}×</strong></div>
       </fieldset>
       <button className="button button--primary historical-submit" disabled={!configurationValid || state === "ensuring" || state === "running"} onClick={submit} type="button">
-        {state === "ensuring" ? "固定策略版本中…" : state === "running" ? "取得行情並計算中…" : "執行 WEEX 歷史回測"}
+        {state === "ensuring" ? "固定策略版本中…" : state === "running" ? "取得行情並計算中…" : "執行進階歷史回測"}
       </button>
       <div aria-live="polite">
         {state === "unauthorized" && <p className="historical-feedback">請先登入，才能保存並查看自己的歷史回測。 <Link href="/auth?return_to=%2Fbacktests">登入</Link></p>}

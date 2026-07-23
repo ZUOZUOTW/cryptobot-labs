@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { activePromoter, DEFAULT_PROMOTER_SLUG } from "../../data/demo-platform";
-import { captureAttribution, lockRegistrationAttribution, readAttribution } from "../../lib/attribution";
+import { captureAttribution } from "../../lib/attribution";
 import { demoAuthPath } from "../../lib/demo-auth";
 import { setDemoConnection, useDemoConnection } from "../../lib/demo-connection";
 import { usePlatformAuth } from "../PlatformAuthProvider";
@@ -39,9 +38,6 @@ export function OAuthConnectionFlow() {
   }, [mode]);
 
   const currentStep = !user ? 0 : ready ? 3 : processing ? 2 : choice ? 1 : 0;
-  const promoterSlug = readAttribution()?.lockedPromoter ?? readAttribution()?.lastTouch ?? DEFAULT_PROMOTER_SLUG;
-  const promoter = activePromoter(promoterSlug) ?? activePromoter(DEFAULT_PROMOTER_SLUG)!;
-
   if (!user) {
     return (
       <section className="connection-auth-gate glass-panel">
@@ -68,8 +64,8 @@ export function OAuthConnectionFlow() {
           <button className="account-choice" data-selected={choice === "existing"} onClick={() => setChoice("existing")} type="button"><strong>我已有 WEEX 帳戶</strong><span>直接前往授權說明</span></button>
           <button className="account-choice" data-selected={choice === "new"} onClick={() => setChoice("new")} type="button"><strong>我還沒有 WEEX 帳戶</strong><span>先開新分頁建立帳戶</span></button>
         </div>
-        {choice === "new" && <div className="referral-disclosure" role="note"><p>此連結可能包含推薦關係，您的使用費用不因此增加。<Link href="/disclosures/affiliate">查看完整揭露</Link></p>
-          <a className="button button--secondary" href={promoter.inviteUrl} onClick={() => lockRegistrationAttribution()} rel="noreferrer" target="_blank">建立 WEEX 帳戶</a><small>推廣來源：{promoter.displayName} · 推薦關係仍以 WEEX 實際確認為準。</small></div>}
+        {choice === "new" && <div className="external-account-note" role="note"><p>請在新分頁自行確認服務內容、資格與風險，再返回本站繼續研究流程。</p>
+          <a className="button button--secondary" href="https://www.weex.com/" rel="noreferrer" target="_blank">前往 WEEX 官方網站</a></div>}
       </section>
 
       <section className="connection-stage glass-panel" aria-labelledby="oauth-start-title">
@@ -88,10 +84,10 @@ export function OAuthConnectionFlow() {
       </section>
 
       <section className={`connection-stage simulation-launch glass-panel${ready ? " is-ready" : ""}`} aria-labelledby="paper-start-title">
-        <div className="connection-stage__heading"><span className="connection-step">04</span><div><p className="eyebrow">PAPER FIRST</p><h2 id="paper-start-title">第一個運行固定為 Paper</h2>
-          <p>{ready ? `${mode === "demo" ? "展示連線" : "正式連線"}已就緒。請選擇策略與風險上限，先驗證至少 30 分鐘或 10 次有效評估。` : `完成${mode === "demo" ? "展示" : "正式"}授權與權限檢查後，才可開始 Paper；Live 仍保持停用。`}</p></div></div>
+        <div className="connection-stage__heading"><span className="connection-step">04</span><div><p className="eyebrow">SIMULATION FIRST</p><h2 id="paper-start-title">第一個運行固定使用模擬模式</h2>
+          <p>{ready ? `${mode === "demo" ? "展示連線" : "正式連線"}已就緒。請選擇策略與風險上限，先驗證至少 30 分鐘或 10 次有效評估。` : `完成${mode === "demo" ? "展示" : "正式"}授權與權限檢查後，才可開始模擬運行；實盤仍保持停用。`}</p></div></div>
         <div className="simulation-launch__guardrails"><span>不送出真實訂單</span><span>可隨時停止</span><span>Live 已停用</span></div>
-        <div className="button-row">{ready ? <Link className="button button--primary" href="/workshop?bot=orbit-dca&onboarding=paper">選擇策略並開始 Paper</Link> : <button className="button button--primary" disabled type="button">等待安全驗證</button>}
+        <div className="button-row">{ready ? <Link className="button button--primary" href="/workshop?bot=orbit-dca&onboarding=paper">選擇策略並開始模擬運行</Link> : <button className="button button--primary" disabled type="button">等待安全驗證</button>}
           {ready && mode === "demo" && <button className="button button--ghost" onClick={() => setDemoConnection("disconnected")} type="button">解除展示連線</button>}</div>
       </section>
     </div>

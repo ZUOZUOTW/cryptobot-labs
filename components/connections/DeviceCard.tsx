@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ConnectionDevice } from "./types";
+import { useI18n } from "@/components/I18nProvider";
 
 const STATUS = {
   verified: "已驗證", erased: "本機憑證已清除",
@@ -9,15 +10,15 @@ const STATUS = {
 const DEVICE_STATUS = { active: "已授權" } as const;
 const HEARTBEAT_FRESH_MS = 120_000;
 
-const localDate = (value: number | null) => value === null ? "尚無紀錄" : new Intl.DateTimeFormat("zh-TW", {
-  dateStyle: "medium", timeStyle: "short",
-}).format(value);
-
 export function DeviceCard({ device, observedAt, onCommand, onRevoke }: {
   device: ConnectionDevice; observedAt: number;
   onCommand: (device: ConnectionDevice, type: "revalidate-connection" | "erase-local-credentials") => Promise<void>;
   onRevoke: (id: string) => Promise<void>;
 }) {
+  const { locale } = useI18n();
+  const localDate = (value: number | null) => value === null ? "尚無紀錄" : new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium", timeStyle: "short",
+  }).format(value);
   const [confirming, setConfirming] = useState(false);
   const [eraseConfirming, setEraseConfirming] = useState(false);
   const [busy, setBusy] = useState<"revalidate" | "erase" | "revoke" | null>(null);
@@ -59,11 +60,11 @@ export function DeviceCard({ device, observedAt, onCommand, onRevoke }: {
       <p className="connection-note" role="note">網站不保存 API Key 或 API Secret。清除命令會要求代理先暫停交易再刪除本機金鑰；撤銷裝置只會阻止控制平面存取。</p>
       <div className="device-actions">
         <button className="button button--ghost button--small" disabled={busy !== null || !device.commandTarget || !connection?.hasLocalCredential}
-          onClick={() => void connectionCommand("revalidate-connection")} title={!device.commandTarget ? "請先建立 Paper 運行" : undefined} type="button">
+          onClick={() => void connectionCommand("revalidate-connection")} title={!device.commandTarget ? "請先建立模擬運行" : undefined} type="button">
           {busy === "revalidate" ? "命令排隊中…" : "重新驗證 WEEX"}</button>
         {!eraseConfirming ? <button className="button button--ghost button--small"
           disabled={busy !== null || !device.commandTarget || !connection?.hasLocalCredential}
-          onClick={() => setEraseConfirming(true)} title={!device.commandTarget ? "請先建立 Paper 運行" : undefined}
+          onClick={() => setEraseConfirming(true)} title={!device.commandTarget ? "請先建立模擬運行" : undefined}
           type="button">清除本機憑證</button> : (
           <div className="device-confirm" role="group" aria-label="確認清除本機憑證">
             <span>將先暫停交易並永久刪除本機 WEEX 金鑰。</span>

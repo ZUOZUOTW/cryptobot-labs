@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FALLBACK_WEEX_MARKET_CATALOG,
   WEEX_HELP_ARTICLE_SYMBOLS,
+  isWeexApiTradingSymbol,
   isWeexMarketCatalog,
   parseWeexMarketCatalog,
 } from "../lib/weex-market-catalog";
@@ -16,10 +17,11 @@ describe("WEEX market catalog", () => {
 
   it("normalizes official API symbols and preserves each contract maximum leverage", () => {
     const catalog = parseWeexMarketCatalog(
-      ["BTCUSDT", "SOLUSDT"],
+      ["BTCUSDT", "SOLUSDT", "NOTAPIUSDT"],
       { symbols: [
         { symbol: "cmt_btcusdt", displaySymbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", maxLeverage: 408 },
         { symbol: "cmt_solusdt", displaySymbol: "SOLUSDT", baseAsset: "SOL", quoteAsset: "USDT", maxLeverage: 125 },
+        { symbol: "cmt_notapiusdt", displaySymbol: "NOTAPIUSDT", baseAsset: "NOTAPI", quoteAsset: "USDT", maxLeverage: 50 },
       ] },
       new Date("2026-07-13T00:00:00.000Z"),
     );
@@ -33,5 +35,12 @@ describe("WEEX market catalog", () => {
       { symbol: "SOLUSDT", baseAsset: "SOL", quoteAsset: "USDT", maxLeverage: 1 },
     ]);
     expect(isWeexMarketCatalog(catalog)).toBe(true);
+  });
+
+  it("rejects products that have public market data but are absent from the API trading announcement", () => {
+    expect(isWeexApiTradingSymbol("spot", "BTC/USDT")).toBe(true);
+    expect(isWeexApiTradingSymbol("futures", "cmt_btcusdt")).toBe(true);
+    expect(isWeexApiTradingSymbol("spot", "NOTAPIUSDT")).toBe(false);
+    expect(isWeexApiTradingSymbol("futures", "NOTAPIUSDT")).toBe(false);
   });
 });

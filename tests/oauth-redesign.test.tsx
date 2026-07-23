@@ -10,9 +10,7 @@ import { safeReturnTo, signInDemo } from "../lib/demo-auth";
 import { setDemoConnection } from "../lib/demo-connection";
 import { createDemoPaperRun } from "../lib/demo-runs";
 import { demoModeEnabled, productionLiveReady, productionOAuthReady } from "../lib/server/demo-mode";
-import { BOT_CATALOG } from "../data/bots";
 import { GET as getBotPerformance } from "../app/api/weex/bot-performance/route";
-import { POST as postHistoricalBacktest } from "../app/api/weex/historical-backtest/route";
 
 beforeEach(() => { localStorage.clear(); window.history.replaceState({}, "", "/connections"); });
 afterEach(cleanup);
@@ -36,7 +34,7 @@ describe("OAuth-first redesign demo", () => {
 
     act(() => setDemoConnection("paper-ready"));
     expect(screen.getByText(/展示連線已就緒/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "選擇策略並開始 Paper" })).toHaveAttribute("href", "/workshop?bot=orbit-dca&onboarding=paper");
+    expect(screen.getByRole("link", { name: "選擇策略並開始模擬運行" })).toHaveAttribute("href", "/workshop?bot=orbit-dca&onboarding=paper");
   });
 
   it("labels the simulated authorization page and never offers Live", () => {
@@ -72,18 +70,8 @@ describe("OAuth-first redesign demo", () => {
     expect(productionLiveReady()).toBe(false);
   });
 
-  it("uses clearly labelled cached demo data without calling WEEX in DEMO_MODE", async () => {
+  it("keeps the catalog fail-closed when account demo mode has no verified market performance", async () => {
     const catalogResponse = await getBotPerformance();
     await expect(catalogResponse.json()).resolves.toMatchObject({ demo: true, performances: {} });
-
-    const bot = BOT_CATALOG[0]!;
-    const config = { id: bot.id, name: bot.name, exchange: bot.exchange, market: bot.market, symbol: bot.symbol,
-      timeframe: bot.timeframe, logicMode: bot.logicMode, leverage: bot.leverage, blocks: bot.blocks };
-    const response = await postHistoricalBacktest(new Request("http://localhost/api/weex/historical-backtest", {
-      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://localhost", Host: "localhost" },
-      body: JSON.stringify({ config }),
-    }));
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ demo: true, report: { disclaimer: expect.stringContaining("DEMO_MODE") } });
   });
 });
