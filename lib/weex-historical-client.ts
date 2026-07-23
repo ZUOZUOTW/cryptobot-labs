@@ -16,7 +16,10 @@ export const DEFAULT_PUBLIC_HISTORICAL_ASSUMPTIONS: PublicHistoricalBacktestAssu
   gapPolicy: "fail",
 };
 interface BotPerformanceResponse { performances?: Record<string, WeexHistoricalPerformance>; updatedAt?: string; demo?: boolean }
-let botPerformanceRequest: Promise<{ performances: Record<string, WeexHistoricalPerformance>; updatedAt: string; demo: boolean }> | null = null;
+type BotPerformanceResult = { performances: Record<string, WeexHistoricalPerformance>; updatedAt: string; demo: boolean };
+const BOT_PERFORMANCE_CACHE_TTL_MS = 5 * 60 * 1_000;
+let botPerformanceCache: { value: BotPerformanceResult; expiresAt: number } | null = null;
+let botPerformanceRequest: Promise<BotPerformanceResult> | null = null;
 const backtestRequests = new Map<string, Promise<BacktestReport>>();
 
 const errorMessage = (body: HistoricalBacktestResponse | null): string => {
@@ -60,12 +63,19 @@ export async function runWeexHistoricalBacktest(
 export async function loadWeexBotPerformance(): Promise<{
   performances: Record<string, WeexHistoricalPerformance>; updatedAt: string; demo: boolean;
 }> {
-  botPerformanceRequest ??= (async () => {
+  if (botPerformanceCache && botPerformanceCache.expiresAt > Date.now()) return botPerformanceCache.value;
+  if (botPerformanceRequest) return botPerformanceRequest;
+  const request = (async () => {
     const response = await fetch("/api/weex/bot-performance", { cache: "force-cache", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("WEEX 歷史績效暫時無法載入");
     const body = await response.json() as BotPerformanceResponse;
     if (!body.performances || typeof body.updatedAt !== "string") throw new Error("WEEX 歷史績效格式無效");
-    return { performances: body.performances, updatedAt: body.updatedAt, demo: body.demo === true };
-  })().finally(() => { botPerformanceRequest = null; });
-  return botPerformanceRequest;
+    const value = { performances: body.performances, updatedAt: body.updatedAt, demo: body.demo === true };
+    botPerformanceCache = { value, expiresAt: Date.now() + BOT_PERFORMANCE_CACHE_TTL_MS };
+    return value;
+  })().finally(() => {
+    if (botPerformanceRequest === request) botPerformanceRequest = null;
+  });
+  botPerformanceRequest = request;
+  return request;
 }

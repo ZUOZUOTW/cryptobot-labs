@@ -25,6 +25,20 @@ describe("homepage loading performance contracts", () => {
 
     expect(provider).toContain('import("@/lib/i18n/messages")');
     expect(provider).not.toContain('import { canonicalMessageSource, translateMessage } from "@/lib/i18n/messages"');
+    expect(provider).toContain("queueMicrotask(flushBodyTranslations)");
+    expect(provider).not.toContain("for (const node of record.addedNodes) translateNode(node, locale)");
+  });
+
+  it("reuses public market data while switching between feature pages", async () => {
+    const [historicalClient, parameterPanel] = await Promise.all([
+      projectFile("lib/weex-historical-client.ts"),
+      projectFile("components/workshop/ParameterPanel.tsx"),
+    ]);
+
+    expect(historicalClient).toContain("BOT_PERFORMANCE_CACHE_TTL_MS");
+    expect(historicalClient).toContain("botPerformanceCache.expiresAt > Date.now()");
+    expect(parameterPanel).toContain("MARKET_CATALOG_CACHE_TTL_MS");
+    expect(parameterPanel).toContain("marketCatalogCache.expiresAt > Date.now()");
   });
 
   it("serves the prioritized hero as a substantially smaller WebP", async () => {

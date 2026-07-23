@@ -27,6 +27,27 @@ const TIMEFRAME_OPTIONS = [
   { value: "1d", label: "1 天", detail: "趨勢" },
 ] as const;
 
+const MARKET_CATALOG_CACHE_TTL_MS = 5 * 60 * 1_000;
+let marketCatalogCache: { value: WeexMarketCatalog; expiresAt: number } | null = null;
+let marketCatalogRequest: Promise<WeexMarketCatalog> | null = null;
+
+function loadMarketCatalog(): Promise<WeexMarketCatalog> {
+  if (marketCatalogCache && marketCatalogCache.expiresAt > Date.now()) {
+    return Promise.resolve(marketCatalogCache.value);
+  }
+  marketCatalogRequest ??= fetch("/api/weex/markets", { headers: { Accept: "application/json" } })
+    .then(async (response) => response.ok ? response.json() : Promise.reject(new Error("market metadata unavailable")))
+    .then((value: unknown) => {
+      if (!isWeexMarketCatalog(value)) throw new TypeError("invalid WEEX market catalog");
+      marketCatalogCache = { value, expiresAt: Date.now() + MARKET_CATALOG_CACHE_TTL_MS };
+      return value;
+    })
+    .finally(() => {
+      marketCatalogRequest = null;
+    });
+  return marketCatalogRequest;
+}
+
 function ResetIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 20 20">
@@ -46,9 +67,12 @@ interface ParameterPanelProps {
 }
 
 export function ParameterPanel({ config, onConfigField, onParameter }: ParameterPanelProps) {
-  const [catalog, setCatalog] = useState<WeexMarketCatalog>(FALLBACK_WEEX_MARKET_CATALOG);
+  const cachedCatalog = marketCatalogCache && marketCatalogCache.expiresAt > Date.now()
+    ? marketCatalogCache.value
+    : null;
+  const [catalog, setCatalog] = useState<WeexMarketCatalog>(cachedCatalog ?? FALLBACK_WEEX_MARKET_CATALOG);
   const [catalogStatus, setCatalogStatus] = useState<"loading" | "live" | "fallback">(
-    process.env.NODE_ENV === "test" ? "fallback" : "loading",
+    process.env.NODE_ENV === "test" ? "fallback" : cachedCatalog ? "live" : "loading",
   );
   const pairs = catalog[config.market];
   const selectedPair = useMemo(
@@ -59,18 +83,19 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
 
   useEffect(() => {
     if (process.env.NODE_ENV === "test") return;
-    const controller = new AbortController();
-    void fetch("/api/weex/markets", { headers: { Accept: "application/json" }, signal: controller.signal })
-      .then(async (response) => response.ok ? response.json() : Promise.reject(new Error("market metadata unavailable")))
-      .then((value: unknown) => {
-        if (!isWeexMarketCatalog(value)) throw new TypeError("invalid WEEX market catalog");
+    let active = true;
+    void loadMarketCatalog()
+      .then((value) => {
+        if (!active) return;
         setCatalog(value);
         setCatalogStatus("live");
       })
       .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) setCatalogStatus("fallback");
+        if (active) setCatalogStatus("fallback");
       });
-    return () => controller.abort();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {

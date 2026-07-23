@@ -206,23 +206,60 @@ export function I18nProvider({ children, initialLocale = DEFAULT_LOCALE }: {
     translateMetadata(locale);
     translateNode(document.body, locale);
 
+    let stopped = false;
+    let bodyFlushQueued = false;
+    let headFlushQueued = false;
+    const pendingRoots = new Set<Node>();
+    const observeBody = () => {
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: [...TRANSLATABLE_ATTRIBUTES],
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    };
+    const flushBodyTranslations = () => {
+      bodyFlushQueued = false;
+      if (stopped || !document.body) return;
+      observer.disconnect();
+      const roots = [...pendingRoots];
+      pendingRoots.clear();
+      for (const root of roots) {
+        if (!root.isConnected || roots.some((candidate) => candidate !== root && candidate.contains(root))) continue;
+        translateNode(root, locale);
+      }
+      observeBody();
+    };
+    const queueBodyTranslation = (root: Node) => {
+      pendingRoots.add(root);
+      if (bodyFlushQueued) return;
+      bodyFlushQueued = true;
+      queueMicrotask(flushBodyTranslations);
+    };
     const observer = new MutationObserver((records) => {
       if (typeof document === "undefined" || !document.body) return;
-      observer.disconnect();
       for (const record of records) {
-        if (record.type === "characterData" || record.type === "attributes") translateNode(record.target, locale);
-        for (const node of record.addedNodes) translateNode(node, locale);
+        if (record.type === "characterData" || record.type === "attributes") queueBodyTranslation(record.target);
+        for (const node of record.addedNodes) queueBodyTranslation(node);
       }
-      observer.observe(document.body, { attributes: true, attributeFilter: [...TRANSLATABLE_ATTRIBUTES], childList: true, characterData: true, subtree: true });
     });
-    observer.observe(document.body, { attributes: true, attributeFilter: [...TRANSLATABLE_ATTRIBUTES], childList: true, characterData: true, subtree: true });
+    observeBody();
     const headObserver = new MutationObserver(() => {
-      headObserver.disconnect();
-      translateMetadata(locale);
-      headObserver.observe(document.head, { attributes: true, attributeFilter: ["content"], childList: true, characterData: true, subtree: true });
+      if (headFlushQueued) return;
+      headFlushQueued = true;
+      queueMicrotask(() => {
+        headFlushQueued = false;
+        if (stopped) return;
+        headObserver.disconnect();
+        translateMetadata(locale);
+        headObserver.observe(document.head, { attributes: true, attributeFilter: ["content"], childList: true, characterData: true, subtree: true });
+      });
     });
     headObserver.observe(document.head, { attributes: true, attributeFilter: ["content"], childList: true, characterData: true, subtree: true });
     return () => {
+      stopped = true;
+      pendingRoots.clear();
       observer.disconnect();
       headObserver.disconnect();
     };
