@@ -28,8 +28,8 @@ export function RunsPanel() {
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
 
   return (
-    <section className="runs-panel" aria-labelledby="runs-title">
-      <div className="runs-panel__heading"><div><p className="eyebrow">YOUR AGENT RUNS</p><h2 id="runs-title">我的運行</h2></div>{state === "ready" && <button className="button button--ghost button--small" onClick={() => void load()} type="button">重新整理</button>}</div>
+    <section className="runs-panel runs-panel--legacy" aria-labelledby="runs-title">
+      <div className="runs-panel__heading"><div><p className="eyebrow">LEGACY RUN EVIDENCE</p><h2 id="runs-title">舊版運行證據</h2></div>{state === "ready" && <button className="button button--ghost button--small" onClick={() => void load()} type="button">重新整理</button>}</div>
       <div aria-live="polite">
         {state === "loading" && <p className="runs-empty">正在載入運行證據…</p>}
         {state === "error" && <div className="runs-empty"><p>無法載入運行。</p><button className="button button--secondary button--small" onClick={() => void load()} type="button">重試載入</button></div>}

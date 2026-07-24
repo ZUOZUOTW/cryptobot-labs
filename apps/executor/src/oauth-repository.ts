@@ -31,6 +31,10 @@ export interface OAuthRepository {
   consumeState(id: string, stateHash: string, now: number): Promise<boolean>;
   completeState(input: { state: StoredOAuthState; credentialEnvelope: EncryptedWeexCredentials;
     credentialContext: Readonly<Record<string, string>>; maskedApiKeySuffix: string; now: number }): Promise<void>;
+  completeManualConnection(input: { connectionId: string; userId: string;
+    credentialEnvelope: EncryptedWeexCredentials; credentialContext: Readonly<Record<string, string>>;
+    maskedApiKeySuffix: string; permissions: Readonly<Record<string, boolean>>; now: number }): Promise<void>;
+  failConnection(input: { connectionId: string; userId: string; now: number }): Promise<void>;
   failState(input: { state: StoredOAuthState; code: string; now: number }): Promise<void>;
   close(): Promise<void>;
 }
@@ -99,7 +103,7 @@ export class PostgresOAuthRepository implements OAuthRepository {
       values ($1,$2,$3,$4,$5,$6,null,$7,$8,$9,$10,$11::jsonb,'init',$12,$13,$13)`,
     [input.id, input.connectionId, input.userId, input.stateHash, input.sessionHash, input.redirectUri,
       input.envelope.keyId, input.envelope.encryptedDataKey, input.envelope.initializationVector,
-      input.envelope.ciphertext, JSON.stringify(input.context), input.expiresAt, input.now]);
+      input.envelope.ciphertext, this.#sql.json(input.context), input.expiresAt, input.now]);
   }
 
   async findState(stateHash: string): Promise<StoredOAuthState | null> {
@@ -135,15 +139,46 @@ export class PostgresOAuthRepository implements OAuthRepository {
         rotated_at=excluded.updated_at,updated_at=excluded.updated_at`,
       [input.state.connectionId, input.state.userId, input.credentialEnvelope.keyId,
         input.credentialEnvelope.encryptedDataKey, input.credentialEnvelope.initializationVector,
-        input.credentialEnvelope.ciphertext, JSON.stringify(input.credentialContext), input.now]);
+        input.credentialEnvelope.ciphertext, transaction.json(input.credentialContext), input.now]);
       const connection = await transaction.unsafe(`update public.weex_connections set status='active',masked_api_key_suffix=$3,
         permissions_json=$4::jsonb,withdrawal_access_absent=true,verified_at=$5,revoked_at=null,updated_at=$5
         where id=$1 and user_id=$2`, [input.state.connectionId, input.state.userId, input.maskedApiKeySuffix,
-        JSON.stringify({ read: true, spotTrade: true, futuresTrade: true, withdrawal: false }), input.now]);
+        transaction.json({ read: true, spotTrade: true, futuresTrade: true, withdrawal: false }), input.now]);
       const state = await transaction.unsafe(`update private.weex_oauth_states set status='success',error_code=null,updated_at=$2
         where id=$1 and status='processing'`, [input.state.id, input.now]);
       if (connection.count !== 1 || state.count !== 1) throw new Error("OAuth completion conflict");
     });
+  }
+
+  async completeManualConnection(input: { connectionId: string; userId: string;
+    credentialEnvelope: EncryptedWeexCredentials; credentialContext: Readonly<Record<string, string>>;
+    maskedApiKeySuffix: string; permissions: Readonly<Record<string, boolean>>; now: number }): Promise<void> {
+    await this.#sql.begin(async (transaction) => {
+      await transaction.unsafe(`insert into private.weex_credential_blobs
+        (connection_id,user_id,kms_key_id,encrypted_data_key,initialization_vector,credential_ciphertext,
+         encryption_context_json,credential_version,created_at,rotated_at,updated_at)
+        values ($1,$2,$3,$4,$5,$6,$7::jsonb,1,$8,null,$8)
+        on conflict(connection_id) do update set kms_key_id=excluded.kms_key_id,
+        encrypted_data_key=excluded.encrypted_data_key,initialization_vector=excluded.initialization_vector,
+        credential_ciphertext=excluded.credential_ciphertext,encryption_context_json=excluded.encryption_context_json,
+        credential_version=private.weex_credential_blobs.credential_version+1,
+        rotated_at=excluded.updated_at,updated_at=excluded.updated_at`,
+      [input.connectionId, input.userId, input.credentialEnvelope.keyId,
+        input.credentialEnvelope.encryptedDataKey, input.credentialEnvelope.initializationVector,
+        input.credentialEnvelope.ciphertext, transaction.json(input.credentialContext), input.now]);
+      const connection = await transaction.unsafe(`update public.weex_connections
+        set status='active',masked_api_key_suffix=$3,permissions_json=$4::jsonb,
+        withdrawal_access_absent=$5,verified_at=$6,revoked_at=null,updated_at=$6
+        where id=$1 and user_id=$2`,
+      [input.connectionId, input.userId, input.maskedApiKeySuffix, transaction.json(input.permissions),
+        input.permissions.withdrawal === false, input.now]);
+      if (connection.count !== 1) throw new Error("Manual WEEX connection completion conflict");
+    });
+  }
+
+  async failConnection(input: { connectionId: string; userId: string; now: number }): Promise<void> {
+    await this.#sql.unsafe(`update public.weex_connections set status='error',updated_at=$3
+      where id=$1 and user_id=$2`, [input.connectionId, input.userId, input.now]);
   }
 
   async failState(input: { state: StoredOAuthState; code: string; now: number }): Promise<void> {

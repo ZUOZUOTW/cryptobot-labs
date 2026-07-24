@@ -3,10 +3,15 @@ set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly OUTPUT="${ROOT}/release/executor"
+readonly NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+if [[ -z "${NODE_BIN}" || ! -x "${NODE_BIN}" ]]; then
+  echo "Set NODE_BIN to an executable Node.js 22+ binary." >&2
+  exit 1
+fi
 cd "${ROOT}"
 pnpm --filter @cryptobot-labs/executor build
 set +e
-smoke_output="$(env -i PATH="${PATH}" NODE_ENV=production node apps/executor/dist/main.js 2>&1)"
+smoke_output="$(env -i PATH="${PATH}" NODE_ENV=production "${NODE_BIN}" apps/executor/dist/main.js 2>&1)"
 smoke_status=$?
 set -e
 if [[ "${smoke_status}" -eq 0 || "${smoke_output}" != *"EXECUTOR_SHARD_ID is required"* ]]; then

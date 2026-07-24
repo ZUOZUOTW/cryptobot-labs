@@ -26,7 +26,7 @@ describe("executor OAuth service", () => {
         initializationVector: input.envelope.initializationVector, ciphertext: input.envelope.ciphertext,
         context: input.context, expiresAt: input.expiresAt }; }),
       findState: vi.fn(async () => state), consumeState: vi.fn(async () => true),
-      completeState: vi.fn(), failState: vi.fn(),
+      completeState: vi.fn(), completeManualConnection: vi.fn(), failConnection: vi.fn(), failState: vi.fn(),
     };
     const oauthClient = { exchangeAuthorizationCode: vi.fn(async () => ({ accessToken: "access", refreshToken: "refresh",
       expiresIn: 3600, refreshExpiresIn: 36000, scope: "create:apikey" as const })),
@@ -48,7 +48,8 @@ describe("executor OAuth service", () => {
   it("consumes state only once and fails closed when OAuth credentials are absent", async () => {
     const repository = { assertReady: vi.fn(), registerShard: vi.fn(), close: vi.fn(), reserveHandoff: vi.fn(),
       prepareConnection: vi.fn(), createState: vi.fn(), findState: vi.fn(async () => null), consumeState: vi.fn(),
-      completeState: vi.fn(), failState: vi.fn() } satisfies OAuthRepository;
+      completeState: vi.fn(), completeManualConnection: vi.fn(), failConnection: vi.fn(),
+      failState: vi.fn() } satisfies OAuthRepository;
     const service = new ExecutorOAuthService({ repository, kms, oauthClient: null, clientId: null, handoffSecret: secret,
       redirectUri: "https://api.example.test/oauth/weex/callback", publicOrigin: "https://www.example.test",
       shardId: "exec_abcdefghijklmnop", now: () => 1_000_000 });

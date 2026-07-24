@@ -6,7 +6,7 @@ type QueryClient = Pick<AnySql, "unsafe">;
 type QueryResult = unknown[] & { count?: number };
 
 const quoteCamelCaseAliases = (sql: string): string =>
-  sql.replace(/\bAS\s+([a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b/g, 'AS "$1"');
+  sql.replace(/\bAS\s+([a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b/gi, 'AS "$1"');
 
 const positionalSql = (sql: string): string => {
   let position = 0;

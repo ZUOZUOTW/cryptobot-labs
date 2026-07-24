@@ -43,6 +43,13 @@ function bodyMessage(body: Record<string, unknown>): string {
 }
 
 const OFFICIAL_CODE_CATEGORIES = new Map<number, readonly [WeexApiErrorCategory, boolean]>([
+  [40005, ["clock", false]],
+  [40006, ["authentication", false]],
+  [40008, ["clock", false]],
+  [40009, ["authentication", false]],
+  [40012, ["authentication", false]],
+  [40014, ["permission", false]],
+  [40018, ["permission", false]],
   [-1000, ["server", true]],
   [-1003, ["rate-limit", true]],
   [-1040, ["authentication", false]],

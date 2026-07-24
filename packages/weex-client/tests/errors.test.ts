@@ -4,6 +4,12 @@ import { WeexApiError, mapWeexError } from "../src/errors";
 
 describe("mapWeexError", () => {
   it.each([
+    [400, { code: "40005" }, "clock", false],
+    [400, { code: "40006" }, "authentication", false],
+    [400, { code: "40009" }, "authentication", false],
+    [400, { code: "40012" }, "authentication", false],
+    [400, { code: "40014" }, "permission", false],
+    [400, { code: "40018" }, "permission", false],
     [401, { code: -1040 }, "authentication", false],
     [403, { code: -1058 }, "permission", false],
     [429, { code: "429" }, "rate-limit", true],

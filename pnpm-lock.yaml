@@ -199,6 +199,9 @@ importers:
       '@aws-sdk/client-secrets-manager':
         specifier: 3.1085.0
         version: 3.1085.0
+      '@cryptobot-labs/trading-core':
+        specifier: workspace:*
+        version: link:../../packages/trading-core
       '@cryptobot-labs/weex-client':
         specifier: workspace:*
         version: link:../../packages/weex-client
