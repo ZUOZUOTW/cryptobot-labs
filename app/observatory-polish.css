@@ -1,0 +1,41 @@
+/* Loaded after workshop.css so accessibility sizing wins over legacy compact rules. */
+.workshop-page__intro { max-width: 66rem; min-height: 17rem; }
+.workshop-page__intro h1 {
+  max-width: 18ch;
+  font-size: clamp(3.4rem, 5vw, 5.3rem);
+  line-height: 1.05;
+  text-wrap: balance;
+}
+.workshop-page p { font-size: 0.92rem; }
+.workshop-page small { font-size: 0.78rem; }
+.workshop-page label,
+.workshop-page dt { font-size: 0.8rem; }
+.workshop-page dd,
+.workshop-page li { font-size: 0.88rem; }
+.workshop-page button,
+.workshop-page input,
+.workshop-page select,
+.workshop-page textarea { font-size: 0.88rem; }
+.workshop-mode button { font-size: 0.86rem; }
+.workshop-count,
+.backtest-state,
+.panel-badge { font-size: 0.76rem; }
+.workshop-panel__heading .eyebrow { font-size: 0.75rem; }
+.workshop-panel__heading h2 { font-size: clamp(1.65rem, 2.6vw, 2.35rem); }
+.strategy-option strong { font-size: 0.92rem; }
+.strategy-option p { font-size: 0.82rem; }
+.strategy-summary ol li { font-size: 0.88rem; }
+.market-controls label > span,
+.parameter-row__label label,
+.parameter-row__label span { font-size: 0.8rem; }
+.market-controls select,
+.parameter-row input { font-size: 0.86rem; }
+.selected-strategies li strong { font-size: 0.88rem; }
+.selected-strategies li small { font-size: 0.76rem; }
+.historical-request__lead,
+.backtest-panel__lead { font-size: 0.9rem; }
+
+@media (max-width: 52rem) {
+  .workshop-page__intro { min-height: 0; }
+  .workshop-page__intro h1 { font-size: clamp(2.7rem, 11vw, 4rem); }
+}

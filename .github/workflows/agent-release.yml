@@ -1,0 +1,74 @@
+name: Signed Agent Release
+on:
+  push:
+    tags: ["agent-v*"]
+permissions: { contents: write }
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, label: macos-arm64 }
+          - { os: macos-15-intel, label: macos-x64 }
+          - { os: windows-2022, label: windows-x64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      AGENT_RELEASE_CHANNEL: public
+      CBL_CONTROL_PLANE_ORIGIN: ${{ vars.CBL_CONTROL_PLANE_ORIGIN }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.13.0, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD) { throw "WINDOWS signing inputs are missing" }
+          [IO.File]::WriteAllBytes("agent-signing.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          "WINDOWS_CERTIFICATE_FILE=$((Resolve-Path agent-signing.pfx).Path)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - run: pnpm --filter @cryptobot-labs/agent make
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: Remove-Item agent-signing.pfx -Force
+      - shell: bash
+        run: |
+          find apps/agent/out/make -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' \) -exec shasum -a 256 {} \; | sed 's#  .*/#  #' | sort > apps/agent/out/make/SHA256SUMS
+          pnpm dlx @cyclonedx/cyclonedx-npm@2.0.0 --output-file apps/agent/out/make/agent-sbom.cdx.json --omit dev
+      - run: node scripts/verify-agent-artifact.mjs --public apps/agent/out/make
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "signed-agent-${{ matrix.label }}"
+          path: |
+            apps/agent/out/make/**/*.zip
+            apps/agent/out/make/**/*.exe
+            apps/agent/out/make/**/*.nupkg
+            apps/agent/out/make/**/RELEASES
+  publish:
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.13.0 }
+      - uses: actions/download-artifact@v4
+        with: { pattern: signed-agent-*, path: release, merge-multiple: true }
+      - shell: bash
+        run: |
+          find release -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' \) -exec sha256sum {} \; | sed 's#  .*/#  #' | sort > release/SHA256SUMS
+          pnpm dlx @cyclonedx/cyclonedx-npm@2.0.0 --output-file release/agent-sbom.cdx.json --omit dev
+      - env: { GH_TOKEN: "${{ github.token }}" }
+        shell: bash
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --verify-tag --title "CryptoBot Labs Agent ${GITHUB_REF_NAME}" --generate-notes
+          find release -type f -print0 | xargs -0 gh release upload "${GITHUB_REF_NAME}" --clobber

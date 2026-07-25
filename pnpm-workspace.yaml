@@ -1,0 +1,19 @@
+packages:
+  - "."
+  - "packages/*"
+  - "apps/*"
+
+publicHoistPattern:
+  - "@electron-forge/*"
+  - "electron"
+
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true
+
+overrides:
+  "@electron/node-gyp": "10.2.0-electron.2"

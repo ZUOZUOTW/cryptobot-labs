@@ -1,0 +1,615 @@
+import {
+  SignalIntentNormalizer,
+  createVisualStrategyEvaluator,
+  deriveClientOrderId,
+  evaluateOrderRisk,
+  type RiskContext,
+  type RiskPolicy,
+  type Candle,
+  type StrategyPortfolioSnapshot,
+  type VisualBotConfig,
+} from "@cryptobot-labs/trading-core";
+import {
+  createFetchTransport,
+  decryptWeexCredentials,
+  parseIntervalMs,
+  WeexApiError,
+  WeexClock,
+  WeexPrivateClient,
+  WeexPublicClient,
+  type CredentialEnvelopeKms,
+  type WeexAccountPosition,
+} from "@cryptobot-labs/weex-client";
+
+import type { CloudRun, CloudRuntimeRepository } from "./cloud-repository";
+import type { ClaimedAccountSnapshot } from "./cloud-repository";
+
+const CLOCK_PROBE_URL = "https://api-spot.weex.com/api/v3/market/ticker/price?symbol=BTCUSDT";
+const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const TRADE_WINDOW_MS = 7 * 24 * 60 * 60_000;
+
+class AccountSyncStageError extends Error {
+  constructor(readonly stage: "client" | "snapshot" | "projection" | "database", cause: unknown) {
+    super("WEEX account synchronization stage failed", { cause });
+  }
+}
+
+type CloudRunFailureStage = "account" | "exchange" | "runtime";
+
+class CloudRunExecutionError extends Error {
+  constructor(
+    readonly code: "demo_funds_required" | "account_equity_unavailable" | "live_trading_disabled"
+      | "live_api_permission_required" | "withdrawal_permission_forbidden" | "hedge_mode_required"
+      | "unsupported_market_mode" | "unknown_order_state" | "ambiguous_position_state"
+      | "unmanaged_position_state",
+    readonly stage: CloudRunFailureStage,
+    readonly terminal: boolean,
+  ) {
+    super("Cloud strategy execution prerequisite is unavailable");
+  }
+}
+
+interface SettlementBalance {
+  asset: string;
+  total: string;
+  available: string;
+}
+
+export const requireSettlementBalance = (
+  balances: readonly SettlementBalance[],
+  mode: CloudRun["mode"],
+): SettlementBalance => {
+  const expectedAsset = mode === "futures-demo" ? "SUSDT" : "USDT";
+  const balance = balances.find(({ asset }) => asset === expectedAsset);
+  if (!balance || !DECIMAL.test(balance.total) || Number(balance.total) <= 0) {
+    throw new CloudRunExecutionError(
+      mode === "futures-demo" ? "demo_funds_required" : "account_equity_unavailable",
+      "account",
+      true,
+    );
+  }
+  return balance;
+};
+
+const cloudRunFailure = (error: unknown): {
+  code: string;
+  stage: CloudRunFailureStage;
+  category: string;
+  name: string;
+  exchangeCode: string | null;
+  status: number | null;
+  terminal: boolean;
+} => {
+  if (error instanceof CloudRunExecutionError) {
+    return {
+      code: error.code,
+      stage: error.stage,
+      category: "precondition",
+      name: error.name,
+      exchangeCode: null,
+      status: null,
+      terminal: error.terminal,
+    };
+  }
+  if (error instanceof WeexApiError) {
+    return {
+      code: `weex_${error.category.replace(/[^a-z0-9]+/g, "_")}`,
+      stage: "exchange",
+      category: error.category,
+      name: error.name,
+      exchangeCode: error.code ?? null,
+      status: error.status ?? null,
+      terminal: false,
+    };
+  }
+  const name = error && typeof error === "object" && "name" in error
+    && typeof error.name === "string" && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name)
+    ? error.name : "Error";
+  return {
+    code: "execution_failed",
+    stage: "runtime",
+    category: "internal",
+    name,
+    exchangeCode: null,
+    status: null,
+    terminal: false,
+  };
+};
+
+const amount = (value: unknown, fallback = "0"): string =>
+  typeof value === "string" && DECIMAL.test(value) ? value : fallback;
+const decimalSum = (values: readonly string[]): string => {
+  const parsed = values.map((value) => {
+    if (!SIGNED_DECIMAL.test(value)) throw new Error("Invalid decimal");
+    const negative = value.startsWith("-");
+    const unsigned = negative ? value.slice(1) : value;
+    const [whole, fraction = ""] = unsigned.split(".");
+    return { amount: BigInt(`${negative ? "-" : ""}${whole}${fraction}`), scale: fraction.length };
+  });
+  const scale = parsed.reduce((maximum, value) => Math.max(maximum, value.scale), 0);
+  const total = parsed.reduce((sum, value) =>
+    sum + value.amount * BigInt(10) ** BigInt(scale - value.scale), BigInt(0));
+  const negative = total < BigInt(0);
+  const digits = (negative ? -total : total).toString().padStart(scale + 1, "0");
+  const whole = scale === 0 ? digits : digits.slice(0, -scale);
+  const fraction = scale === 0 ? "" : digits.slice(-scale).replace(/0+$/, "");
+  const canonical = fraction ? `${whole}.${fraction}` : whole;
+  return negative && canonical !== "0" ? `-${canonical}` : canonical;
+};
+const decimalParts = (value: string): { amount: bigint; scale: number } => {
+  if (!DECIMAL.test(value)) throw new Error("Invalid decimal");
+  const [whole, fraction = ""] = value.split(".");
+  return { amount: BigInt(`${whole}${fraction}`), scale: fraction.length };
+};
+const decimalCompare = (left: string, right: string): number => {
+  const a = decimalParts(left);
+  const b = decimalParts(right);
+  const scale = Math.max(a.scale, b.scale);
+  const normalizedA = a.amount * BigInt(10) ** BigInt(scale - a.scale);
+  const normalizedB = b.amount * BigInt(10) ** BigInt(scale - b.scale);
+  return normalizedA < normalizedB ? -1 : normalizedA > normalizedB ? 1 : 0;
+};
+export const decimalRatio = (numerator: string, denominator: string, outputScale = 18): string => {
+  const a = decimalParts(numerator);
+  const b = decimalParts(denominator);
+  if (b.amount === BigInt(0) || !Number.isSafeInteger(outputScale) || outputScale < 0 || outputScale > 18) {
+    throw new Error("Invalid decimal ratio");
+  }
+  const scaled = (a.amount * BigInt(10) ** BigInt(b.scale + outputScale))
+    / (b.amount * BigInt(10) ** BigInt(a.scale));
+  const digits = scaled.toString().padStart(outputScale + 1, "0");
+  if (outputScale === 0) return digits;
+  const fraction = digits.slice(-outputScale).replace(/0+$/, "");
+  return fraction ? `${digits.slice(0, -outputScale)}.${fraction}` : digits.slice(0, -outputScale);
+};
+export const deriveFuturesPositionSnapshot = (
+  position: WeexAccountPosition,
+  candles: readonly Candle[],
+): NonNullable<StrategyPortfolioSnapshot["position"]> => {
+  const entryPrice = decimalRatio(position.openValue, position.size);
+  if (!DECIMAL.test(entryPrice) || decimalCompare(entryPrice, "0") <= 0) throw new Error("Invalid position entry price");
+  const relevant = candles.filter((candle) => candle.complete
+    && (position.openedAt === null || candle.closeTime >= position.openedAt));
+  const peakPrice = relevant.reduce((peak, candle) =>
+    decimalCompare(candle.high, peak) > 0 ? candle.high : peak, entryPrice);
+  const troughPrice = relevant.reduce((trough, candle) =>
+    decimalCompare(candle.low, trough) < 0 ? candle.low : trough, entryPrice);
+  return Object.freeze({
+    side: position.side,
+    ...(position.openedAt === null ? {} : { entryTime: position.openedAt }),
+    entryPrice,
+    peakPrice,
+    troughPrice,
+    quantity: position.size,
+    usedMargin: position.openValue,
+    layerCount: 1,
+  });
+};
+const trackedSpotPosition = (
+  storedPositions: readonly unknown[],
+  position: WeexAccountPosition,
+  candles: readonly Candle[],
+  lastCandleAt: number | null,
+): NonNullable<StrategyPortfolioSnapshot["position"]> => {
+  const stored = storedPositions.find((value) => value && typeof value === "object" && !Array.isArray(value)
+    && (value as Record<string, unknown>).symbol === position.symbol) as Record<string, unknown> | undefined;
+  const previousEntry = typeof stored?.entryPrice === "string" && DECIMAL.test(stored.entryPrice)
+    && decimalCompare(stored.entryPrice, "0") > 0 ? stored.entryPrice : null;
+  const previousPeak = typeof stored?.peakPrice === "string" && DECIMAL.test(stored.peakPrice)
+    && decimalCompare(stored.peakPrice, "0") > 0 ? stored.peakPrice : null;
+  const previousTrough = typeof stored?.troughPrice === "string" && DECIMAL.test(stored.troughPrice)
+    && decimalCompare(stored.troughPrice, "0") > 0 ? stored.troughPrice : null;
+  const entryCandle = lastCandleAt === null ? undefined : candles.find(({ closeTime }) => closeTime === lastCandleAt);
+  const latest = candles.at(-1);
+  if (!latest) throw new Error("Spot position candle history is unavailable");
+  const entryPrice = previousEntry ?? entryCandle?.close ?? latest.close;
+  const openedAt = typeof stored?.openedAt === "number" && Number.isSafeInteger(stored.openedAt)
+    ? stored.openedAt : lastCandleAt;
+  const relevant = candles.filter(({ complete, closeTime }) => complete
+    && (openedAt === null || closeTime >= openedAt));
+  const peakPrice = relevant.reduce((peak, candle) =>
+    decimalCompare(candle.high, peak) > 0 ? candle.high : peak, previousPeak ?? entryPrice);
+  const troughPrice = relevant.reduce((trough, candle) =>
+    decimalCompare(candle.low, trough) < 0 ? candle.low : trough, previousTrough ?? entryPrice);
+  return Object.freeze({
+    side: "long",
+    ...(openedAt === null ? {} : { entryTime: openedAt }),
+    entryPrice,
+    peakPrice,
+    troughPrice,
+    quantity: position.size,
+    usedMargin: position.openValue,
+    layerCount: 1,
+  });
+};
+const decimalProduct = (left: string, right: string): string => {
+  if (!DECIMAL.test(left) || !DECIMAL.test(right)) throw new Error("Invalid decimal");
+  const [leftWhole, leftFraction = ""] = left.split(".");
+  const [rightWhole, rightFraction = ""] = right.split(".");
+  const scale = leftFraction.length + rightFraction.length;
+  const total = BigInt(leftWhole + leftFraction) * BigInt(rightWhole + rightFraction);
+  const digits = total.toString().padStart(scale + 1, "0");
+  if (scale === 0) return digits;
+  const fraction = digits.slice(-scale).replace(/0+$/, "");
+  return fraction ? `${digits.slice(0, -scale)}.${fraction}` : digits.slice(0, -scale);
+};
+
+const policy = (value: Record<string, unknown>): RiskPolicy => Object.freeze({
+  allowedSymbols: Object.freeze([...(value.allowedSymbols as string[])]),
+  maximumOrderNotional: amount(value.maxOrderNotional),
+  maximumPositionNotional: amount(value.maxPositionNotional),
+  maximumTotalExposure: amount(value.maxTotalExposure),
+  maximumSimultaneousPositions: Number(value.maxSimultaneousPositions),
+  maximumDailyLoss: amount(value.maxDailyLoss),
+  maximumLeverage: amount(value.maxLeverage),
+  maximumSlippageBps: String(value.maxSlippageBps),
+  minimumSignalCooldownMs: Number(value.minSignalCooldownMs),
+  maximumConsecutiveFailures: Number(value.maxConsecutiveFailures),
+  maximumPriceAgeMs: 120_000,
+});
+
+export class CloudStrategyRuntime {
+  readonly #owner = `worker_${Buffer.from(crypto.getRandomValues(new Uint8Array(18))).toString("base64url")}`;
+  readonly #transport = createFetchTransport({ timeoutMs: 10_000 });
+  readonly #public = new WeexPublicClient(this.#transport);
+  #active = false;
+  #timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly options: {
+    repository: CloudRuntimeRepository;
+    kms: CredentialEnvelopeKms;
+    liveTradingEnabled: boolean;
+    now?: () => number;
+  }) {}
+
+  start(): void {
+    if (this.#active) return;
+    this.#active = true;
+    void this.#tick();
+  }
+
+  stop(): void {
+    this.#active = false;
+    if (this.#timer) clearTimeout(this.#timer);
+  }
+
+  async #tick(): Promise<void> {
+    if (!this.#active) return;
+    try {
+      const now = (this.options.now ?? Date.now)();
+      const accounts = await this.options.repository.claimAccountSnapshots(this.#owner, now);
+      for (const account of accounts) {
+        try { await this.#synchronizeAccount(account); }
+        catch (error) {
+          const failure = error instanceof AccountSyncStageError ? error.cause : error;
+          const generic = failure && typeof failure === "object"
+            ? failure as { name?: unknown; code?: unknown; constraint_name?: unknown }
+            : null;
+          const genericCode = typeof generic?.code === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(generic.code)
+            ? generic.code : null;
+          const genericName = typeof generic?.name === "string" && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(generic.name)
+            ? generic.name : "Error";
+          const constraintName = typeof generic?.constraint_name === "string"
+            && /^[a-z][a-z0-9_]{0,127}$/.test(generic.constraint_name)
+            ? generic.constraint_name : null;
+          const code = failure instanceof WeexApiError
+            ? `weex_${failure.category.replace(/[^a-z0-9]+/g, "_")}`
+            : genericCode ? `sync_${genericCode.toLowerCase()}` : "account_sync_failed";
+          console.warn(JSON.stringify({
+            event: "weex_account_sync_failed",
+            stage: error instanceof AccountSyncStageError ? error.stage : "unknown",
+            category: failure instanceof WeexApiError ? failure.category : "internal",
+            name: genericName,
+            code: failure instanceof WeexApiError ? failure.code ?? null : genericCode,
+            constraint: constraintName,
+            status: failure instanceof WeexApiError ? failure.status ?? null : null,
+          }));
+          await this.options.repository.failAccountProjection(account, this.#owner, code,
+            (this.options.now ?? Date.now)()).catch(() => undefined);
+        }
+      }
+      const runs = await this.options.repository.claimRuns(this.#owner, now);
+      for (const run of runs) {
+        try { await this.#evaluate(run); }
+        catch (error) {
+          const failure = cloudRunFailure(error);
+          console.warn(JSON.stringify({
+            event: "cloud_strategy_run_failed",
+            stage: failure.stage,
+            category: failure.category,
+            name: failure.name,
+            code: failure.exchangeCode,
+            status: failure.status,
+            reason: failure.code,
+          }));
+          await this.options.repository.fail(run, this.#owner, failure.code,
+            (this.options.now ?? Date.now)(), failure.terminal).catch(() => undefined);
+        }
+      }
+    } finally {
+      if (this.#active) this.#timer = setTimeout(() => void this.#tick(), 10_000);
+    }
+  }
+
+  async #privateClient(connectionId: string, userId: string): Promise<WeexPrivateClient> {
+    const stored = await this.options.repository.credential(connectionId, userId);
+    const credentials = await decryptWeexCredentials({
+      envelope: stored.envelope,
+      context: stored.context,
+      kms: this.options.kms,
+    });
+    const sentAt = (this.options.now ?? Date.now)();
+    const probe = await this.#transport.send({
+      method: "GET",
+      url: CLOCK_PROBE_URL,
+      headers: { Accept: "application/json" },
+    });
+    const receivedAt = (this.options.now ?? Date.now)();
+    const serverTime = Date.parse(probe.headers.date ?? "");
+    if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) throw new Error("WEEX clock is unavailable");
+    const clock = new WeexClock(this.options.now ?? Date.now);
+    clock.recordServerTime(serverTime, sentAt, receivedAt);
+    return new WeexPrivateClient({
+      transport: this.#transport,
+      credentials,
+      clock,
+      now: () => Math.floor(clock.now()),
+      maximumGetAttempts: 1,
+    });
+  }
+
+  async #synchronizeAccount(account: ClaimedAccountSnapshot): Promise<void> {
+    const client = await this.#privateClient(account.connectionId, account.userId)
+      .catch((error: unknown) => { throw new AccountSyncStageError("client", error); });
+    const now = (this.options.now ?? Date.now)();
+    if (this.options.liveTradingEnabled && account.permissions.liveVerified !== true) {
+      const [spot, futures] = await Promise.allSettled([
+        client.verifyAccount({ market: "spot", mode: "live" }),
+        client.verifyAccount({ market: "futures", mode: "live" }),
+      ]);
+      const spotSummary = spot.status === "fulfilled" ? spot.value : null;
+      const futuresSummary = futures.status === "fulfilled" ? futures.value : null;
+      if (spotSummary || futuresSummary) {
+        const spotReady = spotSummary?.readPermission === true && spotSummary.canTrade === true
+          && spotSummary.withdrawalPermission === "absent";
+        const futuresReady = futuresSummary?.readPermission === true && futuresSummary.canTrade === true
+          && futuresSummary.withdrawalPermission === "absent" && futuresSummary.positionMode === "hedge";
+        const withdrawalAbsent = (spotSummary?.withdrawalPermission ?? futuresSummary?.withdrawalPermission) === "absent"
+          && spotSummary?.withdrawalPermission !== "present" && futuresSummary?.withdrawalPermission !== "present";
+        await this.options.repository.recordConnectionPermissions(account, this.#owner, {
+          read: spotSummary?.readPermission === true || futuresSummary?.readPermission === true,
+          spotTrade: spotReady,
+          futuresTrade: futuresReady,
+          withdrawal: !withdrawalAbsent,
+          liveVerified: true,
+        }, withdrawalAbsent, now);
+      }
+    }
+    const snapshot = await client.getReadOnlyAccountSnapshot({ market: "futures", mode: "live" })
+      .catch((error: unknown) => { throw new AccountSyncStageError("snapshot", error); });
+    let uid: string | null = null;
+    let partialErrorCode: string | undefined;
+    try {
+      uid = (await client.getAccountIdentity()).uid;
+    } catch {
+      partialErrorCode = "uid_sync_unavailable";
+    }
+    const cursor = Math.min(account.tradeCursorAt, now);
+    const endTime = Math.min(now, cursor + TRADE_WINDOW_MS);
+    let trades: Awaited<ReturnType<WeexPrivateClient["getFuturesTradeHistory"]>> = [];
+    let nextTradeCursorAt = cursor;
+    try {
+      trades = await client.getFuturesTradeHistory({ startTime: cursor, endTime, limit: 100 });
+      const last = trades.at(-1);
+      nextTradeCursorAt = trades.length === 100 && last
+        ? Math.max(cursor, last.tradedAt + 1)
+        : endTime + 1;
+    } catch {
+      partialErrorCode = partialErrorCode ? "partial_account_sync" : "trade_sync_unavailable";
+    }
+    const balance = snapshot.balances.find(({ asset }) => asset === "USDT") ?? snapshot.balances[0];
+    if (!balance || !DECIMAL.test(balance.total) || !DECIMAL.test(balance.available)) {
+      throw new AccountSyncStageError("projection", new Error("WEEX account balance is unavailable"));
+    }
+    await this.options.repository.recordAccountProjection(account, this.#owner, {
+      uid,
+      observedAt: snapshot.observedAt,
+      balances: snapshot.balances,
+      positions: snapshot.positions,
+      equity: balance.total,
+      availableEquity: balance.available,
+      unrealizedPnl: decimalSum(snapshot.positions.map(({ unrealizedPnl }) => unrealizedPnl)),
+      trades: trades.map((trade) => ({
+        ...trade,
+        netPnl: decimalSum([trade.realizedPnl, `-${trade.commission}`]),
+      })),
+      nextTradeCursorAt,
+      ...(partialErrorCode ? { partialErrorCode } : {}),
+    }).catch((error: unknown) => { throw new AccountSyncStageError("database", error); });
+  }
+
+  async #evaluate(run: CloudRun): Promise<void> {
+    if (run.mode === "live" && !this.options.liveTradingEnabled) {
+      throw new CloudRunExecutionError("live_trading_disabled", "runtime", true);
+    }
+    const config = createVisualStrategyEvaluator(run.config as unknown as VisualBotConfig).config;
+    if (config.market === "spot" && run.mode !== "live") {
+      throw new CloudRunExecutionError("unsupported_market_mode", "runtime", true);
+    }
+    const interval = parseIntervalMs(config.timeframe);
+    const now = (this.options.now ?? Date.now)();
+    const endTime = Math.floor(now / interval) * interval;
+    const startTime = Math.max(0, endTime - interval * 300);
+    const dataset = await this.#public.collectHistoricalCandles({ market: config.market, symbol: config.symbol,
+      interval: config.timeframe, startTime, endTime, limit: 100 });
+    const candles = dataset.candles.slice(-300);
+    const latest = candles.at(-1);
+    if (!latest || latest.closeTime <= (run.lastCandleAt ?? -1)) {
+      await this.options.repository.release(run.id, this.#owner, (this.options.now ?? Date.now)());
+      return;
+    }
+    const rules = await this.#public.getInstrumentRules(config.market, config.symbol);
+    const stored = await this.options.repository.credential(run.connectionId, run.userId);
+    const credentials = await decryptWeexCredentials({ envelope: stored.envelope, context: stored.context,
+      kms: this.options.kms });
+    const sentAt = (this.options.now ?? Date.now)();
+    const probe = await this.#transport.send({ method: "GET", url: CLOCK_PROBE_URL, headers: { Accept: "application/json" } });
+    const receivedAt = (this.options.now ?? Date.now)();
+    const serverTime = Date.parse(probe.headers.date ?? "");
+    if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) throw new Error("WEEX clock is unavailable");
+    const clock = new WeexClock(this.options.now ?? Date.now);
+    clock.recordServerTime(serverTime, sentAt, receivedAt);
+    const target = config.market === "spot"
+      ? { market: "spot" as const, mode: "live" as const }
+      : { market: "futures" as const, mode: run.mode };
+    const client = new WeexPrivateClient({ transport: this.#transport, credentials, clock,
+      rulesProvider: async (_target, symbol) => {
+        if (symbol !== rules.symbol) throw new Error("Instrument mismatch");
+        return { rules, verifiedAt: (this.options.now ?? Date.now)() };
+      }, now: () => Math.floor(clock.now()), maximumGetAttempts: 1 });
+    const verification = await client.verifyAccount(target);
+    if (verification.readPermission !== true || verification.canTrade !== true) {
+      throw new CloudRunExecutionError("live_api_permission_required", "account", true);
+    }
+    if (verification.withdrawalPermission !== "absent") {
+      throw new CloudRunExecutionError("withdrawal_permission_forbidden", "account", true);
+    }
+    if (config.market === "futures" && run.mode === "live" && verification.positionMode !== "hedge") {
+      throw new CloudRunExecutionError("hedge_mode_required", "account", true);
+    }
+    const account = await client.getAccountSnapshot(target);
+    const futuresPositions = account.positions
+      .filter((candidate) => candidate.symbol === config.symbol && Number(candidate.size) > 0);
+    if (futuresPositions.length > 1) {
+      throw new CloudRunExecutionError("ambiguous_position_state", "account", true);
+    }
+    const futuresPosition = futuresPositions[0];
+    const quoteBalance = account.balances.find(({ asset }) => asset === rules.quoteAsset)
+      ?? { asset: rules.quoteAsset, total: "0", available: "0", frozen: "0", unrealizedPnl: "0" };
+    const baseBalance = account.balances.find(({ asset }) => asset === rules.baseAsset);
+    const spotQuantity = baseBalance?.available ?? "0";
+    const spotNotional = decimalProduct(baseBalance?.total ?? "0", latest.close);
+    const spotPosition = config.market === "spot" && Number(spotQuantity) > 0
+      ? {
+          asset: rules.baseAsset,
+          symbol: config.symbol,
+          side: "long" as const,
+          leverage: "1",
+          size: spotQuantity,
+          openValue: spotNotional,
+          unrealizedPnl: "0",
+          openedAt: null,
+          updatedAt: account.observedAt,
+        }
+      : undefined;
+    const position = config.market === "spot" ? spotPosition : futuresPosition;
+    if (position && !(await this.options.repository.hasAcknowledgedOrder(run.id))) {
+      throw new CloudRunExecutionError("unmanaged_position_state", "account", true);
+    }
+    const balance = config.market === "spot" ? quoteBalance : requireSettlementBalance(account.balances, run.mode);
+    const equity = config.market === "spot"
+      ? decimalSum([quoteBalance.total, spotNotional])
+      : balance.total;
+    if (!DECIMAL.test(equity) || Number(equity) <= 0) {
+      throw new CloudRunExecutionError("account_equity_unavailable", "account", true);
+    }
+    const portfolioPosition = futuresPosition
+      ? deriveFuturesPositionSnapshot(futuresPosition, candles)
+      : spotPosition
+        ? trackedSpotPosition(run.positions, spotPosition, candles, run.lastCandleAt)
+        : undefined;
+    const recordedPositions = config.market === "spot"
+      ? (spotPosition && portfolioPosition ? [{ ...spotPosition, ...portfolioPosition }] : [])
+      : account.positions.filter(({ size }) => Number(size) > 0);
+    await this.options.repository.recordAccountSnapshot(run, this.#owner, {
+      asset: balance.asset,
+      observedAt: account.observedAt,
+      equity,
+      availableEquity: balance.available,
+      unrealizedPnl: config.market === "spot" ? "0" : decimalSum(account.positions.map(({ unrealizedPnl }) => unrealizedPnl)),
+      positions: recordedPositions,
+    });
+    const utcDay = new Date(account.observedAt).toISOString().slice(0, 10);
+    const dayStartAt = Date.parse(`${utcDay}T00:00:00.000Z`);
+    const realizedDailyPnl = await this.options.repository.realizedPnl(
+      run.userId,
+      run.connectionId,
+      dayStartAt,
+      account.observedAt,
+    );
+    const unrealizedDailyPnl = config.market === "spot"
+      ? "0"
+      : decimalSum(account.positions.map(({ unrealizedPnl }) => unrealizedPnl));
+    const dayStartEquity = await this.options.repository.dayStartEquity(
+      run.id,
+      this.#owner,
+      utcDay,
+      equity,
+      account.observedAt,
+    );
+    const portfolio: StrategyPortfolioSnapshot = Object.freeze({
+      equity, dayStartEquity, availableEquity: balance?.available, utcDay,
+      ...(portfolioPosition ? { position: portfolioPosition } : {}),
+    });
+    const evaluator = createVisualStrategyEvaluator(config);
+    const signal = await evaluator.evaluate({ candles, market: config.market, symbol: config.symbol,
+      timeframe: config.timeframe, leverage: String(config.leverage), now: account.observedAt, portfolio });
+    if (signal.action === "hold") {
+      await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
+      return;
+    }
+    const clientOrderId = await deriveClientOrderId({ deploymentId: run.id,
+      configurationVersion: `v${run.version}`, signalId: signal.id, sequence: latest.closeTime });
+    const claim = await this.options.repository.claimOrder({ runId: run.id, candleCloseAt: latest.closeTime,
+      clientOrderId, signal, now: account.observedAt });
+    if (claim.status !== "claimed" && claim.status !== "unknown") {
+      await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
+      return;
+    }
+    const currentNotional = position?.openValue ?? "0";
+    const context: RiskContext = Object.freeze({ market: config.market, symbol: config.symbol, now: account.observedAt,
+      priceTimestamp: latest.closeTime, lastSignalAt: run.lastEvaluatedAt, openPositions: recordedPositions.length,
+      positionSide: position?.side ?? "flat", currentPositionQuantity: position?.size ?? "0",
+      currentPositionNotional: currentNotional,
+      totalExposure: config.market === "spot" ? currentNotional : decimalSum(account.positions.map(({ openValue }) => openValue)),
+      realizedDailyPnl,
+      unrealizedDailyPnl,
+      consecutiveFailures: run.consecutiveFailures, leverage: String(config.leverage) });
+    const riskPolicy = policy(run.risk);
+    const intent = await new SignalIntentNormalizer().normalize(signal, {
+      deploymentId: run.id, configurationVersion: `v${run.version}`, signalSequence: latest.closeTime,
+      market: config.market, mode: run.mode, referencePrice: latest.close, riskPolicy, riskContext: context,
+      instrumentRules: rules, now: account.observedAt,
+    });
+    const decision = evaluateOrderRisk(riskPolicy, context, intent, rules);
+    if (!decision.allowed) {
+      await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
+        status: "risk-rejected", intent, errorCode: decision.reason, now: account.observedAt });
+      await this.options.repository.complete(run, this.#owner, latest.closeTime,
+        { ...signal, riskRejected: decision.reason }, account.observedAt);
+      return;
+    }
+    if (claim.status === "unknown") {
+      const existing = await client.findOrderByClientOrderId({ target, symbol: config.symbol, clientOrderId,
+        ...(claim.exchangeOrderId ? { exchangeOrderId: claim.exchangeOrderId } : {}) });
+      if (existing) {
+        await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
+          status: "acknowledged", intent, exchangeOrderId: existing.exchangeOrderId, now: account.observedAt });
+        await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
+        return;
+      }
+      await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
+        status: "unknown", intent, errorCode: "unknown_order_state", now: account.observedAt });
+      throw new CloudRunExecutionError("unknown_order_state", "exchange", true);
+    }
+    const outcome = await client.submitOrder({ target, clientOrderId, intent });
+    await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
+      status: outcome.status, intent, ...(outcome.status === "acknowledged" ? { exchangeOrderId: outcome.exchangeOrderId }
+        : { errorCode: outcome.reason ?? outcome.status }), now: account.observedAt });
+    if (outcome.status === "unknown") {
+      throw new CloudRunExecutionError("unknown_order_state", "exchange", true);
+    }
+    await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@cryptobot-labs/trading-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run --root ../.. packages/trading-core/tests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@jitl/quickjs-singlefile-cjs-release-sync": "0.32.0",
+    "decimal.js": "10.6.0",
+    "quickjs-emscripten-core": "0.32.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "fast-check": "4.3.0"
+  }
+}

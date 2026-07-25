@@ -1,0 +1,2 @@
+CREATE INDEX `strategy_publications_version_user_idx` ON `strategy_publications` (`strategy_version_id`,`user_id`);--> statement-breakpoint
+CREATE INDEX `strategy_publications_backtest_user_idx` ON `strategy_publications` (`backtest_job_id`,`user_id`);

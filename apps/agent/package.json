@@ -1,0 +1,42 @@
+{
+  "name": "@cryptobot-labs/agent",
+  "productName": "CryptoBot Labs Agent",
+  "version": "0.1.0",
+  "author": "CryptoBot Labs",
+  "description": "Secure local execution agent for CryptoBot Labs strategies.",
+  "private": true,
+  "type": "module",
+  "main": ".vite/build/main.cjs",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cryptobot-labs/trading-core": "workspace:*",
+    "@cryptobot-labs/weex-client": "workspace:*",
+    "decimal.js": "10.6.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "scheduler": "0.27.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "7.8.3",
+    "@electron-forge/maker-squirrel": "7.8.3",
+    "@electron-forge/maker-zip": "7.8.3",
+    "@electron-forge/plugin-fuses": "7.8.3",
+    "@electron-forge/plugin-vite": "7.8.3",
+    "@electron-forge/shared-types": "7.8.3",
+    "@electron/fuses": "1.8.0",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "electron": "37.2.0",
+    "typescript": "5.9.3",
+    "vite": "8.0.13",
+    "vitest": "^4.1.10"
+  }
+}
