@@ -22,6 +22,11 @@ let botPerformanceCache: { value: BotPerformanceResult; expiresAt: number } | nu
 let botPerformanceRequest: Promise<BotPerformanceResult> | null = null;
 const backtestRequests = new Map<string, Promise<BacktestReport>>();
 
+export function clearWeexBotPerformanceCache(): void {
+  botPerformanceCache = null;
+  botPerformanceRequest = null;
+}
+
 const errorMessage = (body: HistoricalBacktestResponse | null): string => {
   if (body?.error?.code === "weex_history_incomplete") return "WEEX 歷史行情尚未完整覆蓋此區間，請稍後重試或更換時間週期。";
   if (body?.error?.code === "invalid_strategy") return "目前策略設定無法執行歷史行情回測。";

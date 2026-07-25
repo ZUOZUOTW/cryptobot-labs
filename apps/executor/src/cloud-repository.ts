@@ -7,7 +7,8 @@ type Row = Record<string, unknown>;
 export interface CloudRun {
   id: string; userId: string; connectionId: string; mode: "futures-demo" | "live";
   version: number; config: Record<string, unknown>; risk: Record<string, unknown>;
-  lastCandleAt: number | null; lastEvaluatedAt: number | null;
+  lastCandleAt: number | null; lastEvaluatedAt: number | null; consecutiveFailures: number;
+  positions: readonly unknown[];
 }
 export interface StoredCredential {
   envelope: EncryptedWeexCredentials;
@@ -25,11 +26,44 @@ export interface AccountSnapshot {
   unrealizedPnl: string;
   positions: readonly unknown[];
 }
+export interface ClaimedAccountSnapshot {
+  connectionId: string;
+  userId: string;
+  tradeCursorAt: number;
+  permissions: Record<string, unknown>;
+  withdrawalAccessAbsent: boolean;
+}
+export interface RealizedTrade {
+  exchangeTradeId: string;
+  symbol: string;
+  realizedPnl: string;
+  commission: string;
+  commissionAsset: string;
+  netPnl: string;
+  tradedAt: number;
+}
+export interface AccountProjection {
+  uid: string | null;
+  observedAt: number;
+  balances: readonly unknown[];
+  positions: readonly unknown[];
+  equity: string;
+  availableEquity: string;
+  unrealizedPnl: string;
+  trades: readonly RealizedTrade[];
+  nextTradeCursorAt: number;
+  partialErrorCode?: string;
+}
 
 const object = (value: unknown, label: string): Record<string, unknown> => {
   const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label} is invalid`);
   return parsed as Record<string, unknown>;
+};
+const array = (value: unknown, label: string): readonly unknown[] => {
+  const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
+  if (!Array.isArray(parsed)) throw new Error(`${label} is invalid`);
+  return parsed;
 };
 const bytes = (value: unknown): Uint8Array => {
   if (!(value instanceof Uint8Array) || value.byteLength < 1) throw new Error("credential envelope is invalid");
@@ -40,6 +74,17 @@ const integer = (value: unknown): number => {
   if (!Number.isSafeInteger(result) || result < 0) throw new Error("database integer is invalid");
   return result;
 };
+const jsonValue = (value: unknown): postgres.JSONValue => {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("database JSON value is invalid");
+  return JSON.parse(serialized) as postgres.JSONValue;
+};
+const signedDecimal = (value: unknown): string => {
+  if (typeof value !== "string" || !/^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/.test(value)) {
+    throw new Error("database decimal is invalid");
+  }
+  return value;
+};
 
 export class CloudRuntimeRepository {
   readonly #sql: Database;
@@ -49,19 +94,77 @@ export class CloudRuntimeRepository {
 
   async assertReady(): Promise<void> {
     const rows = await this.#sql.unsafe(`select to_regclass('public.cloud_strategy_runs') as runs,
-      to_regclass('private.cloud_order_intents') as orders`);
+      to_regclass('private.cloud_order_intents') as orders,
+      to_regclass('public.weex_account_snapshots') as account_snapshots,
+      to_regclass('public.weex_realized_pnl_ledger') as realized_pnl`);
     if (!rows[0] || Object.values(rows[0] as Row).some((value) => typeof value !== "string")) {
       throw new Error("Cloud runtime database schema is not ready");
     }
   }
 
+  async claimAccountSnapshots(owner: string, now: number, limit = 20): Promise<ClaimedAccountSnapshot[]> {
+    await this.#sql.unsafe(`insert into public.weex_account_snapshots
+      (connection_id,user_id,status,trade_cursor_at,created_at,updated_at)
+      select id,user_id,'pending',greatest(1,least($2,coalesce(verified_at,created_at))),$2,$2
+      from public.weex_connections
+      where executor_shard_id=$1 and status='active'
+      on conflict(connection_id) do nothing`, [this.shardId, now]);
+    const rows = await this.#sql.unsafe(`with claimed as (
+      update public.weex_account_snapshots set
+        lease_owner=$1,lease_expires_at=$2::bigint+30000,updated_at=greatest(updated_at,$2::bigint)
+        where connection_id in (
+          select s.connection_id from public.weex_account_snapshots s
+          join public.weex_connections c on c.id=s.connection_id and c.user_id=s.user_id
+          where c.executor_shard_id=$3 and c.status='active'
+            and (s.observed_at is null or s.observed_at <= $2::bigint-15000)
+            and (s.lease_expires_at is null or s.lease_expires_at<$2::bigint or s.lease_owner=$1)
+          order by coalesce(s.observed_at,0),s.created_at limit $4 for update of s skip locked
+        )
+        returning connection_id,user_id,trade_cursor_at
+      )
+      select claimed.*,c.permissions_json,c.withdrawal_access_absent
+      from claimed join public.weex_connections c
+        on c.id=claimed.connection_id and c.user_id=claimed.user_id`,
+    [owner, now, this.shardId, limit]);
+    return rows.map((row) => {
+      const value = row as Row;
+      if (typeof value.connection_id !== "string" || typeof value.user_id !== "string") {
+        throw new Error("Claimed account snapshot is invalid");
+      }
+      return {
+        connectionId: value.connection_id,
+        userId: value.user_id,
+        tradeCursorAt: integer(value.trade_cursor_at),
+        permissions: object(value.permissions_json, "connection permissions"),
+        withdrawalAccessAbsent: value.withdrawal_access_absent === true,
+      };
+    });
+  }
+
+  async recordConnectionPermissions(
+    account: ClaimedAccountSnapshot,
+    owner: string,
+    permissions: Readonly<Record<string, boolean>>,
+    withdrawalAccessAbsent: boolean,
+    now: number,
+  ): Promise<void> {
+    await this.#sql.unsafe(`update public.weex_connections c set permissions_json=$4::jsonb,
+      withdrawal_access_absent=$5,verified_at=$6,updated_at=$6
+      where c.id=$1 and c.user_id=$2 and exists (
+        select 1 from public.weex_account_snapshots s
+        where s.connection_id=c.id and s.user_id=c.user_id and s.lease_owner=$3
+      )`, [account.connectionId, account.userId, owner,
+      this.#sql.json(jsonValue(permissions)), withdrawalAccessAbsent, now]);
+  }
+
   async claimRuns(owner: string, now: number, limit = 10): Promise<CloudRun[]> {
     const rows = await this.#sql.unsafe(`update public.cloud_strategy_runs set lease_owner=$1,
-      lease_expires_at=$2+30000,updated_at=greatest(updated_at,$2)
+      lease_expires_at=$2::bigint+30000,updated_at=greatest(updated_at,$2::bigint)
       where id in (select id from public.cloud_strategy_runs
-        where executor_shard_id=$3 and state='running' and (lease_expires_at is null or lease_expires_at<$2 or lease_owner=$1)
+        where executor_shard_id=$3 and state='running' and (lease_expires_at is null or lease_expires_at<$2::bigint or lease_owner=$1)
         order by coalesce(last_evaluated_at,0),created_at limit $4 for update skip locked)
-      returning id,user_id,connection_id,mode,version,config_json,risk_json,last_candle_at,last_evaluated_at`,
+      returning id,user_id,connection_id,mode,version,config_json,risk_json,last_candle_at,last_evaluated_at,
+        consecutive_failures,positions_json`,
     [owner, now, this.shardId, limit]);
     return rows.map((row) => {
       const value = row as Row;
@@ -71,7 +174,9 @@ export class CloudRuntimeRepository {
         version: integer(value.version), config: object(value.config_json, "strategy config"),
         risk: object(value.risk_json, "risk policy"),
         lastCandleAt: value.last_candle_at === null ? null : integer(value.last_candle_at),
-        lastEvaluatedAt: value.last_evaluated_at === null ? null : integer(value.last_evaluated_at) };
+        lastEvaluatedAt: value.last_evaluated_at === null ? null : integer(value.last_evaluated_at),
+        consecutiveFailures: integer(value.consecutive_failures),
+        positions: array(value.positions_json, "run positions") };
     });
   }
 
@@ -88,12 +193,51 @@ export class CloudRuntimeRepository {
       context: rawContext as Record<string, string> };
   }
 
+  async realizedPnl(userId: string, connectionId: string, startAt: number, endAt: number): Promise<string> {
+    if (!Number.isSafeInteger(startAt) || startAt < 0 || !Number.isSafeInteger(endAt) || endAt < startAt) {
+      throw new Error("Realized PnL range is invalid");
+    }
+    const rows = await this.#sql.unsafe(`select coalesce(sum(net_pnl),0)::text as net_pnl
+      from public.weex_realized_pnl_ledger
+      where user_id=$1 and connection_id=$2 and traded_at >= $3 and traded_at <= $4`,
+    [userId, connectionId, startAt, endAt]);
+    return signedDecimal((rows[0] as Row | undefined)?.net_pnl);
+  }
+
+  async dayStartEquity(runId: string, owner: string, utcDay: string, equity: string, now: number): Promise<string> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(utcDay) || !/^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/.test(equity)
+      || Number(equity) <= 0 || !Number.isSafeInteger(now) || now < 0) {
+      throw new Error("Daily equity checkpoint is invalid");
+    }
+    const rows = await this.#sql.unsafe(`with updated as (
+        update public.cloud_strategy_runs set risk_utc_day=$3,day_start_equity=$4::numeric,
+          updated_at=greatest(updated_at,$5)
+        where id=$1 and lease_owner=$2 and risk_utc_day is distinct from $3
+        returning day_start_equity::text
+      )
+      select day_start_equity from updated
+      union all
+      select day_start_equity::text from public.cloud_strategy_runs
+      where id=$1 and lease_owner=$2 and risk_utc_day=$3 and not exists(select 1 from updated)
+      limit 1`, [runId, owner, utcDay, equity, now]);
+    return signedDecimal((rows[0] as Row | undefined)?.day_start_equity);
+  }
+
+  async hasAcknowledgedOrder(runId: string): Promise<boolean> {
+    const rows = await this.#sql.unsafe(`select exists(
+      select 1 from private.cloud_order_intents where run_id=$1 and status='acknowledged'
+    ) as acknowledged`, [runId]);
+    const acknowledged = (rows[0] as Row | undefined)?.acknowledged;
+    if (typeof acknowledged !== "boolean") throw new Error("Cloud order ownership state is invalid");
+    return acknowledged;
+  }
+
   async claimOrder(input: { runId: string; candleCloseAt: number; clientOrderId: string;
     signal: unknown; now: number }): Promise<ClaimedOrder> {
     await this.#sql.unsafe(`insert into private.cloud_order_intents
       (run_id,candle_close_at,client_order_id,signal_json,status,created_at,updated_at)
       values ($1,$2,$3,$4::jsonb,'claimed',$5,$5) on conflict(run_id,candle_close_at) do nothing`,
-    [input.runId, input.candleCloseAt, input.clientOrderId, JSON.stringify(input.signal), input.now]);
+    [input.runId, input.candleCloseAt, input.clientOrderId, this.#sql.json(jsonValue(input.signal)), input.now]);
     const rows = await this.#sql.unsafe(`select status,exchange_order_id from private.cloud_order_intents
       where run_id=$1 and candle_close_at=$2 and client_order_id=$3`,
     [input.runId, input.candleCloseAt, input.clientOrderId]);
@@ -109,7 +253,8 @@ export class CloudRuntimeRepository {
     intent?: unknown; exchangeOrderId?: string; errorCode?: string; now: number }): Promise<void> {
     await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,intent_json=$4::jsonb,
       exchange_order_id=$5,error_code=$6,updated_at=$7 where run_id=$1 and candle_close_at=$2`,
-    [input.runId, input.candleCloseAt, input.status, input.intent ? JSON.stringify(input.intent) : null,
+    [input.runId, input.candleCloseAt, input.status,
+      input.intent === undefined ? null : this.#sql.json(jsonValue(input.intent)),
       input.exchangeOrderId ?? null, input.errorCode ?? null, input.now]);
   }
 
@@ -118,7 +263,49 @@ export class CloudRuntimeRepository {
       account_equity=$5::numeric,available_equity=$6::numeric,unrealized_pnl=$7::numeric,
       positions_json=$8::jsonb,updated_at=greatest(updated_at,$4)
       where id=$1 and lease_owner=$2`, [run.id, owner, snapshot.asset, snapshot.observedAt, snapshot.equity,
-      snapshot.availableEquity, snapshot.unrealizedPnl, JSON.stringify(snapshot.positions)]);
+      snapshot.availableEquity, snapshot.unrealizedPnl, this.#sql.json(jsonValue(snapshot.positions))]);
+  }
+
+  async recordAccountProjection(
+    account: ClaimedAccountSnapshot,
+    owner: string,
+    projection: AccountProjection,
+  ): Promise<void> {
+    for (const trade of projection.trades) {
+      await this.#sql.unsafe(`insert into public.weex_realized_pnl_ledger
+        (connection_id,user_id,exchange_trade_id,symbol,realized_pnl,commission,commission_asset,
+         net_pnl,traded_at,inserted_at)
+        values ($1,$2,$3,$4,$5::numeric,$6::numeric,$7,$8::numeric,$9,$10)
+        on conflict(connection_id,exchange_trade_id) do nothing`,
+      [account.connectionId, account.userId, trade.exchangeTradeId, trade.symbol, trade.realizedPnl,
+        trade.commission, trade.commissionAsset, trade.netPnl, trade.tradedAt, projection.observedAt]);
+    }
+    const safePartial = projection.partialErrorCode && /^[a-z0-9_-]{1,64}$/.test(projection.partialErrorCode)
+      ? projection.partialErrorCode : null;
+    await this.#sql.unsafe(`update public.weex_account_snapshots set status='ready',
+      account_uid=coalesce($3,account_uid),observed_at=$4,balances_json=$5::jsonb,positions_json=$6::jsonb,
+      account_equity=$7::numeric,available_equity=$8::numeric,unrealized_pnl=$9::numeric,
+      trade_cursor_at=greatest(trade_cursor_at,$10),consecutive_failures=0,last_error_code=$11,
+      lease_owner=null,lease_expires_at=null,updated_at=$4
+      where connection_id=$1 and user_id=$2 and lease_owner=$12`,
+    [account.connectionId, account.userId, projection.uid, projection.observedAt,
+      this.#sql.json(jsonValue(projection.balances)), this.#sql.json(jsonValue(projection.positions)), projection.equity,
+      projection.availableEquity, projection.unrealizedPnl, projection.nextTradeCursorAt,
+      safePartial, owner]);
+  }
+
+  async failAccountProjection(
+    account: ClaimedAccountSnapshot,
+    owner: string,
+    code: string,
+    now: number,
+  ): Promise<void> {
+    const safe = /^[a-z0-9_-]{1,64}$/.test(code) ? code : "account_sync_failed";
+    await this.#sql.unsafe(`update public.weex_account_snapshots set status='error',
+      consecutive_failures=consecutive_failures+1,last_error_code=$3,
+      lease_owner=null,lease_expires_at=null,updated_at=$4
+      where connection_id=$1 and user_id=$2 and lease_owner=$5`,
+    [account.connectionId, account.userId, safe, now, owner]);
   }
 
   async complete(run: CloudRun, owner: string, candleCloseAt: number, signal: unknown, now: number): Promise<void> {
@@ -126,7 +313,8 @@ export class CloudRuntimeRepository {
       last_signal_json=$5::jsonb,last_error_code=null,consecutive_failures=0,lease_owner=null,lease_expires_at=null,
       evaluation_count=evaluation_count+1,
       signal_count=signal_count+case when $5::jsonb->>'action' is distinct from 'hold' then 1 else 0 end,
-      updated_at=$4 where id=$1 and lease_owner=$2`, [run.id, owner, candleCloseAt, now, JSON.stringify(signal)]);
+      updated_at=$4 where id=$1 and lease_owner=$2`,
+    [run.id, owner, candleCloseAt, now, this.#sql.json(jsonValue(signal))]);
   }
 
   async release(runId: string, owner: string, now: number): Promise<void> {
@@ -134,12 +322,12 @@ export class CloudRuntimeRepository {
       updated_at=greatest(updated_at,$3) where id=$1 and lease_owner=$2`, [runId, owner, now]);
   }
 
-  async fail(run: CloudRun, owner: string, code: string, now: number): Promise<void> {
+  async fail(run: CloudRun, owner: string, code: string, now: number, terminal = false): Promise<void> {
     const safe = /^[a-z0-9_-]{1,64}$/.test(code) ? code : "execution_failed";
     await this.#sql.unsafe(`update public.cloud_strategy_runs set consecutive_failures=consecutive_failures+1,
       last_error_code=$3,last_evaluated_at=$4,lease_owner=null,lease_expires_at=null,updated_at=$4,
-      state=case when consecutive_failures+1 >= least(10,greatest(1,coalesce((risk_json->>'maxConsecutiveFailures')::bigint,3)))
-        then 'error' else state end where id=$1 and lease_owner=$2`, [run.id, owner, safe, now]);
+      state=case when $5::boolean or consecutive_failures+1 >= least(10,greatest(1,coalesce((risk_json->>'maxConsecutiveFailures')::bigint,3)))
+        then 'error' else state end where id=$1 and lease_owner=$2`, [run.id, owner, safe, now, terminal]);
   }
 
   async close(): Promise<void> { await this.#sql.end({ timeout: 5 }); }

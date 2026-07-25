@@ -27,6 +27,10 @@ install -o root -g root -m 0644 "${RELEASE_DIR}/Caddyfile" /etc/caddy/Caddyfile
 systemctl daemon-reload
 systemctl enable cryptobot-executor caddy
 systemctl restart cryptobot-executor
+for _attempt in $(seq 1 20); do
+  if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then break; fi
+  sleep 0.5
+done
 curl --fail --silent --show-error http://127.0.0.1:8080/healthz >/dev/null
-systemctl reload caddy || systemctl restart caddy
+systemctl restart caddy
 echo "Executor release installed. Verify /readyz before enabling public HTTPS ingress."

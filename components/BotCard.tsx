@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import type { BotDefinition, WeexHistoricalPerformance } from "../lib/types";
 import { PerformanceChart } from "./PerformanceChart";
 import { useI18n } from "./I18nProvider";
+import { StrategyLaunchButton } from "./StrategyLaunchButton";
 
 interface BotCardProps {
   bot: BotDefinition;
@@ -27,7 +29,7 @@ export function BotCard({ bot, favorite = false, onFavorite, historicalPerforman
   return (
     <article className="bot-card glass-panel" aria-labelledby={`bot-${bot.id}-title`} data-market={bot.market}>
       <div className="bot-card__header">
-        <img alt="" aria-hidden="true" className="bot-card__mascot" decoding="async" height="96" loading="lazy" src={mascot} width="112" />
+        <Image alt="" aria-hidden="true" className="bot-card__mascot" height={96} loading="lazy" src={mascot} width={112} />
         <div>
           <p className="eyebrow">{bot.symbol} / {bot.timeframe.toUpperCase()}</p>
           <h3 id={`bot-${bot.id}-title`}>{bot.name}</h3>
@@ -66,12 +68,18 @@ export function BotCard({ bot, favorite = false, onFavorite, historicalPerforman
             <div><dt>交易次數</dt><dd>{performanceBot.metrics.trades.toLocaleString(locale)}</dd></div>
           </dl>
         </>
-      ) : (
+      ) : performanceStatus === "loading" ? (
         <div aria-hidden="true" className="bot-card__performance-state"><span /></div>
+      ) : (
+        <div className="bot-card__performance-state" role="alert">
+          <strong>近期績效暫時無法取得</strong>
+          <small>策略規則與套用功能仍可使用；重新取得經驗證行情前，不顯示替代數據。</small>
+        </div>
       )}
       <div className="bot-card__actions">
         <Link aria-label={`查看策略：${bot.name}`} className="button button--primary button--small" href={`/bots/${bot.id}`}>查看策略</Link>
         <Link aria-label={`直接套用：${bot.name}`} className="button button--ghost button--small" href={`/workshop?bot=${bot.id}`}>直接套用</Link>
+        <StrategyLaunchButton bot={bot} className="button button--secondary button--small" />
       </div>
       <p className="simulation-disclosure bot-card__disclosure" role="note">公開歷史行情回測，不代表未來績效</p>
     </article>

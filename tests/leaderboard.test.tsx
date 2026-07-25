@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LeaderboardPage from "../app/leaderboard/page";
 import { BOT_CATALOG } from "../data/bots";
 import type { WeexHistoricalPerformance } from "../lib/types";
+import { clearWeexBotPerformanceCache } from "../lib/weex-historical-client";
 
 const REAL_RETURNS: Record<string, number> = {
   "momentum-forge": 15.4,
@@ -45,6 +46,7 @@ const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Obje
 }]));
 
 beforeEach(() => {
+  clearWeexBotPerformanceCache();
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({
     performances: performanceFixture(),
     updatedAt: "2026-07-13T12:00:00.000Z",
@@ -52,6 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearWeexBotPerformanceCache();
   cleanup();
   vi.restoreAllMocks();
 });
@@ -176,7 +179,7 @@ describe("WEEX historical leaderboard", () => {
   });
 
   it("shows no substitute ranking if the historical endpoint fails", async () => {
-    vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("offline"));
     render(<LeaderboardPage />);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("近期績效暫時無法取得"));
     expect(screen.queryByRole("table", { name: "完整機器人績效排名" })).not.toBeInTheDocument();

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { BotCard } from "../../components/BotCard";
 import { BOT_CATALOG } from "../../data/bots";
@@ -11,6 +12,8 @@ import { captureAttribution } from "../../lib/attribution";
 import { demoAuthPath } from "../../lib/demo-auth";
 import { usePlatformUser } from "../../components/PlatformAuthProvider";
 import { useI18n } from "../../components/I18nProvider";
+import { PublishedStrategyCard } from "../../components/PublishedStrategyCard";
+import type { PublicStrategyPublication } from "../../lib/strategy-publications";
 
 type MarketFilter = Market | "all";
 type RiskFilter = RiskLevel | "all";
@@ -33,20 +36,50 @@ export default function BotsPage() {
   const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
   const [performanceUpdatedAt, setPerformanceUpdatedAt] = useState("");
   const [demoPerformance, setDemoPerformance] = useState(false);
+  const [publications, setPublications] = useState<PublicStrategyPublication[]>([]);
+  const [publicationState, setPublicationState] = useState<"loading" | "ready" | "error">("loading");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
     captureAttribution(new URLSearchParams(window.location.search).get("via"));
     const timer = window.setTimeout(() => {
       const saved = loadDiscoveryPreferences();
       if (!saved) return;
-      setMarket(saved.market);
-      setRisk(saved.risk);
-      setTag(saved.tag === "all" || TAGS.includes(saved.tag) ? saved.tag : "all");
-      setTimeframe(saved.timeframe === "all" || TIMEFRAMES.includes(saved.timeframe) ? saved.timeframe : "all");
+      const nextTag = saved.tag === "all" || TAGS.includes(saved.tag) ? saved.tag : "all";
+      const nextTimeframe = saved.timeframe === "all" || TIMEFRAMES.includes(saved.timeframe) ? saved.timeframe : "all";
+      const hasMatch = BOT_CATALOG.some((bot) => (
+        (saved.market === "all" || bot.market === saved.market)
+        && (saved.risk === "all" || bot.risk === saved.risk)
+        && (nextTag === "all" || bot.tags.includes(nextTag))
+        && (nextTimeframe === "all" || bot.timeframe === nextTimeframe)
+      ));
+      setMarket(hasMatch ? saved.market : "all");
+      setRisk(hasMatch ? saved.risk : "all");
+      setTag(hasMatch ? nextTag : "all");
+      setTimeframe(hasMatch ? nextTimeframe : "all");
       setSort(saved.sort);
       setFavorites(saved.favorites.filter((id) => BOT_CATALOG.some((bot) => bot.id === id)));
     }, 0);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/strategy-publications", { headers: { Accept: "application/json" } })
+      .then(async (response) => {
+        const body = await response.json() as { publications?: unknown };
+        if (!response.ok || !Array.isArray(body.publications)) throw new Error("publication_list_failed");
+        const valid = body.publications.filter((entry): entry is PublicStrategyPublication => (
+          Boolean(entry) && typeof entry === "object"
+          && typeof (entry as { slug?: unknown }).slug === "string"
+          && typeof (entry as { name?: unknown }).name === "string"
+          && typeof (entry as { publisherName?: unknown }).publisherName === "string"
+          && Array.isArray((entry as { equityCurve?: unknown }).equityCurve)
+        ));
+        if (!cancelled) { setPublications(valid); setPublicationState("ready"); }
+      })
+      .catch(() => { if (!cancelled) setPublicationState("error"); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -120,7 +153,41 @@ export default function BotsPage() {
         <p>先比較用途、風險、最大回撤、交易次數與資料日期；未登入可預覽精選策略，登入後查看完整策略庫。</p>
       </header>
 
-      <section className="catalog-controls glass-panel" aria-label="篩選與排序機器人">
+      {(publicationState === "loading" || publications.length > 0) && (
+        <section className="published-strategies" aria-labelledby="published-strategies-title">
+          <div className="section-heading">
+            <p className="eyebrow">COMMUNITY RELEASES</p>
+            <h2 id="published-strategies-title">會員公開策略</h2>
+            <p>每一張卡片都綁定不可變策略版本與完整公開行情回測，不顯示未驗證績效。</p>
+          </div>
+          {publicationState === "loading" ? (
+            <div className="published-strategies__loading glass-panel" role="status">正在載入會員公開策略…</div>
+          ) : (
+            <div className="published-strategies__grid">
+              {publications.map((publication) => <PublishedStrategyCard key={publication.slug} publication={publication} />)}
+            </div>
+          )}
+        </section>
+      )}
+      {publicationState === "error" && (
+        <p className="catalog-preference-status" role="status">會員公開策略暫時無法載入；官方策略仍可正常瀏覽。</p>
+      )}
+
+      <button
+        aria-controls="catalog-filter-panel"
+        aria-expanded={mobileFiltersOpen}
+        className="catalog-filter-toggle button button--secondary"
+        onClick={() => setMobileFiltersOpen((open) => !open)}
+        type="button"
+      >
+        {mobileFiltersOpen ? "收合篩選" : "篩選與排序"}
+      </button>
+      <section
+        className="catalog-controls glass-panel"
+        data-mobile-open={mobileFiltersOpen}
+        id="catalog-filter-panel"
+        aria-label="篩選與排序機器人"
+      >
         <div className="catalog-choice-filter catalog-choice-filter--market">
           <span>市場</span>
           <div aria-label="市場" className="catalog-choice-group" role="group">
@@ -223,7 +290,7 @@ export default function BotsPage() {
                   { image: "/mascots/ai-guardian.webp", tone: "mint" },
                 ].map((card) => (
                   <div className="catalog-member-backdrop__card" data-tone={card.tone} key={card.image}>
-                    <img alt="" height="128" src={card.image} width="148" />
+                    <Image alt="" height={128} loading="lazy" src={card.image} width={148} />
                     <div className="catalog-member-backdrop__skeleton">
                       <span /><span /><span />
                     </div>

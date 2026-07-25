@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 
 type CompanionTheme = {
@@ -24,6 +25,7 @@ const resolveTheme = (pathname: string): CompanionTheme | null => {
   };
   if (pathname.startsWith("/leaderboard")) return { image: "/mascots/ai-observer.webp", label: "排名分析中", detail: "RISK-ADJUSTED AI", mode: "ranking" };
   if (pathname.startsWith("/connections")) return { image: "/mascots/ai-guardian.webp", label: "連線守護中", detail: "OAUTH SAFETY CHECK", mode: "connection" };
+  if (pathname === "/runs" || pathname === "/runs/preview") return null;
   if (pathname.startsWith("/runs")) return { image: "/mascots/ai-guardian.webp", label: "風險監測中", detail: "CLOUD RUN WATCH", mode: "run" };
   if (pathname.startsWith("/activity")) return { image: "/mascots/ai-observer.webp", label: "軌跡核對中", detail: "AUDIT SIGNAL TRACE", mode: "activity" };
   if (pathname.startsWith("/backtests")) return { image: "/mascots/ai-observer.webp", label: "回測掃描中", detail: "EVIDENCE ANALYSIS", mode: "backtest" };
@@ -48,7 +50,7 @@ export function RouteCompanion() {
           <span>01 SIGNAL</span><span>02 MODEL</span><span>03 RISK</span>
         </div>
       )}
-      <img alt={theme.alt ?? "親切可愛的 CryptoBot AI 導航機器人"} className="route-companion__image" decoding="async" height="420" src={theme.image} width="420" />
+      <Image alt={theme.alt ?? "親切可愛的 CryptoBot AI 導航機器人"} className="route-companion__image" height={420} src={theme.image} width={420} />
       <div className="route-companion__status">
         <span aria-hidden="true" />
         <div><strong>{theme.label}</strong><small>{theme.detail}</small></div>

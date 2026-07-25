@@ -16,9 +16,12 @@ export default function FavoritesPage() {
   const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
 
   useEffect(() => {
-    const saved = loadDiscoveryPreferences();
-    setFavorites(saved?.favorites.filter((id) => BOT_CATALOG.some((bot) => bot.id === id)) ?? []);
-    setHydrated(true);
+    const timer = window.setTimeout(() => {
+      const saved = loadDiscoveryPreferences();
+      setFavorites(saved?.favorites.filter((id) => BOT_CATALOG.some((bot) => bot.id === id)) ?? []);
+      setHydrated(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {

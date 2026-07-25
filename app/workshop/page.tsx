@@ -133,7 +133,7 @@ export default function WorkshopPage() {
       )),
     } : block),
   }));
-  const updateField = <Key extends keyof Pick<BotConfig, "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
+  const updateField = <Key extends keyof Pick<BotConfig, "name" | "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
     key: Key,
     value: BotConfig[Key],
   ) => updateConfig((current) => {
@@ -211,6 +211,9 @@ export default function WorkshopPage() {
           <button aria-pressed={mode === "javascript"} onClick={() => selectMode("javascript")} type="button">JavaScript 模式</button>
           <button className="workshop-clear" onClick={resetToBlank} type="button">清空選取</button>
         </div>
+        <p className="workshop-capability-note" role="note">
+          視覺化模式涵蓋常用進場、確認、離場、倉位與風控需求；需要自訂訊號邏輯時可切換 JavaScript 隔離沙箱。
+        </p>
       </div>
 
       <nav className="workshop-stepper" aria-label="手機版組裝步驟">
@@ -267,7 +270,12 @@ export default function WorkshopPage() {
           </div>
         </div>
         <div className="workshop-step-panel" data-mobile-active={mobileStep === "publish"} id="workshop-step-publish">
-          <PackagePanel config={config} flowCheckState={currentFlowCheck} onImport={acceptImport} report={currentReport} />
+          <PackagePanel
+            config={config}
+            flowCheckState={currentFlowCheck}
+            onImport={acceptImport}
+            report={currentReport}
+          />
         </div>
       </div>
 

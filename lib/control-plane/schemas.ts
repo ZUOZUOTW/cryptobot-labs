@@ -16,7 +16,8 @@ type UnknownRecord = Record<string, unknown>;
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const MAX_JSON_DEPTH = 32;
-const MAX_JSON_NODES = 2_048;
+const DEFAULT_MAX_JSON_NODES = 2_048;
+const MAX_CONFIGURABLE_JSON_NODES = 65_536;
 const SAFE_MASKED_METADATA_NAMES = new Set(["apikeysuffix", "maskedapikeysuffix"]);
 const SENSITIVE_NAME_PARTS = [
   "secret", "apikey", "accesskey", "passphrase", "accesssign", "signature",
@@ -65,12 +66,20 @@ const decimal = (value: unknown, label: string, signed = false): string => {
   return text;
 };
 
-const jsonValue = (value: unknown, label: string, maximumBytes: number): JsonValue => {
+const jsonValue = (
+  value: unknown,
+  label: string,
+  maximumBytes: number,
+  maximumNodes = DEFAULT_MAX_JSON_NODES,
+): JsonValue => {
+  if (!Number.isSafeInteger(maximumNodes) || maximumNodes < 1 || maximumNodes > MAX_CONFIGURABLE_JSON_NODES) {
+    throw new Error(`${label} JSON 節點上限無效`);
+  }
   const active = new WeakSet<object>();
   let nodes = 0;
   const clone = (item: unknown, depth: number): JsonValue => {
     nodes += 1;
-    if (nodes > MAX_JSON_NODES) throw new Error(`${label} JSON 節點不得超過 ${MAX_JSON_NODES}`);
+    if (nodes > maximumNodes) throw new Error(`${label} JSON 節點不得超過 ${maximumNodes}`);
     if (depth > MAX_JSON_DEPTH) throw new Error(`${label} JSON 深度不得超過 ${MAX_JSON_DEPTH}`);
 
     if (item === null || typeof item === "string" || typeof item === "boolean") return item;
@@ -152,13 +161,23 @@ const serializeJson = (item: JsonValue, canonical: boolean): string => {
   return `{${keys.map((key) => `${JSON.stringify(key)}:${serializeJson(item[key]!, canonical)}`).join(",")}}`;
 };
 
-export function safeJsonStringify(value: unknown, label = "JSON", maximumBytes = 65_536): string {
-  return serializeJson(jsonValue(value, label, maximumBytes), false);
+export function safeJsonStringify(
+  value: unknown,
+  label = "JSON",
+  maximumBytes = 65_536,
+  maximumNodes = DEFAULT_MAX_JSON_NODES,
+): string {
+  return serializeJson(jsonValue(value, label, maximumBytes, maximumNodes), false);
 }
 
 /** Bounded, credential-safe JSON with recursively sorted object keys for content identity checks. */
-export function safeCanonicalJsonStringify(value: unknown, label = "JSON", maximumBytes = 65_536): string {
-  return serializeJson(jsonValue(value, label, maximumBytes), true);
+export function safeCanonicalJsonStringify(
+  value: unknown,
+  label = "JSON",
+  maximumBytes = 65_536,
+  maximumNodes = DEFAULT_MAX_JSON_NODES,
+): string {
+  return serializeJson(jsonValue(value, label, maximumBytes, maximumNodes), true);
 }
 
 export function parseBacktestJobCreateDto(value: unknown): BacktestJobCreateDto {

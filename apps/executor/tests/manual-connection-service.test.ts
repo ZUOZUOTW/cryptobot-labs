@@ -8,6 +8,7 @@ describe("manual WEEX connection failure projection", () => {
     [new WeexApiError("invalid key", { category: "authentication", retryable: false, code: "40006" }), "invalid_credentials"],
     [new WeexApiError("invalid passphrase", { category: "authentication", retryable: false, code: "40012" }), "invalid_credentials"],
     [new WeexApiError("illegal IP", { category: "permission", retryable: false, code: "40018" }), "ip_not_allowed"],
+    [new WeexApiError("illegal IP", { category: "permission", retryable: false, code: "-1056" }), "ip_not_allowed"],
     [new WeexApiError("permission", { category: "permission", retryable: false, code: "40014" }), "permission_denied"],
     [new WeexApiError("clock", { category: "clock", retryable: false, code: "40005" }), "clock_error"],
     [new WeexApiError("rate", { category: "rate-limit", retryable: true, code: "429" }), "rate_limited"],

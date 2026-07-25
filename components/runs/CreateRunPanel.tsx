@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import type { HistoricalBacktestRecord } from "../backtests/BacktestResultCard";
 import type { BotConfig } from "../../lib/types";
@@ -50,14 +51,19 @@ export function CreateRunPanel({ backtest, config }: { backtest: HistoricalBackt
     {open && <>
       {state === "unauthorized" && <p>請先登入才能建立運行。</p>}
       {state !== "done" && <>
-        <RiskPolicyForm disabled={state === "submitting"} onChange={(next) => { setRisk(next); attempt.current = null;
-          if (state === "error") setState("ready"); }} value={risk} />
+        <RiskPolicyForm
+          description="所有欄位都必須完整；AWS Executor 會在每次評估與送單前重新套用風控。"
+          disabled={state === "submitting"}
+          legend="自動交易風險上限"
+          onChange={(next) => { setRisk(next); attempt.current = null; if (state === "error") setState("ready"); }}
+          value={risk}
+        />
         <p className="create-run-panel__mode">必須選擇「在上限內自動」。目前只會向 WEEX Futures Demo 送單；Live 資金交易仍由後端閘門關閉。</p>
         <button className="button button--primary" disabled={!canCreate || isSubmitting}
           onClick={() => void create()} type="button">{isSubmitting ? "啟動雲端執行中…" : "啟動 24/7 雲端策略"}</button>
       </>}
     </>}
     {message && <p className="control-feedback" role={state === "error" ? "alert" : "status"}>{message}</p>}
-    {state === "done" && runId && <a className="button button--primary" href="/runs">前往雲端運行控制中心</a>}
+    {state === "done" && runId && <Link className="button button--primary" href="/runs">前往雲端運行控制中心</Link>}
   </section>;
 }

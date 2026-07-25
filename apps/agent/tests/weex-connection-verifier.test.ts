@@ -60,13 +60,15 @@ describe("WEEX connection verifier", () => {
     expect(JSON.stringify(result)).not.toMatch(/local-secret|local-passphrase|local-api-key/i);
   });
 
-  it("fails closed when withdrawal permission is present", async () => {
+  it("does not mistake account-level withdrawal status for API-key scope", async () => {
     const verifier = createWeexConnectionVerifier({
       vault,
       transport: transport(true),
       now: () => 1_700_000_000_000,
     });
-    await expect(verifier.verify()).rejects.toThrow(/unsafe/i);
+    await expect(verifier.verify()).resolves.toMatchObject({
+      permissions: { withdrawal: false },
+    });
   });
 
   it("does not access credentials without trusted server-time evidence", async () => {

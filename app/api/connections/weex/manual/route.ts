@@ -20,6 +20,7 @@ const SAFE_FAILURE_REASONS = new Set([
   "rate_limited",
   "weex_unavailable",
   "invalid_weex_response",
+  "hedge_mode_required",
   "verification_failed",
 ]);
 

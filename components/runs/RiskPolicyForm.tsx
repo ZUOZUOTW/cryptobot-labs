@@ -5,7 +5,9 @@ import type { RiskPolicy } from "./types";
 export type RiskPolicyDraft = Omit<RiskPolicy, "id">;
 
 interface RiskPolicyFormProps {
+  description?: string;
   disabled?: boolean;
+  legend?: string;
   onChange: (policy: RiskPolicyDraft) => void;
   value: RiskPolicyDraft;
 }
@@ -15,13 +17,19 @@ export const isCompleteRiskPolicy = (policy: RiskPolicyDraft): boolean => policy
   && [policy.maxSimultaneousPositions, policy.maxSlippageBps, policy.minSignalCooldownMs, policy.maxConsecutiveFailures].every((value) => Number.isSafeInteger(value) && value >= 0)
   && policy.maxSimultaneousPositions > 0 && policy.maxConsecutiveFailures > 0;
 
-export function RiskPolicyForm({ disabled = false, onChange, value }: RiskPolicyFormProps) {
+export function RiskPolicyForm({
+  description = "所有欄位都必須完整，且本機代理會在接受實盤命令前重新驗證。",
+  disabled = false,
+  legend = "實盤風險上限",
+  onChange,
+  value,
+}: RiskPolicyFormProps) {
   const setText = (key: keyof RiskPolicyDraft) => (event: React.ChangeEvent<HTMLInputElement>) => onChange({ ...value, [key]: event.target.value });
   const setNumber = (key: keyof RiskPolicyDraft) => (event: React.ChangeEvent<HTMLInputElement>) => onChange({ ...value, [key]: Number(event.target.value) });
   return (
     <fieldset className="risk-policy-form" disabled={disabled}>
-      <legend>實盤風險上限</legend>
-      <p>所有欄位都必須完整，且本機代理會在接受實盤命令前重新驗證。</p>
+      <legend>{legend}</legend>
+      <p>{description}</p>
       <label className="risk-policy-form__wide"><span>允許交易對（以逗號分隔）</span><input aria-label="允許交易對" onChange={(event) => onChange({ ...value, allowedSymbols: event.target.value.toUpperCase().split(",").map((item) => item.trim()).filter(Boolean) })} value={value.allowedSymbols.join(", ")} /></label>
       <label><span>單筆訂單上限 USDT</span><input min="0.01" onChange={setText("maxOrderNotional")} step="0.01" type="number" value={value.maxOrderNotional} /></label>
       <label><span>單一部位上限 USDT</span><input min="0.01" onChange={setText("maxPositionNotional")} step="0.01" type="number" value={value.maxPositionNotional} /></label>

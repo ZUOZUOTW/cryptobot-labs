@@ -10,7 +10,7 @@ describe("SiteHeader", () => {
     ["探索策略", "/bots"],
     ["組裝策略", "/workshop"],
     ["排行榜", "/leaderboard"],
-    ["我的運行", "/runs"],
+    ["控制台", "/runs"],
   ])("links %s to %s", (name, href) => {
     render(<SiteHeader />);
 

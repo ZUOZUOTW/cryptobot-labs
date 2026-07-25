@@ -5,7 +5,7 @@ import { updateDemoRun, useDemoRuns } from "../../lib/demo-runs";
 
 export function DemoRunDetail({ runId }: { runId: string }) {
   const run = useDemoRuns().find((candidate) => candidate.id === runId);
-  if (!run) return <section className="runs-empty glass-panel"><p>找不到這個展示運行。</p><Link className="button button--secondary" href="/runs">返回我的運行</Link></section>;
+  if (!run) return <section className="runs-empty glass-panel"><p>找不到這個展示運行。</p><Link className="button button--secondary" href="/runs">返回控制台</Link></section>;
   return <div className="run-detail"><header className="run-detail__header glass-panel"><div><p className="eyebrow">CLOUD RUN / {run.id}</p><h1>{run.botName}</h1><p>模擬模式 · {run.state === "running" ? "運行中" : run.state === "paused" ? "已暫停" : "已停止"}</p></div><div className="run-detail__actions">
     {run.state !== "stopped" && <button className="button button--secondary" onClick={() => updateDemoRun(run.id, run.state === "running" ? "paused" : "running")} type="button">{run.state === "running" ? "暫停模擬" : "繼續模擬"}</button>}
     <button className="button button--danger" disabled type="button">Live 展示模式不可用</button></div></header>

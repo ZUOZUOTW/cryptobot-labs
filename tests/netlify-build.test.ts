@@ -8,7 +8,7 @@ describe("Netlify production build", () => {
       readFile("scripts/clean-next-build.mjs", "utf8"),
     ]);
 
-    expect(config).toContain('command = "node scripts/clean-next-build.mjs && pnpm exec next build --webpack"');
+    expect(config).toContain('command = "node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack"');
     expect(cleaner).toContain('resolve(projectRoot, ".next")');
     expect(cleaner).toContain("await rm(nextOutput, { force: true, recursive: true })");
   });

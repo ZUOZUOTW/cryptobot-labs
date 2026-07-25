@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 
@@ -67,7 +68,7 @@ export function PairingCodeCard({ onPairingIssued }: { onPairingIssued?: () => v
       {pairing && seconds > 0 ? (
         <div className="pairing-ready" aria-live="polite">
           <div className="pairing-qr">
-            {qrDataUrl ? <img alt="供 CryptoBot Labs Agent 掃描的五分鐘配對 QR Code" height="224" src={qrDataUrl} width="224" />
+            {qrDataUrl ? <Image alt="供 CryptoBot Labs Agent 掃描的五分鐘配對 QR Code" height={224} src={qrDataUrl} unoptimized width={224} />
               : <span>正在本機產生 QR Code…</span>}
           </div>
           <div className="pairing-ready__actions">

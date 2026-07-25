@@ -42,7 +42,7 @@ export function createControlPlaneDatabase(
 export function getDb() {
   if (!env.DB) {
     throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
+      "A D1-compatible control-plane binding or server-side Supabase DATABASE_URL is required."
     );
   }
 

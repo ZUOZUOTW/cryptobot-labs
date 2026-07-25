@@ -28,6 +28,10 @@ export {
 export { createStrategyVersionRepository, type OwnedStrategyVersionRecord,
   type SavedStrategyVersionRecord } from "./strategies";
 export {
+  createStrategyPublicationRepository,
+  type StrategyPublicationRecord,
+} from "./strategy-publications";
+export {
   createDeploymentRepository,
   createCommandRepository,
   COMMAND_ACK_GRACE_MS,

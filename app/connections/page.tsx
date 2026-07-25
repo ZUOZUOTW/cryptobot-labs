@@ -13,14 +13,14 @@ export default function ConnectionsPage() {
         <h1>安全連接 WEEX，<br />先從模擬開始</h1>
         <p>直接在網站綁定 WEEX API，策略交由固定 IP 的 AWS Executor 全天候運行。關閉瀏覽器與電腦後，策略仍會持續執行。</p>
         <div className="button-row"><Link className="button button--ghost" href="/workshop">返回組裝車間</Link><Link className="button button--ghost" href="/bots">先看策略</Link></div>
-        <p className="connection-safety" role="note"><strong>重要：</strong>API Secret 與 Passphrase 只傳送一次到雲端 Executor，立即由 AWS KMS 加密；提領權限必須關閉。</p>
+        <p className="connection-safety" role="note"><strong>重要：</strong>API Secret 與 Passphrase 只經由同源加密連線轉送一次，抵達雲端 Executor 後立即由 AWS KMS 加密；平台只使用 Readonly／Spot／Futures，完全不實作提領功能。</p>
       </header>
 
       <section className="connections-primary" aria-labelledby="manual-api-title">
         <div className="section-heading">
           <p className="eyebrow">AVAILABLE NOW / MANUAL API</p>
           <h2 id="manual-api-title">使用自己的 WEEX API 啟動策略</h2>
-          <p>不需下載或安裝本機代理。綁定完成後，即可從組裝車間建立 WEEX Futures Demo 的 24/7 自動策略。</p>
+          <p>不需下載或安裝本機代理。綁定完成並通過歷史回測後，可從組裝車間明確確認風險，再建立由 AWS Executor 24/7 執行的 WEEX 自動策略。</p>
         </div>
         <ManualApiConnectionFlow />
       </section>

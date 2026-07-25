@@ -285,6 +285,36 @@ export const backtestResults = sqliteTable("backtest_results", {
   index("backtest_results_user_created_idx").on(table.userId, table.createdAt),
 ]);
 
+export const strategyPublications = sqliteTable("strategy_publications", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyVersionId: text("strategy_version_id").notNull(),
+  backtestJobId: text("backtest_job_id").notNull(),
+  slug: text("slug").notNull(),
+  description: text("description").notNull(),
+  publisherName: text("publisher_name").notNull(),
+  weexReferralUrl: text("weex_referral_url").notNull(),
+  publishedAt: timestamp("published_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+}, (table) => [
+  foreignKey({
+    columns: [table.strategyVersionId, table.userId],
+    foreignColumns: [strategyVersions.id, strategyVersions.userId],
+    name: "strategy_publications_version_user_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.backtestJobId, table.userId],
+    foreignColumns: [backtestJobs.id, backtestJobs.userId],
+    name: "strategy_publications_backtest_user_fk",
+  }).onDelete("cascade"),
+  uniqueIndex("strategy_publications_slug_uidx").on(table.slug),
+  uniqueIndex("strategy_publications_version_uidx").on(table.strategyVersionId),
+  index("strategy_publications_version_user_idx").on(table.strategyVersionId, table.userId),
+  index("strategy_publications_backtest_user_idx").on(table.backtestJobId, table.userId),
+  index("strategy_publications_published_idx").on(table.publishedAt),
+  index("strategy_publications_user_updated_idx").on(table.userId, table.updatedAt),
+]);
+
 export const deployments = sqliteTable("deployments", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

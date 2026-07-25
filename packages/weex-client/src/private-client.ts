@@ -112,6 +112,7 @@ export interface WeexAccountPosition {
   readonly size: string;
   readonly openValue: string;
   readonly unrealizedPnl: string;
+  readonly openedAt: number | null;
   readonly updatedAt: number;
 }
 
@@ -123,6 +124,26 @@ export interface WeexAccountSnapshot {
   readonly observedAt: number;
   readonly balances: readonly WeexAccountBalance[];
   readonly positions: readonly WeexAccountPosition[];
+}
+
+export interface WeexAccountIdentity {
+  readonly uid: string;
+  readonly observedAt: number;
+}
+
+export interface WeexRealizedTrade {
+  readonly exchangeTradeId: string;
+  readonly symbol: string;
+  readonly realizedPnl: string;
+  readonly commission: string;
+  readonly commissionAsset: string;
+  readonly tradedAt: number;
+}
+
+export interface WeexFuturesTradeHistoryQuery {
+  readonly startTime: number;
+  readonly endTime: number;
+  readonly limit?: number;
 }
 
 export interface WeexPrivateClientOptions {
@@ -279,16 +300,22 @@ function parsePositions(value: unknown): readonly WeexAccountPosition[] {
     const side = position.side === "LONG" ? "long" : position.side === "SHORT" ? "short" : null;
     const updatedAt = typeof position.updatedTime === "string" && /^\d+$/.test(position.updatedTime)
       ? Number(position.updatedTime) : position.updatedTime;
+    const openedAt = position.createdTime === undefined || position.createdTime === null
+      ? null
+      : typeof position.createdTime === "string" && /^\d+$/.test(position.createdTime)
+        ? Number(position.createdTime)
+        : position.createdTime;
     if (!validId || typeof position.asset !== "string" || !/^[A-Z0-9]{1,16}$/.test(position.asset)
       || typeof position.symbol !== "string" || !isPrivateSymbol(position.symbol) || side === null
       || typeof position.leverage !== "string" || !UNSIGNED_AMOUNT.test(position.leverage) || !/[1-9]/.test(position.leverage)
       || typeof position.size !== "string" || !UNSIGNED_AMOUNT.test(position.size)
       || typeof position.openValue !== "string" || !UNSIGNED_AMOUNT.test(position.openValue)
       || typeof position.unrealizePnl !== "string" || !SIGNED_AMOUNT.test(position.unrealizePnl)
+      || (openedAt !== null && (!Number.isSafeInteger(openedAt) || (openedAt as number) < 0))
       || !Number.isSafeInteger(updatedAt) || (updatedAt as number) < 0) throw schema("Invalid account position");
     return Object.freeze({ asset: position.asset, symbol: position.symbol, side,
       leverage: position.leverage, size: position.size, openValue: position.openValue,
-      unrealizedPnl: position.unrealizePnl, updatedAt: updatedAt as number });
+      unrealizedPnl: position.unrealizePnl, openedAt: openedAt as number | null, updatedAt: updatedAt as number });
   }).filter((position) => /[1-9]/.test(position.size));
   return Object.freeze(positions);
 }
@@ -326,6 +353,55 @@ function parseTradeFills(body: unknown, target: ExecutionTarget, snapshot: Excha
   return Object.freeze({ fees, fills: Object.freeze(fills) });
 }
 
+function parseAccountIdentity(body: unknown, observedAt: number): WeexAccountIdentity {
+  const account = record(unwrapGet(body), "spot account");
+  const rawUid = account.uid;
+  const uid = typeof rawUid === "string" && /^\d{1,32}$/.test(rawUid)
+    ? rawUid
+    : typeof rawUid === "number" && Number.isSafeInteger(rawUid) && rawUid >= 0
+      ? String(rawUid)
+      : null;
+  if (!uid) throw schema("Invalid spot account uid");
+  return Object.freeze({ uid, observedAt });
+}
+
+function parseRealizedTrades(body: unknown, maximum: number): readonly WeexRealizedTrade[] {
+  const data = unwrapGet(body);
+  if (!Array.isArray(data) || data.length > maximum) throw schema("Invalid futures trade history collection");
+  const trades = data.map((item) => {
+    const trade = record(item, "futures trade history item");
+    const rawId = trade.id;
+    const exchangeTradeId = typeof rawId === "string" && /^\d{1,32}$/.test(rawId)
+      ? rawId
+      : typeof rawId === "number" && Number.isSafeInteger(rawId) && rawId >= 0
+        ? String(rawId)
+        : null;
+    const tradedAt = typeof trade.time === "string" && /^\d+$/.test(trade.time)
+      ? Number(trade.time)
+      : trade.time;
+    if (!exchangeTradeId || typeof trade.symbol !== "string" || !isPrivateSymbol(trade.symbol)
+      || typeof trade.realizedPnl !== "string" || !SIGNED_AMOUNT.test(trade.realizedPnl)
+      || typeof trade.commission !== "string" || !UNSIGNED_AMOUNT.test(trade.commission)
+      || typeof trade.commissionAsset !== "string" || !/^[A-Z0-9]{1,16}$/.test(trade.commissionAsset)
+      || !Number.isSafeInteger(tradedAt) || (tradedAt as number) < 0) {
+      throw schema("Invalid futures trade history item");
+    }
+    return Object.freeze({
+      exchangeTradeId,
+      symbol: trade.symbol,
+      realizedPnl: trade.realizedPnl,
+      commission: trade.commission,
+      commissionAsset: trade.commissionAsset,
+      tradedAt: tradedAt as number,
+    });
+  });
+  if (new Set(trades.map(({ exchangeTradeId }) => exchangeTradeId)).size !== trades.length) {
+    throw schema("Duplicate futures trade history item");
+  }
+  return Object.freeze(trades.sort((left, right) =>
+    left.tradedAt - right.tradedAt || left.exchangeTradeId.localeCompare(right.exchangeTradeId)));
+}
+
 function parseAccount(
   body: unknown,
   target: ExecutionTarget,
@@ -342,7 +418,10 @@ function parseAccount(
     return {
       market: "spot", mode: "live", verifiedAt, canTrade: account.canTrade,
       readPermission: true,
-      withdrawalPermission: account.canWithdraw ? "present" : "absent",
+      // WEEX documents API-key scopes as Readonly / Spot / Futures. The
+      // account-level canWithdraw flag describes the user's WEEX account, not
+      // a withdrawal capability granted to this API key.
+      withdrawalPermission: "absent",
       positionMode: "unknown",
       balanceAssetCount,
     };
@@ -372,7 +451,10 @@ function parseAccount(
   return {
     market: "futures", mode: "live", verifiedAt, canTrade: config.canTrade as boolean,
     readPermission: true,
-    withdrawalPermission: config.canWithdraw ? "present" : "absent",
+    // accountConfig.canWithdraw is an account setting (the official example
+    // is true), not an API-key permission. This client exposes no withdrawal
+    // endpoint, so the credential's withdrawal capability is absent.
+    withdrawalPermission: "absent",
     positionMode: config.dualSidePosition ? "hedge" : "one-way",
     balanceAssetCount,
   };
@@ -420,7 +502,6 @@ export class WeexPrivateClient {
   #verifiedSpotLive: { readonly verifiedAt: number; readonly generation: number } | undefined;
   #verifiedFuturesLive: {
     readonly canTrade: boolean;
-    readonly canWithdraw: boolean;
     readonly dualSidePosition: boolean;
     readonly verifiedAt: number;
     readonly generation: number;
@@ -509,7 +590,7 @@ export class WeexPrivateClient {
     }
     if (target.mode === "live") {
       const verified = this.#verifiedFuturesLive;
-      if (!verified || !verified.canTrade || verified.canWithdraw || !verified.dualSidePosition ||
+      if (!verified || !verified.canTrade || !verified.dualSidePosition ||
           now < verified.verifiedAt || now - verified.verifiedAt > MAX_RULES_AGE_MS) {
         throw validation("Verified futures hedge-mode trading permission is required");
       }
@@ -640,7 +721,6 @@ export class WeexPrivateClient {
         verificationGeneration === this.#futuresVerificationGeneration) {
       this.#verifiedFuturesLive = {
         canTrade: summary.canTrade === true,
-        canWithdraw: summary.withdrawalPermission === "present",
         dualSidePosition: summary.positionMode === "hedge",
         verifiedAt: summary.verifiedAt,
         generation: verificationGeneration,
@@ -659,7 +739,7 @@ export class WeexPrivateClient {
     let balances: readonly WeexAccountBalance[];
     if (target.market === "spot") {
       const account = record(unwrapGet(accountResponse.body), "spot account");
-      if (account.canTrade !== true || account.canWithdraw !== false) {
+      if (account.canTrade !== true || typeof account.canWithdraw !== "boolean") {
         this.#verifiedSpotLive = undefined;
         throw validation("Spot account permissions changed after verification");
       }
@@ -680,6 +760,64 @@ export class WeexPrivateClient {
     if (!Number.isSafeInteger(observedAt) || observedAt < 0) throw validation("Invalid account snapshot time");
     return Object.freeze({ target: Object.freeze({ market: target.market, mode: target.mode }), observedAt,
       balances, positions });
+  }
+
+  /**
+   * Read-only account monitoring is intentionally independent from the stricter
+   * trading authorization cache. Order submission still requires verifyAccount().
+   */
+  async getReadOnlyAccountSnapshot(target: ExecutionTarget): Promise<WeexAccountSnapshot> {
+    assertTarget(target);
+    if (target.mode !== "live" && !(target.market === "futures" && target.mode === "futures-demo")) {
+      throw validation("Account snapshots require a supported WEEX private target");
+    }
+    const accountResponse = await this.#safeGet(accountRoute(target));
+    let balances: readonly WeexAccountBalance[];
+    if (target.market === "spot") {
+      const account = record(unwrapGet(accountResponse.body), "spot account");
+      balances = parseBalanceCollection(account.balances, "spot");
+    } else {
+      const data = unwrapGet(accountResponse.body);
+      const collection = Array.isArray(data) ? data : (() => {
+        const source = record(data, "futures account balance response");
+        return source.balances ?? source.assets ?? source.list;
+      })();
+      balances = parseBalanceCollection(collection, "futures");
+    }
+    const positions = target.market === "futures"
+      ? parsePositions((await this.#safeGet(futuresPositionsRoute(target))).body)
+      : Object.freeze([]) as readonly WeexAccountPosition[];
+    const observedAt = Math.floor(this.#now());
+    if (!Number.isSafeInteger(observedAt) || observedAt < 0) throw validation("Invalid account snapshot time");
+    return Object.freeze({
+      target: Object.freeze({ market: target.market, mode: target.mode }),
+      observedAt,
+      balances,
+      positions,
+    });
+  }
+
+  async getAccountIdentity(): Promise<WeexAccountIdentity> {
+    const response = await this.#safeGet(accountRoute({ market: "spot", mode: "live" }));
+    const observedAt = Math.floor(this.#now());
+    if (!Number.isSafeInteger(observedAt) || observedAt < 0) throw validation("Invalid account identity time");
+    return parseAccountIdentity(response.body, observedAt);
+  }
+
+  async getFuturesTradeHistory(query: WeexFuturesTradeHistoryQuery): Promise<readonly WeexRealizedTrade[]> {
+    const limit = query?.limit ?? 100;
+    if (!Number.isSafeInteger(query?.startTime) || !Number.isSafeInteger(query?.endTime)
+      || query.startTime < 0 || query.endTime < query.startTime
+      || query.endTime - query.startTime > 7 * 24 * 60 * 60_000
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw validation("Invalid futures trade history window");
+    }
+    const response = await this.#safeGet(tradeRoute({ market: "futures", mode: "live" }), [
+      ["startTime", String(query.startTime)],
+      ["endTime", String(query.endTime)],
+      ["limit", String(limit)],
+    ]);
+    return parseRealizedTrades(response.body, limit);
   }
 
   async submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome> {

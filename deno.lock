@@ -11,7 +11,6 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
-        "npm:@cloudflare/vite-plugin@1.37.1",
         "npm:@jitl/quickjs-singlefile-cjs-release-sync@0.32.0",
         "npm:@netlify/plugin-nextjs@^5.15.12",
         "npm:@remotion/player@^4.0.489",
@@ -24,7 +23,6 @@
         "npm:@types/react-dom@19.2.3",
         "npm:@types/react@19.2.14",
         "npm:@vitejs/plugin-react@6.0.2",
-        "npm:@vitejs/plugin-rsc@0.5.26",
         "npm:acorn@8.16.0",
         "npm:drizzle-kit@0.31.10",
         "npm:drizzle-orm@0.45.2",
@@ -43,10 +41,8 @@
         "npm:remotion@^4.0.489",
         "npm:tailwindcss@4.2.1",
         "npm:typescript@5.9.3",
-        "npm:vinext@0.0.50",
         "npm:vite@8.0.13",
-        "npm:vitest@^4.1.10",
-        "npm:wrangler@4.92.0"
+        "npm:vitest@^4.1.10"
       ]
     }
   }

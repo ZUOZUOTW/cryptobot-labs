@@ -17,26 +17,21 @@ const backtest = { id: "bt_1", strategyVersionId: "sv_1", status: "succeeded", e
   createdAt: 1, startedAt: 1, completedAt: 2, result: { configurationHash: "a".repeat(64) } } as HistoricalBacktestRecord;
 
 describe("historical backtest to Agent run", () => {
-  it("lets a novice select a paired device, choose automation policy, and create a paper-first run", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(new Response(JSON.stringify({ connections: [{ id: "dev_1", name: "交易電腦",
-        platform: "macos", deviceStatus: "active", lastSeenAt: 1, connection: { status: "verified",
-          hasLocalCredential: true }, commandTarget: null }], nextCursor: null }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run_1" }, deploymentCommand: { status: "pending" },
-        idempotent: false }), { status: 201 }));
+  it("creates a 24/7 WEEX Futures Demo run from verified historical evidence", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      run: { id: "crun_1" }, idempotent: false,
+    }), { status: 201 }));
     const user = userEvent.setup(); render(<CreateRunPanel backtest={backtest} config={config} />);
-    await user.click(screen.getByRole("button", { name: "選擇裝置並建立模擬運行" }));
-    expect(await screen.findByLabelText("執行裝置")).toHaveValue("dev_1");
-    await user.selectOptions(screen.getByLabelText("執行方式"), "automatic");
-    await user.click(screen.getByRole("button", { name: "建立模擬運行" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/runs");
-    expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ deviceId: "dev_1",
+    await user.click(screen.getByRole("button", { name: "設定風控並啟動雲端策略" }));
+    await user.click(screen.getByRole("button", { name: "啟動 24/7 雲端策略" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/cloud-runs");
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       strategyVersionId: "sv_1", botName: config.name, configurationHash: "a".repeat(64),
       riskPolicy: { allowedSymbols: ["BTCUSDT"], maxLeverage: String(config.leverage), operationMode: "automatic" } });
-    expect(await screen.findByText(/模擬運行已建立/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "前往運行控制中心" })).toHaveAttribute("href", "/runs/run_1");
+    expect(await screen.findByText(/雲端運行已啟動/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往雲端運行控制中心" })).toHaveAttribute("href", "/runs");
   });
 
   it("never renders deployment controls for a failed or incomplete backtest", () => {

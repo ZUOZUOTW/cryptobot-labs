@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { BotDetailPerformance } from "../../../components/BotDetailPerformance";
+import { StrategyLaunchButton } from "../../../components/StrategyLaunchButton";
 import { StrategyShareActions } from "../../../components/StrategyShareActions";
 import { BOT_CATALOG } from "../../../data/bots";
 import type { BotDefinition, StrategyGroup } from "../../../lib/types";
@@ -58,6 +59,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
             <p className="bot-detail-hero__lead">{bot.description}</p>
             <div className="tag-row">{bot.tags.map((tag) => <span className="strategy-tag" key={tag}>{tag}</span>)}</div>
             <div className="bot-detail-hero__actions">
+              <StrategyLaunchButton bot={bot} />
               <Link className="button button--primary" href={workshopHref}>直接套用</Link>
               <StrategyShareActions botId={bot.id} botName={bot.name} />
             </div>
@@ -106,7 +108,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
 
       <section className="detail-section detail-cta site-container glass-panel">
         <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始模擬運行；原分享版本不會因後續修改而改變。</p></div>
-        <div className="button-row"><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} /></div>
+        <div className="button-row"><StrategyLaunchButton bot={bot} /><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} /></div>
       </section>
     </article>
   );

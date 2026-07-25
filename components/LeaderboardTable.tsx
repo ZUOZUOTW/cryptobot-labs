@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { BOT_CATALOG } from "../data/bots";
@@ -423,7 +424,7 @@ export function LeaderboardTable() {
               {podium.map((bot, index) => (
                 <article className="podium-card glass-panel" data-rank={index + 1} key={bot.id}>
                   <span className="podium-card__rank" aria-label={`第 ${index + 1} 名`}>0{index + 1}</span>
-                  <img alt="" aria-hidden="true" className="podium-card__mascot" decoding="async" height="180" src={index === 0 ? "/mascots/ai-guardian.webp" : index === 1 ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp"} width="200" />
+                  <Image alt="" aria-hidden="true" className="podium-card__mascot" height={180} src={index === 0 ? "/mascots/ai-guardian.webp" : index === 1 ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp"} width={200} />
                   <div className="podium-card__identity"><p className="eyebrow">{bot.symbol} / {bot.timeframe.toUpperCase()}</p><h3><Link href={`/bots/${bot.id}`}>{bot.name}</Link></h3><span className="risk-badge" data-risk={bot.risk}>{bot.risk}風險</span></div>
                   <div className="podium-card__trend"><span>PERFORMANCE TREND</span><ArenaTrend label={`${bot.name} 近 30 天趨勢`} points={bot.equityCurve} /></div>
                   <dl>

@@ -11,7 +11,7 @@ const NAVIGATION_LINKS = [
   { href: "/favorites", label: "收藏策略" },
   { href: "/workshop", label: "組裝策略" },
   { href: "/leaderboard", label: "排行榜" },
-  { href: "/runs", label: "我的運行" },
+  { href: "/runs", label: "控制台" },
 ] as const;
 
 function NavigationLinks() {

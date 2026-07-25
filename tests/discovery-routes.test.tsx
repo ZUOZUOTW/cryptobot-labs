@@ -12,6 +12,7 @@ import { StrategyShareActions } from "../components/StrategyShareActions";
 import { BOT_CATALOG } from "../data/bots";
 import { signInDemo } from "../lib/demo-auth";
 import type { WeexHistoricalPerformance } from "../lib/types";
+import { clearWeexBotPerformanceCache } from "../lib/weex-historical-client";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -45,6 +46,7 @@ const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Obje
 
 beforeEach(() => {
   localStorage.clear();
+  clearWeexBotPerformanceCache();
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({
     performances: performanceFixture(),
     updatedAt: "2026-07-13T12:00:00.000Z",
@@ -52,6 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearWeexBotPerformanceCache();
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -105,6 +108,7 @@ describe("landing page", () => {
     expect(within(featured).getAllByText("勝率")).toHaveLength(3);
     expect(within(featured).getAllByRole("link", { name: /查看策略/ })).toHaveLength(3);
     expect(within(featured).getAllByRole("link", { name: /直接套用/ })).toHaveLength(3);
+    expect(within(featured).getAllByRole("button", { name: /啟動策略/ })).toHaveLength(3);
     expect(within(featured).queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
     expect(within(featured).getAllByText("公開歷史行情回測，不代表未來績效")).toHaveLength(3);
   });
@@ -118,7 +122,7 @@ describe("landing page", () => {
   });
 
   it("does not fall back to simulated featured rankings when WEEX data fails", async () => {
-    vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("offline"));
     render(<Home />);
 
     const errorRegion = screen.getByRole("region", { name: "熱門機器人近期績效" });
@@ -169,6 +173,7 @@ describe("bot catalog route", () => {
     expect(screen.getAllByRole("article")).toHaveLength(20);
     expect(screen.queryByRole("heading", { name: "登入後，繼續探索完整策略庫" })).not.toBeInTheDocument();
     expect(screen.getByText("顯示 20 / 20 組符合策略")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /啟動策略/ })).toHaveLength(20);
   });
 
   it("sorts visible bots from derived catalog data", async () => {
@@ -304,9 +309,36 @@ describe("bot detail route", () => {
       const { unmount } = render(view);
       expect(screen.getByRole("heading", { level: 1, name: bot.name })).toBeInTheDocument();
       expect(screen.getAllByRole("link", { name: "直接套用" }).every((link) => link.getAttribute("href") === `/workshop?bot=${bot.id}&version=1`)).toBe(true);
+      expect(screen.getAllByRole("button", { name: `啟動策略：${bot.name}` })).toHaveLength(2);
       expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
       unmount();
     }
+  });
+
+  it("opens the safe cloud launcher from a futures strategy detail page", async () => {
+    const user = userEvent.setup();
+    const view = await BotDetailPage({ params: Promise.resolve({ id: "momentum-forge" }) });
+    render(view);
+
+    await user.click(screen.getAllByRole("button", { name: "啟動策略：動能鍛造者" })[0]!);
+
+    expect(await screen.findByRole("dialog", { name: "啟動 動能鍛造者" })).toBeInTheDocument();
+    expect(screen.getByText("WEEX LIVE / USDT")).toBeInTheDocument();
+    expect(await screen.findByText(/尚未完成合約真倉權限驗證/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
+  });
+
+  it("opens the real-funds spot cloud launcher without misrouting it to futures execution", async () => {
+    const user = userEvent.setup();
+    const view = await BotDetailPage({ params: Promise.resolve({ id: "orbit-dca" }) });
+    render(view);
+
+    await user.click(screen.getAllByRole("button", { name: "啟動策略：軌道定投" })[0]!);
+
+    expect(screen.getByRole("dialog", { name: "啟動 軌道定投" })).toBeInTheDocument();
+    expect(screen.getByText("WEEX LIVE / USDT")).toBeInTheDocument();
+    expect(await screen.findByText(/尚未完成現貨真倉權限驗證/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
   });
 
   it("renders full metrics, equity, monthly performance, and strategy guidance", async () => {

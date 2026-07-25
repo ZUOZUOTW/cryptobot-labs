@@ -21,7 +21,10 @@ const MARKET_OPTIONS = [
 ] as const;
 
 const TIMEFRAME_OPTIONS = [
+  { value: "1m", label: "1 分", detail: "高頻" },
+  { value: "5m", label: "5 分", detail: "超短線" },
   { value: "15m", label: "15 分", detail: "短線" },
+  { value: "30m", label: "30 分", detail: "短波段" },
   { value: "1h", label: "1 小時", detail: "日內" },
   { value: "4h", label: "4 小時", detail: "波段" },
   { value: "1d", label: "1 天", detail: "趨勢" },
@@ -59,7 +62,7 @@ function ResetIcon() {
 
 interface ParameterPanelProps {
   config: BotConfig;
-  onConfigField: <Key extends keyof Pick<BotConfig, "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
+  onConfigField: <Key extends keyof Pick<BotConfig, "name" | "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
     key: Key,
     value: BotConfig[Key],
   ) => void;
@@ -67,12 +70,11 @@ interface ParameterPanelProps {
 }
 
 export function ParameterPanel({ config, onConfigField, onParameter }: ParameterPanelProps) {
-  const cachedCatalog = marketCatalogCache && marketCatalogCache.expiresAt > Date.now()
-    ? marketCatalogCache.value
-    : null;
-  const [catalog, setCatalog] = useState<WeexMarketCatalog>(cachedCatalog ?? FALLBACK_WEEX_MARKET_CATALOG);
+  const [catalog, setCatalog] = useState<WeexMarketCatalog>(
+    () => marketCatalogCache?.value ?? FALLBACK_WEEX_MARKET_CATALOG,
+  );
   const [catalogStatus, setCatalogStatus] = useState<"loading" | "live" | "fallback">(
-    process.env.NODE_ENV === "test" ? "fallback" : cachedCatalog ? "live" : "loading",
+    process.env.NODE_ENV === "test" ? "fallback" : marketCatalogCache ? "live" : "loading",
   );
   const pairs = catalog[config.market];
   const selectedPair = useMemo(
@@ -90,7 +92,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
         setCatalog(value);
         setCatalogStatus("live");
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (active) setCatalogStatus("fallback");
       });
     return () => {
@@ -133,6 +135,17 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
 
       <fieldset className="market-controls">
         <legend>交易環境</legend>
+        <label className="market-control--name">
+          <span>策略名稱</span>
+          <input
+            aria-label="策略名稱"
+            maxLength={100}
+            onChange={(event) => onConfigField("name", event.target.value)}
+            placeholder="為這個策略版本命名"
+            type="text"
+            value={config.name}
+          />
+        </label>
         <div className="market-control market-control--visual">
           <span className="market-control__label">市場</span>
           <div aria-label="市場" className="visual-choice-group visual-choice-group--market" role="group">

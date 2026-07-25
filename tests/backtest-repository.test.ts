@@ -178,6 +178,24 @@ describe("backtest repository", () => {
     await expect(repository.completeSuccess("usr_a", "job_a", reordered)).resolves.toMatchObject({ idempotent: true });
   });
 
+  it("persists a full 30-day hourly equity curve within its dedicated bounded node budget", async () => {
+    await create("job_curve");
+    await start("job_curve");
+    const fullWindow = completion("curve");
+    fullWindow.result.equityCurve = Array.from({ length: 720 }, (_, index) => ({
+      timestamp: 1_700_000_000_000 + (index * 3_600_000),
+      equity: String(10_000 + index),
+      funding: "0",
+    }));
+
+    await expect(repository.completeSuccess("usr_a", "job_curve", fullWindow))
+      .resolves.toMatchObject({ job: { status: "succeeded" } });
+    const stored = database.raw.prepare(
+      "SELECT equity_curve_json AS equityCurveJson FROM backtest_results WHERE backtest_job_id = 'job_curve'",
+    ).get() as { equityCurveJson: string };
+    expect(JSON.parse(stored.equityCurveJson)).toHaveLength(720);
+  });
+
   it("authoritatively re-reads an identical completion won by an interleaved writer", async () => {
     await create("job_a");
     await start("job_a");

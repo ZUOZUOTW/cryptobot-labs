@@ -26,9 +26,9 @@ function useNearViewport({
     const element = ref.current;
     if (!element) return;
     if (respectReducedMotion && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    if (!("IntersectionObserver" in window)) {
-      setShouldLoad(true);
-      return;
+    if (typeof window.IntersectionObserver !== "function") {
+      const timer = window.setTimeout(() => setShouldLoad(true), 0);
+      return () => window.clearTimeout(timer);
     }
 
     const observer = new IntersectionObserver(([entry]) => {

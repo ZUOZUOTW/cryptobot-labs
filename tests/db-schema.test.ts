@@ -6,7 +6,7 @@ import * as schema from "../db/schema";
 
 const expectedTables = [
   "users", "devices", "deviceCredentials", "deviceConnections", "pairingCodes", "deviceBootstraps", "deviceNonces",
-  "strategies", "strategyVersions", "backtestJobs", "backtestDatasets", "backtestResults",
+  "strategies", "strategyVersions", "backtestJobs", "backtestDatasets", "backtestResults", "strategyPublications",
   "deployments", "riskPolicies", "runHeartbeats", "positionSnapshots", "orders", "fills",
   "commands", "commandAcknowledgements", "auditEvents",
 ] as const;
@@ -76,7 +76,7 @@ describe("D1 control-plane schema", () => {
     const journal = JSON.parse(await readFile(resolve("drizzle/meta/_journal.json"), "utf8")) as {
       entries: Array<{ idx: number; tag: string }>;
     };
-    expect(journal.entries.at(-1)).toMatchObject({ idx: 1, tag: files[0]!.replace(/\.sql$/, "") });
+    expect(journal.entries).toContainEqual(expect.objectContaining({ idx: 1, tag: files[0]!.replace(/\.sql$/, "") }));
 
     const snapshot = JSON.parse(await readFile(resolve("drizzle/meta/0001_snapshot.json"), "utf8")) as {
       tables: Record<string, unknown>;
@@ -84,10 +84,8 @@ describe("D1 control-plane schema", () => {
     expect(snapshot.tables).toHaveProperty("device_connections");
   });
 
-  it("enables the DB binding and generates append-only audit triggers", async () => {
-    const hosting = JSON.parse(await readFile(resolve(".openai/hosting.json"), "utf8")) as { d1: string | null };
-    expect(hosting.d1).toBe("DB");
-
+  it("generates append-only audit triggers without retaining a Sites project binding", async () => {
+    await expect(readFile(resolve(".openai/hosting.json"), "utf8")).rejects.toThrow();
     const files = (await readdir(resolve("drizzle"))).filter((file) => file.endsWith(".sql"));
     const migration = (await Promise.all(files.map((file) => readFile(resolve("drizzle", file), "utf8")))).join("\n");
     expect(migration).toMatch(/CREATE TRIGGER audit_events_prevent_update/i);

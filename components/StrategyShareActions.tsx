@@ -2,9 +2,18 @@
 
 import { useState } from "react";
 
-export function StrategyShareActions({ botId, botName }: { botId: string; botName: string; via?: string }) {
+export function StrategyShareActions({ botId, botName, sharePath, via }: {
+  botId: string;
+  botName: string;
+  sharePath?: string;
+  via?: string;
+}) {
   const [message, setMessage] = useState("");
-  const shareUrl = () => `${window.location.origin}/bots/${encodeURIComponent(botId)}`;
+  const shareUrl = () => {
+    const url = new URL(sharePath ?? `/bots/${encodeURIComponent(botId)}`, window.location.origin);
+    if (via) url.searchParams.set("via", via);
+    return url.toString();
+  };
   const copy = async () => {
     const url = shareUrl();
     try { await navigator.clipboard.writeText(url); setMessage("分享連結已複製"); }

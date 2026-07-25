@@ -48,7 +48,7 @@ describe("homepage loading performance contracts", () => {
       stat(resolve(process.cwd(), "public/mascots/ai-observer.webp")),
     ]);
 
-    expect(hero).toContain('fetchPriority="high"');
+    expect(hero).toContain("preload");
     expect(hero).toContain('src="/mascots/ai-observer.webp"');
     expect(webp.size).toBeLessThan(png.size * 0.2);
   });

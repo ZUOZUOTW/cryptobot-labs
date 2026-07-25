@@ -22,11 +22,20 @@ export type ManualConnectionFailureReason =
   | "rate_limited"
   | "weex_unavailable"
   | "invalid_weex_response"
+  | "hedge_mode_required"
   | "verification_failed";
 
+class ManualConnectionPolicyError extends Error {
+  constructor(readonly reason: ManualConnectionFailureReason, message: string) {
+    super(message);
+    this.name = "ManualConnectionPolicyError";
+  }
+}
+
 export function manualConnectionFailureReason(error: unknown): ManualConnectionFailureReason {
+  if (error instanceof ManualConnectionPolicyError) return error.reason;
   if (!(error instanceof WeexApiError)) return "verification_failed";
-  if (error.code === "40018") return "ip_not_allowed";
+  if (["40018", "-1056"].includes(error.code ?? "")) return "ip_not_allowed";
   if (["40006", "40009", "40012", "-1040", "-1041", "-1044", "-1047", "-1048", "-1049"]
     .includes(error.code ?? "")) return "invalid_credentials";
   if (error.category === "authentication") return "invalid_credentials";
@@ -83,14 +92,35 @@ export class ManualWeexConnectionService {
       clock.recordServerTime(serverTime, sentAt, receivedAt);
       const client = new WeexPrivateClient({ transport, credentials, clock, now: () => Math.floor(clock.now()),
         maximumGetAttempts: 1 });
-      const demo = await client.verifyAccount({ market: "futures", mode: "futures-demo" });
-      if (demo.readPermission !== true) throw new Error("WEEX futures demo permission is unavailable");
-      let liveReady = false;
-      if (this.options.liveTradingEnabled) {
-        const live = await client.verifyAccount({ market: "futures", mode: "live" });
-        liveReady = live.canTrade === true && live.withdrawalPermission === "absent" && live.positionMode === "hedge";
-        if (!liveReady) throw new Error("WEEX live permissions are unsafe");
+      if (!this.options.liveTradingEnabled) throw new Error("WEEX live trading is unavailable");
+      const [spot, futures] = await Promise.allSettled([
+        client.verifyAccount({ market: "spot", mode: "live" }),
+        client.verifyAccount({ market: "futures", mode: "live" }),
+      ]);
+      const spotSummary = spot.status === "fulfilled" ? spot.value : null;
+      const futuresSummary = futures.status === "fulfilled" ? futures.value : null;
+      const spotReady = spotSummary?.readPermission === true && spotSummary.canTrade === true
+        && spotSummary.withdrawalPermission === "absent";
+      const futuresReady = futuresSummary?.readPermission === true && futuresSummary.canTrade === true
+        && futuresSummary.withdrawalPermission === "absent" && futuresSummary.positionMode === "hedge";
+      const withdrawalAbsent = (spotSummary?.withdrawalPermission ?? futuresSummary?.withdrawalPermission) === "absent"
+        && spotSummary?.withdrawalPermission !== "present" && futuresSummary?.withdrawalPermission !== "present";
+      if (!withdrawalAbsent) {
+        throw new ManualConnectionPolicyError("permission_denied",
+          "The configured WEEX API capability surface is unsafe");
       }
+      if (!spotReady && !futuresReady) {
+        if (futuresSummary?.readPermission === true && futuresSummary.canTrade === true
+          && futuresSummary.positionMode === "one-way") {
+          throw new ManualConnectionPolicyError("hedge_mode_required",
+            "WEEX futures hedge mode is required");
+        }
+        const rejected = [spot, futures].find((result) => result.status === "rejected");
+        if (rejected?.status === "rejected") throw rejected.reason;
+        throw new ManualConnectionPolicyError("permission_denied",
+          "WEEX Spot or Futures trading permission is required");
+      }
+      const liveReady = spotReady || futuresReady;
       const context = Object.freeze({ purpose: "weex_api_credentials", connection_id: connectionId,
         user_id: handoff.userId, version: "1" });
       const envelope = await encryptWeexCredentials({ credentials, context, kms: this.options.kms });
@@ -101,7 +131,13 @@ export class ManualWeexConnectionService {
         credentialEnvelope: envelope,
         credentialContext: context,
         maskedApiKeySuffix: suffix,
-        permissions: Object.freeze({ read: true, spotTrade: false, futuresTrade: true, withdrawal: false }),
+        permissions: Object.freeze({
+          read: true,
+          spotTrade: spotReady,
+          futuresTrade: futuresReady,
+          withdrawal: false,
+          liveVerified: true,
+        }),
         now: (this.options.now ?? Date.now)(),
       });
       return { connectionId, maskedApiKeySuffix: suffix, liveReady };

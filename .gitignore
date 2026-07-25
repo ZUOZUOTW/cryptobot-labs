@@ -17,6 +17,9 @@ package-lock.json
 # Local OS and visual-review artifacts
 **/.DS_Store
 /audit-*/
+/audit-*.png
+/.tmp-*.png
+/outputs/
 /qa-*.png
 /preview/
 

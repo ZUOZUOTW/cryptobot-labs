@@ -36,7 +36,7 @@ export function RunsPanel() {
         {state === "unauthorized" && <p className="runs-empty">登入狀態已過期。 <Link href="/auth?return_to=%2Fruns">重新登入</Link></p>}
         {state === "ready" && runs.length === 0 && <div className="runs-empty"><p>尚無運行。先在組裝車間完成策略與風險設定；建立後一律從模擬運行開始。</p><Link className="button button--primary button--small" href="/workshop">前往組裝車間</Link></div>}
       </div>
-      {state === "ready" && runs.length > 0 && <ul className="run-list" aria-label="我的運行">{runs.map((run) => <li key={run.id}><RunCard run={run} /></li>)}</ul>}
+      {state === "ready" && runs.length > 0 && <ul className="run-list" aria-label="控制台運行紀錄">{runs.map((run) => <li key={run.id}><RunCard run={run} /></li>)}</ul>}
       {state === "ready" && nextCursor && <button className="button button--secondary runs-more" disabled={moreState === "loading"} onClick={() => void load(nextCursor)} type="button">{moreState === "loading" ? "載入更多中…" : moreState === "error" ? "重試載入更多" : "載入更多"}</button>}
     </section>
   );

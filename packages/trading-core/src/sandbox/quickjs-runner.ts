@@ -322,12 +322,12 @@ class QuickJsStrategySandbox implements StrategySandbox {
       return Promise.reject(new SandboxExecutionError("disposed", "Strategy sandbox is disposed"));
     }
 
-    const startedAt = performance.now();
-    const deadlineAt = startedAt + this.budget.deadlineMs;
     const evaluation = this.queue.then(() => {
       if (this.disposed) {
         throw new SandboxExecutionError("disposed", "Strategy sandbox is disposed");
       }
+      const startedAt = performance.now();
+      const deadlineAt = startedAt + this.budget.deadlineMs;
       return this.evaluateIsolated(input, startedAt, deadlineAt);
     });
     this.queue = evaluation.then(

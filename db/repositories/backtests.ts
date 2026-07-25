@@ -3,6 +3,12 @@ import type { BacktestJobCreateDto } from "../../lib/control-plane/types";
 import type { ControlPlaneDatabase, ControlPlaneRunResult } from "../index";
 import { exactInput, hash, id, limit, time } from "./shared";
 
+// A supported 2,000-candle backtest produces over 8,000 JSON nodes because each
+// equity point contains timestamp, equity, and funding fields. Keep the stricter
+// default everywhere else while granting this byte-bounded evidence field enough
+// nodes for the service's documented maximum history window.
+const MAX_EQUITY_CURVE_JSON_NODES = 16_384;
+
 export type BacktestStatus = "queued" | "fetching-data" | "running" | "succeeded" | "failed";
 
 export interface BacktestJobRecord {
@@ -306,7 +312,12 @@ export function createBacktestRepository(database: ControlPlaneDatabase) {
       const fundingJson = safeCanonicalJsonStringify(result.funding, "funding", 65_536);
       const metricsJson = safeCanonicalJsonStringify(result.metrics, "metrics", 65_536);
       const provenanceJson = safeCanonicalJsonStringify(result.provenance, "provenance", 65_536);
-      const equityCurveJson = safeCanonicalJsonStringify(result.equityCurve, "equity curve", 1_048_576);
+      const equityCurveJson = safeCanonicalJsonStringify(
+        result.equityCurve,
+        "equity curve",
+        1_048_576,
+        MAX_EQUITY_CURVE_JSON_NODES,
+      );
       const normalized = {
         market: dataset.market,
         symbol: text(dataset.symbol, "dataset symbol", 64),

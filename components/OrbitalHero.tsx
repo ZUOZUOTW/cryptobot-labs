@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 const DISCLOSURE = "模擬回測資料，不代表未來績效";
@@ -25,14 +26,13 @@ export function OrbitalHero() {
           <span className="ai-observatory__token ai-observatory__token--btc" aria-hidden="true">BTC</span>
           <span className="ai-observatory__token ai-observatory__token--ai" aria-hidden="true">AI</span>
           <span className="ai-observatory__token ai-observatory__token--risk" aria-hidden="true">RISK</span>
-          <img
+          <Image
             alt="親切可愛的 AI 機器人正在分析加密貨幣策略"
             className="ai-observatory__mascot"
-            decoding="async"
-            fetchPriority="high"
-            height="500"
+            height={500}
+            preload
             src="/mascots/ai-observer.webp"
-            width="560"
+            width={560}
           />
           <div className="ai-observatory__caption"><span aria-hidden="true" />AI STRATEGY OBSERVATORY</div>
         </div>

@@ -36,7 +36,7 @@ export default function manifest(): MetadataRoute.Manifest {
     shortcuts: [
       { name: "探索策略", short_name: "探索", url: "/bots" },
       { name: "組裝策略", short_name: "組裝", url: "/workshop" },
-      { name: "我的運行", short_name: "運行", url: "/runs" },
+      { name: "控制台", short_name: "控制台", url: "/runs" },
     ],
   };
 }

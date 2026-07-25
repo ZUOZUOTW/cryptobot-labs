@@ -22,6 +22,16 @@ describe("cloud executor production gates", () => {
       healthPort: 8080 });
   });
 
+  it("allows KMS-encrypted manual API credentials to enable live trading without OAuth", () => {
+    const manual = Object.fromEntries(
+      Object.entries(env).filter(([key]) => key !== "WEEX_CLIENT_ID" && key !== "WEEX_CLIENT_SECRET"),
+    );
+    expect(loadExecutorConfig({ ...manual, LIVE_TRADING_ENABLED: "true" })).toMatchObject({
+      liveTradingEnabled: true,
+      oauthEnabled: false,
+    });
+  });
+
   it("rejects missing KMS, insecure database, and invalid callback configuration", () => {
     expect(() => loadExecutorConfig({ ...env, AWS_KMS_KEY_ID: "alias/not-a-production-arn" })).toThrow(/KMS/);
     expect(() => loadExecutorConfig({ ...env, SUPABASE_DATABASE_URL: "postgres://u:p@example.com/db" })).toThrow(/TLS/);

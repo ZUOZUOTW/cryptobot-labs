@@ -69,7 +69,6 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   if (weexClientId !== null) required({ WEEX_CLIENT_ID: weexClientId }, "WEEX_CLIENT_ID", 256);
   if (weexClientSecret !== null) required({ WEEX_CLIENT_SECRET: weexClientSecret }, "WEEX_CLIENT_SECRET", 512);
   const oauthEnabled = weexClientId !== null && weexClientSecret !== null;
-  if (liveTradingEnabled && !oauthEnabled) throw new Error("LIVE_TRADING_ENABLED requires WEEX OAuth credentials");
   return Object.freeze({ shardId, awsRegion, kmsKeyId, expectedEgressIp, healthPort, publicOrigin, databaseUrl,
     weexClientId, weexClientSecret, weexOAuthRedirectUri, handoffSecret, oauthEnabled, liveTradingEnabled });
 }

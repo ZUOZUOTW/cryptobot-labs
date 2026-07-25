@@ -9,7 +9,7 @@ import { usePlatformAuth } from "./PlatformAuthProvider";
 const PRIMARY_TABS = [
   { href: "/bots", label: "探索策略", icon: FiCompass },
   { href: "/workshop", label: "組裝策略", icon: FiTool },
-  { href: "/runs", label: "我的運行", icon: FiActivity },
+  { href: "/runs", label: "控制台", icon: FiActivity },
   { href: "/favorites", label: "收藏策略", icon: FiStar },
 ] as const;
 
