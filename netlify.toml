@@ -5,6 +5,7 @@
 [build.environment]
   NODE_VERSION = "22.13.0"
   DEMO_MODE = "false"
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL"
 
 [dev]
   command = "pnpm dev"

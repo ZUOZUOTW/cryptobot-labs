@@ -9,6 +9,8 @@ describe("Netlify production build", () => {
     ]);
 
     expect(config).toContain('command = "node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack"');
+    expect(config).toContain('SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL"');
+    expect(config).not.toContain('SECRETS_SCAN_ENABLED = "false"');
     expect(cleaner).toContain('resolve(projectRoot, ".next")');
     expect(cleaner).toContain("await rm(nextOutput, { force: true, recursive: true })");
   });
