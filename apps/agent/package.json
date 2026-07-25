@@ -2,6 +2,8 @@
   "name": "@cryptobot-labs/agent",
   "productName": "CryptoBot Labs Agent",
   "version": "0.1.0",
+  "author": "CryptoBot Labs",
+  "description": "Secure local execution agent for CryptoBot Labs strategies.",
   "private": true,
   "type": "module",
   "main": ".vite/build/main.cjs",
