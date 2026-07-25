@@ -96,7 +96,9 @@ describe("encrypted telemetry buffer", () => {
     const buffer = createTelemetryBuffer(fakeStorage(), createNodeTelemetryFileStore(path));
     await buffer.enqueue(event("event-1"));
     expect((await readFile(path)).toString()).not.toContain("operator-stop");
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
 
     await rename(path, `${path}.bak`);
     await writeFile(`${path}.tmp`, "partial", { mode: 0o600 });

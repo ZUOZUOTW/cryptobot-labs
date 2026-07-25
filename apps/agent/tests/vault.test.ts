@@ -87,7 +87,9 @@ describe("credential vault", () => {
     const vault = createCredentialVault(fakeStorage(0x42), createNodeVaultFileStore(path));
     await vault.save({ apiKey: "api-1111", secretKey: "secret", passphrase: "phrase" });
 
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
     expect((await readFile(path)).toString()).not.toContain("secret");
   });
 
@@ -104,7 +106,9 @@ describe("credential vault", () => {
       secretKey: "second",
       passphrase: "phrase",
     });
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("serializes save, rotation, and erase so older work cannot revive an erased vault", async () => {
@@ -162,7 +166,9 @@ describe("credential vault", () => {
       secretKey: "first",
       passphrase: "phrase",
     });
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
     expect(await readdir(directory)).toEqual(["credentials.bin"]);
   });
 
