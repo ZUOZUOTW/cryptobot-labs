@@ -12,4 +12,13 @@ describe("Netlify production build", () => {
     expect(cleaner).toContain('resolve(projectRoot, ".next")');
     expect(cleaner).toContain("await rm(nextOutput, { force: true, recursive: true })");
   });
+
+  it("renders dynamic social cards without reading public assets from the function filesystem", async () => {
+    const socialImage = await readFile("app/strategies/[slug]/opengraph-image.tsx", "utf8");
+
+    expect(socialImage).toContain("new ImageResponse");
+    expect(socialImage).toContain("<MascotBadge />");
+    expect(socialImage).not.toContain('from "node:fs');
+    expect(socialImage).not.toContain("join(process.cwd()");
+  });
 });
