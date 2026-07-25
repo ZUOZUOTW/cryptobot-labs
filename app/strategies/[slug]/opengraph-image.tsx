@@ -1,6 +1,4 @@
 import { ImageResponse } from "next/og";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { createControlPlaneDatabase } from "@/db";
 import { createStrategyPublicationRepository } from "@/db/repositories";
 import { env } from "@/lib/server/platform-env";
@@ -16,6 +14,77 @@ const percent = (value: string): string => {
   return Number.isFinite(parsed) ? `${parsed >= 0 ? "+" : ""}${(parsed * 100).toFixed(1)}%` : "—";
 };
 
+const MascotBadge = () => (
+  <div
+    aria-hidden="true"
+    style={{
+      alignItems: "center",
+      display: "flex",
+      height: 260,
+      justifyContent: "center",
+      position: "relative",
+      width: 288,
+    }}
+  >
+    <div style={{
+      border: "2px solid rgba(112, 233, 255, .42)",
+      borderRadius: 999,
+      display: "flex",
+      height: 242,
+      position: "absolute",
+      transform: "rotate(-14deg)",
+      width: 242,
+    }} />
+    <div style={{
+      background: "radial-gradient(circle at 50% 38%, #8df1ff 0%, #2bbbd7 46%, #0b526b 100%)",
+      border: "6px solid rgba(211, 251, 255, .92)",
+      borderRadius: 999,
+      boxShadow: "0 20px 54px rgba(58, 219, 255, .34)",
+      display: "flex",
+      height: 190,
+      width: 190,
+    }}>
+      <div style={{
+        alignItems: "center",
+        background: "rgba(4, 25, 39, .84)",
+        border: "2px solid rgba(222, 252, 255, .72)",
+        borderRadius: 42,
+        display: "flex",
+        flexDirection: "column",
+        height: 118,
+        justifyContent: "center",
+        margin: "30px 22px",
+        width: 134,
+      }}>
+        <div style={{ display: "flex", gap: 26 }}>
+          <span style={{ background: "#b8f8ff", borderRadius: 999, display: "flex", height: 18, width: 18 }} />
+          <span style={{ background: "#b8f8ff", borderRadius: 999, display: "flex", height: 18, width: 18 }} />
+        </div>
+        <div style={{
+          background: "linear-gradient(90deg, #5de6ff, #b8f8ff)",
+          borderRadius: 999,
+          display: "flex",
+          height: 7,
+          marginTop: 22,
+          width: 66,
+        }} />
+      </div>
+    </div>
+    <div style={{
+      background: "#e7fdff",
+      border: "5px solid #1f9fbd",
+      borderRadius: 999,
+      boxShadow: "0 0 22px rgba(113, 238, 255, .75)",
+      display: "flex",
+      height: 24,
+      position: "absolute",
+      right: 18,
+      top: 38,
+      width: 24,
+    }} />
+  </div>
+);
+
 export default async function OpenGraphImage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const record = await createStrategyPublicationRepository(
@@ -25,7 +94,6 @@ export default async function OpenGraphImage({ params }: { params: Promise<{ slu
   try { publication = record ? toPublicStrategyPublication(record) : null; }
   catch { publication = null; }
 
-  const mascot = await readFile(join(process.cwd(), "public", "mascots", "ai-builder.png"));
   const name = publication?.name ?? "CryptoBot Labs 公開策略";
   const market = publication?.market === "futures" ? "USDT-M 合約" : "現貨";
   const publisher = publication?.publisherName ?? "CryptoBot Labs";
@@ -101,13 +169,7 @@ export default async function OpenGraphImage({ params }: { params: Promise<{ slu
               由 {publisher} 發布 · 固定版本績效證據
             </div>
           </div>
-          <img
-            alt=""
-            height="260"
-            src={mascot as unknown as string}
-            style={{ filter: "drop-shadow(0 18px 34px rgba(58, 219, 255, .25))", objectFit: "contain" }}
-            width="288"
-          />
+          <MascotBadge />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
