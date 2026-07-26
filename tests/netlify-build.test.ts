@@ -24,6 +24,7 @@ describe("Netlify production build", () => {
     expect(socialImage).toContain("new ImageResponse");
     expect(socialImage).toContain("<MascotBadge />");
     expect(socialImage).toContain("export const revalidate = 3600");
+    expect(socialImage).toContain('"Netlify-CDN-Cache-Control": "public, durable, s-maxage=3600, stale-while-revalidate=86400"');
     expect(publicationLoader).toContain("unstable_cache");
     expect(socialImage).not.toContain('from "node:fs');
     expect(socialImage).not.toContain("join(process.cwd()");

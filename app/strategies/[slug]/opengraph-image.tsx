@@ -7,6 +7,11 @@ export const contentType = "image/png";
 export const runtime = "nodejs";
 export const revalidate = 3600;
 
+const socialCardCacheHeaders = {
+  "Cache-Control": "public, max-age=0, must-revalidate",
+  "Netlify-CDN-Cache-Control": "public, durable, s-maxage=3600, stale-while-revalidate=86400",
+};
+
 const percent = (value: string): string => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? `${parsed >= 0 ? "+" : ""}${(parsed * 100).toFixed(1)}%` : "—";
@@ -189,6 +194,6 @@ export default async function OpenGraphImage({ params }: { params: Promise<{ slu
         </div>
       </div>
     ),
-    size,
+    { ...size, headers: socialCardCacheHeaders },
   );
 }
