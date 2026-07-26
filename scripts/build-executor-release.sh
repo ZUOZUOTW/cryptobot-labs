@@ -40,7 +40,9 @@ install -m 0550 infra/aws-executor/runtime/install-release.sh "${OUTPUT}/install
 install -m 0440 infra/aws-executor/runtime/cryptobot-executor.service "${OUTPUT}/cryptobot-executor.service"
 install -m 0440 infra/aws-executor/runtime/caddy.service "${OUTPUT}/caddy.service"
 install -m 0440 infra/aws-executor/runtime/Caddyfile "${OUTPUT}/Caddyfile"
-printf 'EXECUTOR_BUILD_REVISION=%s\n' "${SOURCE_REVISION}" > "${OUTPUT}/release.env"
-chmod 0440 "${OUTPUT}/release.env"
+release_environment="$(mktemp "${OUTPUT}/.release.env.XXXXXX")"
+printf 'EXECUTOR_BUILD_REVISION=%s\n' "${SOURCE_REVISION}" > "${release_environment}"
+chmod 0440 "${release_environment}"
+mv -f "${release_environment}" "${OUTPUT}/release.env"
 (cd "${OUTPUT}" && shasum -a 256 main.js > main.js.sha256)
 echo "Executor release prepared at ${OUTPUT}"
