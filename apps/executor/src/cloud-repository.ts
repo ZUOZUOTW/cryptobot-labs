@@ -94,6 +94,7 @@ const signedDecimal = (value: unknown): string => {
   return value;
 };
 const CONFIGURATION_HASH = /^[a-f0-9]{64}$/;
+const LEASE_DURATION_MS = 180_000;
 
 export class CloudRuntimeRepository {
   readonly #sql: Database;
@@ -120,12 +121,12 @@ export class CloudRuntimeRepository {
       on conflict(connection_id) do nothing`, [this.shardId, now]);
     const rows = await this.#sql.unsafe(`with claimed as (
       update public.weex_account_snapshots set
-        lease_owner=$1,lease_expires_at=$2::bigint+30000,updated_at=greatest(updated_at,$2::bigint)
+        lease_owner=$1,lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
         where connection_id in (
           select s.connection_id from public.weex_account_snapshots s
           join public.weex_connections c on c.id=s.connection_id and c.user_id=s.user_id
           where c.executor_shard_id=$3 and c.status='active'
-            and (s.observed_at is null or s.observed_at <= $2::bigint-15000)
+            and (s.observed_at is null or s.observed_at <= $2::bigint-60000)
             and (s.lease_expires_at is null or s.lease_expires_at<$2::bigint or s.lease_owner=$1)
           order by coalesce(s.observed_at,0),s.created_at limit $4 for update of s skip locked
         )
@@ -150,6 +151,18 @@ export class CloudRuntimeRepository {
     });
   }
 
+  async renewAccountLease(
+    account: ClaimedAccountSnapshot,
+    owner: string,
+    now: number,
+  ): Promise<boolean> {
+    const result = await this.#sql.unsafe(`update public.weex_account_snapshots
+      set lease_expires_at=$4::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$4::bigint)
+      where connection_id=$1 and user_id=$2 and lease_owner=$3`,
+    [account.connectionId, account.userId, owner, now]);
+    return (result.count ?? 0) > 0;
+  }
+
   async recordConnectionPermissions(
     account: ClaimedAccountSnapshot,
     owner: string,
@@ -168,10 +181,24 @@ export class CloudRuntimeRepository {
 
   async claimRuns(owner: string, now: number, limit = 10): Promise<CloudRun[]> {
     const rows = await this.#sql.unsafe(`update public.cloud_strategy_runs set lease_owner=$1,
-      lease_expires_at=$2::bigint+30000,updated_at=greatest(updated_at,$2::bigint)
-      where id in (select id from public.cloud_strategy_runs
-        where executor_shard_id=$3 and state='running' and (lease_expires_at is null or lease_expires_at<$2::bigint or lease_owner=$1)
-        order by coalesce(last_evaluated_at,0),created_at limit $4 for update skip locked)
+      lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
+      where id in (select r.id from public.cloud_strategy_runs r
+        cross join lateral (values (case r.config_json->>'timeframe'
+          when '1m' then 60000::bigint when '5m' then 300000::bigint
+          when '15m' then 900000::bigint when '30m' then 1800000::bigint
+          when '1h' then 3600000::bigint when '4h' then 14400000::bigint
+          when '1d' then 86400000::bigint else 60000::bigint end)) schedule(interval_ms)
+        where r.executor_shard_id=$3 and r.state='running'
+          and (r.lease_expires_at is null or r.lease_expires_at<$2::bigint or r.lease_owner=$1)
+          and (r.last_candle_at is null
+            or r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1
+            or exists (select 1 from private.cloud_order_intents o where o.run_id=r.id and (
+              o.status in ('claimed','unknown')
+              or (o.status='acknowledged' and coalesce(o.error_code,'') not in
+                ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+              or o.candle_close_at>coalesce(r.last_candle_at,-1)
+            )))
+        order by coalesce(r.last_evaluated_at,0),r.created_at limit $4 for update of r skip locked)
       returning id,user_id,connection_id,mode,version,configuration_hash,config_json,risk_json,last_candle_at,last_evaluated_at,
         consecutive_failures,positions_json`,
     [owner, now, this.shardId, limit]);
@@ -190,6 +217,13 @@ export class CloudRuntimeRepository {
         consecutiveFailures: integer(value.consecutive_failures),
         positions: array(value.positions_json, "run positions") };
     });
+  }
+
+  async renewRunLease(runId: string, owner: string, now: number): Promise<boolean> {
+    const result = await this.#sql.unsafe(`update public.cloud_strategy_runs
+      set lease_expires_at=$3::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$3::bigint)
+      where id=$1 and lease_owner=$2`, [runId, owner, now]);
+    return (result.count ?? 0) > 0;
   }
 
   async credential(connectionId: string, userId: string): Promise<StoredCredential> {

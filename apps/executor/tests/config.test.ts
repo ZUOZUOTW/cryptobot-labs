@@ -19,7 +19,16 @@ const env = {
 describe("cloud executor production gates", () => {
   it("accepts a complete fail-closed configuration", () => {
     expect(loadExecutorConfig(env)).toMatchObject({ shardId: env.EXECUTOR_SHARD_ID, liveTradingEnabled: false,
-      healthPort: 8080 });
+      healthPort: 8080, accountConcurrency: 4, strategyConcurrency: 8, tickIntervalMs: 2_000 });
+  });
+
+  it("bounds worker concurrency and scheduler cadence", () => {
+    expect(() => loadExecutorConfig({ ...env, EXECUTOR_STRATEGY_CONCURRENCY: "33" }))
+      .toThrow(/STRATEGY_CONCURRENCY/);
+    expect(() => loadExecutorConfig({ ...env, EXECUTOR_ACCOUNT_CONCURRENCY: "0" }))
+      .toThrow(/ACCOUNT_CONCURRENCY/);
+    expect(() => loadExecutorConfig({ ...env, EXECUTOR_TICK_INTERVAL_MS: "100" }))
+      .toThrow(/TICK_INTERVAL/);
   });
 
   it("allows KMS-encrypted manual API credentials to enable live trading without OAuth", () => {

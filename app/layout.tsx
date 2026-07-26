@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { headers } from "next/headers";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { RouteCompanion } from "@/components/RouteCompanion";
@@ -10,13 +9,9 @@ import { I18nProvider } from "@/components/I18nProvider";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { PwaRegistrar } from "@/components/PwaRegistrar";
 import { demoModeEnabled } from "@/lib/server/demo-mode";
-import { getCurrentSupabaseUser } from "@/lib/server/supabase-auth";
-import { localeDirection, openGraphLocale, resolveRequestLocale } from "@/lib/i18n/locales";
-import { translateMessage } from "@/lib/i18n/messages";
+import { DEFAULT_LOCALE, localeDirection } from "@/lib/i18n/locales";
 import {
   buildSiteMetadata,
-  requestOrigin,
-  SOCIAL_IMAGE_ALT,
   SITE_DESCRIPTION,
   SITE_TITLE,
 } from "@/lib/site-metadata";
@@ -33,21 +28,19 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const productMetadata = {
+const metadataOrigin = (() => {
+  try {
+    const value = new URL(process.env.PUBLIC_ORIGIN ?? "https://www.cryptobotlabs.app");
+    return value.protocol === "https:" && !value.username && !value.password ? value : null;
+  } catch {
+    return null;
+  }
+})();
+
+export const metadata: Metadata = buildSiteMetadata(metadataOrigin, {
   title: SITE_TITLE,
   description: SITE_DESCRIPTION,
-} as const;
-
-export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const locale = resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
-  return buildSiteMetadata(requestOrigin(requestHeaders), {
-    title: translateMessage(locale, productMetadata.title),
-    description: translateMessage(locale, productMetadata.description),
-    imageAlt: translateMessage(locale, SOCIAL_IMAGE_ALT),
-    locale: openGraphLocale(locale),
-  });
-}
+});
 
 export default async function RootLayout({
   children,
@@ -55,12 +48,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const demoMode = demoModeEnabled();
-  const requestHeaders = await headers();
-  const initialLocale = resolveRequestLocale(
-    requestHeaders.get("cookie"),
-    requestHeaders.get("accept-language"),
-  );
-  const initialUser = demoMode ? null : await getCurrentSupabaseUser();
+  const initialLocale = DEFAULT_LOCALE;
   return (
     <html dir={localeDirection(initialLocale)} lang={initialLocale} suppressHydrationWarning>
       <head>
@@ -74,7 +62,7 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <I18nProvider initialLocale={initialLocale}>
-          <PlatformAuthProvider mode={demoMode ? "demo" : "production"} initialUser={initialUser}>
+          <PlatformAuthProvider mode={demoMode ? "demo" : "production"} initialUser={null}>
             <DemoModeBanner />
             <SiteHeader />
             <main className="site-main" id="main-content" tabIndex={-1}>

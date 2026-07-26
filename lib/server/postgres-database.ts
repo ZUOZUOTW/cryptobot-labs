@@ -4,6 +4,14 @@ import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement
 type AnySql = Sql<{ bigint: number }>;
 type QueryClient = Pick<AnySql, "unsafe">;
 type QueryResult = unknown[] & { count?: number };
+type ClientRegistry = Map<string, AnySql>;
+type RegistryGlobal = typeof globalThis & { cryptobotPostgresServerlessClients?: ClientRegistry };
+
+const clientRegistry = (): ClientRegistry => {
+  const root = globalThis as RegistryGlobal;
+  root.cryptobotPostgresServerlessClients ??= new Map();
+  return root.cryptobotPostgresServerlessClients;
+};
 
 const quoteCamelCaseAliases = (sql: string): string =>
   sql.replace(/\bAS\s+([a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b/gi, 'AS "$1"');
@@ -71,13 +79,25 @@ export const createPostgresControlPlaneDatabase = (databaseUrl: unknown): Contro
   if (typeof databaseUrl !== "string" || !/^postgres(?:ql)?:\/\/.+/.test(databaseUrl)) {
     throw new Error("A D1-compatible control-plane binding or Supabase DATABASE_URL is required");
   }
+  const parsed = new URL(databaseUrl);
+  if (parsed.hostname.endsWith(".pooler.supabase.com") && (parsed.port === "" || parsed.port === "5432")) {
+    parsed.port = "6543";
+  }
+  const normalizedUrl = parsed.toString();
   const bigint = { to: 20, from: [20], serialize: (value: number) => String(value), parse: (value: string) => Number(value) };
-  return new PostgresControlPlaneDatabase(postgres(databaseUrl, {
-    max: 1,
-    idle_timeout: 20,
-    connect_timeout: 10,
-    prepare: false,
-    ssl: "require",
-    types: { bigint },
-  }));
+  const registry = clientRegistry();
+  let client = registry.get(normalizedUrl);
+  if (!client) {
+    client = postgres(normalizedUrl, {
+      max: 2,
+      idle_timeout: 10,
+      connect_timeout: 10,
+      max_lifetime: 600,
+      prepare: false,
+      ssl: "require",
+      types: { bigint },
+    });
+    registry.set(normalizedUrl, client);
+  }
+  return new PostgresControlPlaneDatabase(client);
 };

@@ -18,6 +18,9 @@ export interface ExecutorConfig {
   readonly handoffSecret: string;
   readonly oauthEnabled: boolean;
   readonly liveTradingEnabled: boolean;
+  readonly accountConcurrency: number;
+  readonly strategyConcurrency: number;
+  readonly tickIntervalMs: number;
 }
 
 function required(env: ExecutorEnvironment, name: string, maximum = 4_096): string {
@@ -30,6 +33,20 @@ function https(value: string, name: string): string {
   const url = new URL(value);
   if (url.protocol !== "https:" || url.username || url.password || url.hash || url.search) throw new Error(`${name} must be HTTPS`);
   return url.toString().replace(/\/$/, "");
+}
+
+function boundedInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  name: string,
+): number {
+  const parsed = Number(value ?? String(fallback));
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} is invalid`);
+  }
+  return parsed;
 }
 
 export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
@@ -69,8 +86,15 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   if (weexClientId !== null) required({ WEEX_CLIENT_ID: weexClientId }, "WEEX_CLIENT_ID", 256);
   if (weexClientSecret !== null) required({ WEEX_CLIENT_SECRET: weexClientSecret }, "WEEX_CLIENT_SECRET", 512);
   const oauthEnabled = weexClientId !== null && weexClientSecret !== null;
+  const accountConcurrency = boundedInteger(env.EXECUTOR_ACCOUNT_CONCURRENCY, 4, 1, 16,
+    "EXECUTOR_ACCOUNT_CONCURRENCY");
+  const strategyConcurrency = boundedInteger(env.EXECUTOR_STRATEGY_CONCURRENCY, 8, 1, 32,
+    "EXECUTOR_STRATEGY_CONCURRENCY");
+  const tickIntervalMs = boundedInteger(env.EXECUTOR_TICK_INTERVAL_MS, 2_000, 500, 60_000,
+    "EXECUTOR_TICK_INTERVAL_MS");
   return Object.freeze({ shardId, awsRegion, kmsKeyId, expectedEgressIp, healthPort, publicOrigin, databaseUrl,
-    weexClientId, weexClientSecret, weexOAuthRedirectUri, handoffSecret, oauthEnabled, liveTradingEnabled });
+    weexClientId, weexClientSecret, weexOAuthRedirectUri, handoffSecret, oauthEnabled, liveTradingEnabled,
+    accountConcurrency, strategyConcurrency, tickIntervalMs });
 }
 
 export async function assertFixedEgressIp(expected: string, fetcher: typeof fetch = fetch): Promise<void> {

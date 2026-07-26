@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { signOutDemo, useDemoUser } from "../lib/demo-auth";
 import type { PlatformUser } from "../lib/server/supabase-auth";
 
@@ -14,7 +14,29 @@ export function PlatformAuthProvider({ mode, initialUser, children }: {
   initialUser: PlatformUser | null;
   children: ReactNode;
 }) {
-  return <PlatformAuthContext.Provider value={{ mode, user: initialUser }}>{children}</PlatformAuthContext.Provider>;
+  const [user, setUser] = useState(initialUser);
+  useEffect(() => {
+    if (mode !== "production" || initialUser) return;
+    const controller = new AbortController();
+    void fetch("/api/auth/session", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) return;
+      const body = await response.json() as { user?: unknown };
+      const candidate = body.user;
+      if (!candidate || typeof candidate !== "object") return;
+      const value = candidate as Record<string, unknown>;
+      if (typeof value.id === "string" && typeof value.email === "string"
+        && typeof value.displayName === "string") {
+        setUser({ id: value.id, email: value.email, displayName: value.displayName });
+      }
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [initialUser, mode]);
+  return <PlatformAuthContext.Provider value={{ mode, user }}>{children}</PlatformAuthContext.Provider>;
 }
 
 export function usePlatformAuth(): PlatformAuthValue {
