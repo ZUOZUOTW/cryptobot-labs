@@ -1,4 +1,4 @@
-import type { BotDefinition, Market, RiskLevel, StrategyBlock } from "../lib/types";
+import type { BotDefinition, Market, RiskLevel, StrategyBlock, TradeDirection } from "../lib/types";
 import { cloneStrategyBlock } from "./strategies";
 
 const DISCLAIMER = "模擬回測資料，不代表未來績效" as const;
@@ -39,7 +39,7 @@ type Seed = {
   sharpe: number; trades: number; stability: number; curve: number[];
   explanation: string; suitableFor: string; riskNote: string;
   annualizedReturn?: number; profitFactor?: number; runningDays?: number;
-  timeframe?: string; logicMode?: "all" | "any"; leverage?: number; blocks?: BlockSeed[];
+  timeframe?: string; logicMode?: "all" | "any"; tradeDirection?: TradeDirection; leverage?: number; blocks?: BlockSeed[];
 };
 
 const makeBot = (seed: Seed): BotDefinition => ({
@@ -50,6 +50,7 @@ const makeBot = (seed: Seed): BotDefinition => ({
   symbol: "BTCUSDT",
   timeframe: seed.timeframe ?? (seed.market === "spot" ? "4h" : "1h"),
   logicMode: seed.logicMode ?? "all",
+  tradeDirection: seed.tradeDirection ?? (seed.market === "spot" ? "long" : "both"),
   leverage: seed.market === "spot" ? 1 : (seed.leverage ?? 3),
   blocks: makeBlocks(seed),
   description: seed.description,

@@ -2,6 +2,7 @@ export type Market = "spot" | "futures";
 export type RiskLevel = "低" | "中" | "高";
 export type StrategyGroup = "entry" | "confirm" | "exit" | "position" | "risk";
 export type LogicMode = "all" | "any";
+export type TradeDirection = "long" | "short" | "both";
 
 export interface EquityPoint { label: string; value: number }
 export interface BotMetrics {
@@ -39,9 +40,20 @@ export interface BotConfig {
   symbol: string;
   timeframe: string;
   logicMode: LogicMode;
+  /**
+   * Explicit entry-side policy. Older saved strategies omit this field and
+   * resolve to long-only for spot or both directions for futures.
+   */
+  tradeDirection?: TradeDirection;
   leverage: number;
   blocks: StrategyBlock[];
   source?: string;
+}
+export interface DirectionalBacktestMetrics {
+  longTrades: number;
+  shortTrades: number;
+  longNetPnl: number;
+  shortNetPnl: number;
 }
 export interface BacktestReport {
   seed: string;
@@ -50,6 +62,7 @@ export interface BacktestReport {
   equityCurve: EquityPoint[];
   disclaimer: PerformanceDisclaimer;
   evidence?: WeexHistoricalEvidence;
+  directionalMetrics?: DirectionalBacktestMetrics;
 }
 export type PerformanceDisclaimer =
   | "模擬回測資料，不代表未來績效"

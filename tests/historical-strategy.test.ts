@@ -304,9 +304,9 @@ describe("visual historical strategy evaluator", () => {
       equity: "1000", dayStartEquity: "1000", utcDay: "1970-01-01",
       position: { side: "short", entryPrice: "100", peakPrice: "105", troughPrice: "95", quantity: "1", usedMargin: "50", layerCount: 1 },
     });
-    let takeProfit = withBlocks(["dca", "take-profit"], "futures");
+    let takeProfit = withBlocks(["grid", "take-profit"], "futures");
     takeProfit = setParameter(takeProfit, "take-profit", "takeProfit", 5);
-    let stopLoss = withBlocks(["dca", "stop-loss"], "futures");
+    let stopLoss = withBlocks(["grid", "stop-loss"], "futures");
     stopLoss = setParameter(stopLoss, "stop-loss", "stopLoss", 5);
     expect(await createVisualHistoricalEvaluator(takeProfit).evaluate(snapshot(95))).toMatchObject({ action: "close", reason: "take-profit" });
     expect(await createVisualHistoricalEvaluator(stopLoss).evaluate(snapshot(105))).toMatchObject({ action: "close", reason: "stop-loss" });
@@ -351,5 +351,46 @@ describe("visual historical strategy evaluator", () => {
     const spot = { ...futures, market: "spot" as const, leverage: 1 };
     expect((await createVisualHistoricalEvaluator(futures).evaluate(input(candles([100, 102]), "futures"))).action).toBe("sell");
     expect((await createVisualHistoricalEvaluator(spot).evaluate(input(candles([100, 102]), "spot"))).action).toBe("hold");
+  });
+
+  it("enforces long-only, short-only, and bidirectional futures entry policies", async () => {
+    let base = withBlocks(["grid"], "futures");
+    base = setParameter(setParameter(base, "grid", "gridCount", 2), "grid", "range", 2);
+    const bullish = input(candles([100, 98]), "futures");
+    const bearish = input(candles([100, 102]), "futures");
+
+    expect(await createVisualHistoricalEvaluator({ ...base, tradeDirection: "long" }).evaluate(bearish))
+      .toMatchObject({ action: "hold", reason: "trade-direction:long:entry-suppressed" });
+    expect(await createVisualHistoricalEvaluator({ ...base, tradeDirection: "short" }).evaluate(bullish))
+      .toMatchObject({ action: "hold", reason: "trade-direction:short:entry-suppressed" });
+    expect((await createVisualHistoricalEvaluator({ ...base, tradeDirection: "short" }).evaluate(bearish)).action)
+      .toBe("sell");
+    expect((await createVisualHistoricalEvaluator({ ...base, tradeDirection: "both" }).evaluate(bullish)).action)
+      .toBe("buy");
+    expect((await createVisualHistoricalEvaluator({ ...base, tradeDirection: "both" }).evaluate(bearish)).action)
+      .toBe("sell");
+  });
+
+  it("closes a non-layered position before a reverse-direction entry", async () => {
+    let candidate = withBlocks(["rsi"], "futures");
+    candidate = setParameter(setParameter(candidate, "rsi", "period", 2), "rsi", "overbought", 70);
+    const portfolio = {
+      equity: "1000",
+      dayStartEquity: "1000",
+      utcDay: "1970-01-01",
+      position: {
+        side: "long" as const,
+        entryPrice: "100",
+        peakPrice: "120",
+        troughPrice: "95",
+        quantity: "1",
+        usedMargin: "50",
+        layerCount: 1,
+      },
+    };
+
+    expect(await createVisualHistoricalEvaluator({ ...candidate, tradeDirection: "both" })
+      .evaluate(input(candles([100, 110, 120, 115]), "futures", portfolio)))
+      .toMatchObject({ action: "close", reason: "entry:opposite-signal" });
   });
 });

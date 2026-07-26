@@ -58,6 +58,11 @@ export function createPaperRuntime(options: PaperRuntimeOptions) {
   const runtime = options.source === undefined || options.source === null
     ? new VisualExecutionRuntime({ evaluator: createVisualStrategyEvaluator(options.config),
       coordinator: fills, audit: options.audit })
-    : new ExecutionRuntime({ worker: options.worker ?? new StrategyWorker(), coordinator: fills, audit: options.audit });
+    : new ExecutionRuntime({
+      worker: options.worker ?? new StrategyWorker(),
+      coordinator: fills,
+      audit: options.audit,
+      tradeDirection: options.config.tradeDirection,
+    });
   return Object.freeze({ runtime, coordinator, circuitBreaker, exchange });
 }

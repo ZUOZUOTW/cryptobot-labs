@@ -182,6 +182,7 @@ const preset = (
   symbol: "BTCUSDT",
   timeframe,
   logicMode: "all",
+  tradeDirection: market === "spot" ? "long" : "both",
   leverage,
   blocks: blockIds.map(cloneStrategyBlock),
 });

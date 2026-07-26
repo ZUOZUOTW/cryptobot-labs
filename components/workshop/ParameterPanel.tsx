@@ -8,6 +8,7 @@ import {
   type WeexMarketCatalog,
 } from "../../lib/weex-market-catalog";
 import type { BotConfig } from "../../lib/types";
+import { resolvedTradeDirection } from "../../lib/trade-direction";
 import { TradingPairCombobox } from "./TradingPairCombobox";
 
 const commonParameterValue = (blockId: string, parameterKey: string): number | undefined => (
@@ -18,6 +19,12 @@ const commonParameterValue = (blockId: string, parameterKey: string): number | u
 const MARKET_OPTIONS = [
   { value: "spot", label: "現貨", detail: "資產持有 · 1×" },
   { value: "futures", label: "合約", detail: "多空交易 · 可調槓桿" },
+] as const;
+
+const TRADE_DIRECTION_OPTIONS = [
+  { value: "long", label: "只做多", detail: "多頭訊號開倉 · 空頭訊號平倉" },
+  { value: "both", label: "多空雙向", detail: "多頭開多、空頭開空 · 反向先平倉" },
+  { value: "short", label: "只做空", detail: "空頭訊號開倉 · 多頭訊號平倉" },
 ] as const;
 
 const TIMEFRAME_OPTIONS = [
@@ -62,7 +69,7 @@ function ResetIcon() {
 
 interface ParameterPanelProps {
   config: BotConfig;
-  onConfigField: <Key extends keyof Pick<BotConfig, "name" | "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
+  onConfigField: <Key extends keyof Pick<BotConfig, "name" | "market" | "symbol" | "timeframe" | "logicMode" | "tradeDirection" | "leverage">>(
     key: Key,
     value: BotConfig[Key],
   ) => void;
@@ -82,6 +89,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
     [config.symbol, pairs],
   );
   const maximumLeverage = config.market === "spot" ? 1 : selectedPair?.maxLeverage ?? 1;
+  const tradeDirection = resolvedTradeDirection(config);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "test") return;
@@ -162,6 +170,32 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
               </button>
             ))}
           </div>
+        </div>
+        <div className="market-control market-control--visual market-control--direction">
+          <span className="market-control__label">交易方向</span>
+          <div aria-label="交易方向" className="visual-choice-group visual-choice-group--direction" role="group">
+            {TRADE_DIRECTION_OPTIONS.map((option) => {
+              const disabled = config.market === "spot" && option.value !== "long";
+              return (
+                <button
+                  aria-pressed={tradeDirection === option.value}
+                  data-choice={option.value}
+                  disabled={disabled}
+                  key={option.value}
+                  onClick={() => onConfigField("tradeDirection", option.value)}
+                  type="button"
+                >
+                  <strong>{option.label}</strong>
+                  <small>{option.detail}</small>
+                </button>
+              );
+            })}
+          </div>
+          <small className="trade-direction-note" role="note">
+            {config.market === "spot"
+              ? "現貨只允許做多；切換至合約後可選擇只做空或多空雙向。"
+              : "方向限制會套用至視覺化與 JavaScript 策略、歷史回測及執行訊號。"}
+          </small>
         </div>
         <div className="market-control market-control--pair">
           <span className="market-control__label">交易對</span>

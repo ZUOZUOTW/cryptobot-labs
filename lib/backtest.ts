@@ -1,5 +1,6 @@
 import type { BacktestReport, BotConfig, BotMetrics, EquityPoint } from "./types";
 import { validateConfig } from "./strategy-validation";
+import { resolvedTradeDirection } from "./trade-direction";
 
 const DISCLAIMER = "模擬回測資料，不代表未來績效" as const;
 const MONTHS = 36;
@@ -19,7 +20,10 @@ const stableValue = (value: unknown): unknown => {
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
 
-export const backtestConfigFingerprint = (config: BotConfig): string => stableStringify(config);
+export const backtestConfigFingerprint = (config: BotConfig): string => stableStringify({
+  ...config,
+  tradeDirection: resolvedTradeDirection(config),
+});
 
 const hashString = (source: string): number => {
   let hash = 0x811c9dc5;

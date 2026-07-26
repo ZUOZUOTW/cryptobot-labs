@@ -14,6 +14,7 @@ import { loadDraft, saveDraft } from "../../lib/storage";
 import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "../../lib/types";
 import { validateConfig } from "../../lib/strategy-validation";
 import { captureAttribution } from "../../lib/attribution";
+import { resolvedTradeDirection } from "../../lib/trade-direction";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -33,6 +34,7 @@ const configFromBot = (bot: BotDefinition): BotConfig => ({
   symbol: bot.symbol,
   timeframe: bot.timeframe,
   logicMode: bot.logicMode,
+  tradeDirection: resolvedTradeDirection(bot),
   leverage: bot.leverage,
   blocks: bot.blocks.map(cloneBlock),
   ...(bot.source === undefined ? {} : { source: bot.source }),
@@ -133,11 +135,13 @@ export default function WorkshopPage() {
       )),
     } : block),
   }));
-  const updateField = <Key extends keyof Pick<BotConfig, "name" | "market" | "symbol" | "timeframe" | "logicMode" | "leverage">>(
+  const updateField = <Key extends keyof Pick<BotConfig, "name" | "market" | "symbol" | "timeframe" | "logicMode" | "tradeDirection" | "leverage">>(
     key: Key,
     value: BotConfig[Key],
   ) => updateConfig((current) => {
-    if (key === "market" && value === "spot") return { ...current, market: "spot", leverage: 1 };
+    if (key === "market" && value === "spot") {
+      return { ...current, market: "spot", tradeDirection: "long", leverage: 1 };
+    }
     return { ...current, [key]: value };
   });
 
