@@ -226,42 +226,22 @@ export async function executeCloudOrder(input: {
   symbol: string;
   now: number;
 }): Promise<"completed" | "deferred"> {
+  if (!input.claim.fresh) {
+    return settleBlockingCloudOrder({
+      repository: input.repository,
+      client: input.client,
+      run: input.run,
+      owner: input.owner,
+      order: input.claim,
+      target: input.target,
+      symbol: input.symbol,
+      now: input.now,
+    });
+  }
   const finish = async (signal: unknown): Promise<"completed"> => {
     await input.repository.complete(input.run, input.owner, input.candleCloseAt, signal, input.now);
     return "completed";
   };
-  if (!input.claim.fresh) {
-    const existing = await input.client.findOrderByClientOrderId({
-      target: input.target,
-      symbol: input.symbol,
-      clientOrderId: input.claim.clientOrderId,
-      ...(input.claim.exchangeOrderId ? { exchangeOrderId: input.claim.exchangeOrderId } : {}),
-    });
-    if (existing) {
-      await input.repository.recordOrder({
-        runId: input.run.id,
-        candleCloseAt: input.candleCloseAt,
-        status: "acknowledged",
-        intent: input.intent,
-        exchangeOrderId: existing.exchangeOrderId,
-        now: input.now,
-      });
-      return finish(input.signal);
-    }
-    if (input.now - input.claim.createdAt < ORDER_RECONCILIATION_GRACE_MS) {
-      await input.repository.release(input.run.id, input.owner, input.now);
-      return "deferred";
-    }
-    await input.repository.recordOrder({
-      runId: input.run.id,
-      candleCloseAt: input.candleCloseAt,
-      status: "rejected",
-      intent: input.intent,
-      errorCode: "stale_claim_no_exchange_order",
-      now: input.now,
-    });
-    return finish({ ...input.signal, orderSkipped: "stale_claim_no_exchange_order" });
-  }
   if (!input.decision.allowed) {
     await input.repository.recordOrder({
       runId: input.run.id,
@@ -301,6 +281,78 @@ export async function executeCloudOrder(input: {
     return "deferred";
   }
   return finish(input.signal);
+}
+
+export async function settleBlockingCloudOrder(input: {
+  repository: CloudRuntimeRepository;
+  client: Pick<WeexPrivateClient, "findOrderByClientOrderId">;
+  run: CloudRun;
+  owner: string;
+  order: ClaimedOrder;
+  target: { market: "spot"; mode: "live" } | { market: "futures"; mode: "futures-demo" | "live" };
+  symbol: string;
+  now: number;
+}): Promise<"completed" | "deferred"> {
+  const finish = async (signal: unknown): Promise<"completed"> => {
+    await input.repository.complete(
+      input.run,
+      input.owner,
+      input.order.candleCloseAt,
+      signal,
+      input.now,
+    );
+    return "completed";
+  };
+  if (input.order.status === "risk-rejected" || input.order.status === "rejected") {
+    return finish(input.order.signal);
+  }
+  const existing = await input.client.findOrderByClientOrderId({
+    target: input.target,
+    symbol: input.symbol,
+    clientOrderId: input.order.clientOrderId,
+    ...(input.order.exchangeOrderId ? { exchangeOrderId: input.order.exchangeOrderId } : {}),
+  });
+  if (existing) {
+    const partiallyFilled = decimalCompare(existing.cumulativeFilledQuantity, "0") > 0;
+    const exchangeState = existing.status === "FILLED"
+      ? { status: "acknowledged" as const, errorCode: "exchange_order_filled" }
+      : existing.status === "CANCELED" && partiallyFilled
+        ? { status: "acknowledged" as const, errorCode: "exchange_order_cancelled_partially_filled" }
+        : existing.status === "CANCELED"
+          ? { status: "rejected" as const, errorCode: "exchange_order_cancelled" }
+          : existing.status === "REJECTED"
+            ? { status: "rejected" as const, errorCode: "exchange_order_rejected" }
+            : existing.status === "PARTIALLY_FILLED"
+              ? { status: "acknowledged" as const, errorCode: "exchange_order_partially_filled" }
+              : { status: "acknowledged" as const, errorCode: "exchange_order_open" };
+    await input.repository.recordOrder({
+      runId: input.run.id,
+      candleCloseAt: input.order.candleCloseAt,
+      status: exchangeState.status,
+      ...(input.order.intent ? { intent: input.order.intent } : {}),
+      exchangeOrderId: existing.exchangeOrderId,
+      errorCode: exchangeState.errorCode,
+      now: input.now,
+    });
+    return finish(input.order.signal);
+  }
+  if (input.order.status === "acknowledged") {
+    await input.repository.release(input.run.id, input.owner, input.now);
+    return "deferred";
+  }
+  if (input.now - input.order.createdAt < ORDER_RECONCILIATION_GRACE_MS) {
+    await input.repository.release(input.run.id, input.owner, input.now);
+    return "deferred";
+  }
+  await input.repository.recordOrder({
+    runId: input.run.id,
+    candleCloseAt: input.order.candleCloseAt,
+    status: "rejected",
+    ...(input.order.intent ? { intent: input.order.intent } : {}),
+    errorCode: "stale_claim_no_exchange_order",
+    now: input.now,
+  });
+  return finish({ ...input.order.signal, orderSkipped: "stale_claim_no_exchange_order" });
 }
 const trackedSpotPosition = (
   storedPositions: readonly unknown[],
@@ -562,6 +614,7 @@ export class CloudStrategyRuntime {
     if (config.market === "spot" && run.mode !== "live") {
       throw new CloudRunExecutionError("unsupported_market_mode", "runtime", true);
     }
+    const blockingOrder = await this.options.repository.blockingOrder(run.id, run.lastCandleAt);
     const interval = parseIntervalMs(config.timeframe);
     const now = (this.options.now ?? Date.now)();
     const endTime = Math.floor(now / interval) * interval;
@@ -576,7 +629,7 @@ export class CloudStrategyRuntime {
     }));
     const candles = dataset.candles.slice(-300);
     const latest = candles.at(-1);
-    if (!latest || latest.closeTime <= (run.lastCandleAt ?? -1)) {
+    if (!blockingOrder && (!latest || latest.closeTime <= (run.lastCandleAt ?? -1))) {
       await this.options.repository.release(run.id, this.#owner, (this.options.now ?? Date.now)());
       return;
     }
@@ -609,7 +662,23 @@ export class CloudStrategyRuntime {
         return { rules, verifiedAt: (this.options.now ?? Date.now)() };
       }, now: () => Math.floor(clock.now()), maximumGetAttempts: SAFE_READ_ATTEMPTS });
     const verification = await client.verifyAccount(target);
-    if (verification.readPermission !== true || verification.canTrade !== true) {
+    if (verification.readPermission !== true) {
+      throw new CloudRunExecutionError("live_api_permission_required", "account", true);
+    }
+    if (blockingOrder) {
+      await settleBlockingCloudOrder({
+        repository: this.options.repository,
+        client,
+        run,
+        owner: this.#owner,
+        order: blockingOrder,
+        target,
+        symbol: config.symbol,
+        now: Math.floor(clock.now()),
+      });
+      return;
+    }
+    if (verification.canTrade !== true) {
       throw new CloudRunExecutionError("live_api_permission_required", "account", true);
     }
     if (verification.withdrawalPermission !== "absent") {
@@ -617,6 +686,10 @@ export class CloudStrategyRuntime {
     }
     if (config.market === "futures" && run.mode === "live" && verification.positionMode !== "hedge") {
       throw new CloudRunExecutionError("hedge_mode_required", "account", true);
+    }
+    if (!latest || latest.closeTime <= (run.lastCandleAt ?? -1)) {
+      await this.options.repository.release(run.id, this.#owner, Math.floor(clock.now()));
+      return;
     }
     const account = await client.getAccountSnapshot(target);
     const futuresPositions = account.positions

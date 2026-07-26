@@ -18,7 +18,10 @@ export interface ClaimedOrder {
   status: "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
   exchangeOrderId: string | null;
   clientOrderId: string;
+  candleCloseAt: number;
   createdAt: number;
+  signal: Readonly<Record<string, unknown>>;
+  intent: Readonly<Record<string, unknown>> | null;
   fresh: boolean;
 }
 export interface AccountSnapshot {
@@ -63,6 +66,8 @@ const object = (value: unknown, label: string): Record<string, unknown> => {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label} is invalid`);
   return parsed as Record<string, unknown>;
 };
+const nullableObject = (value: unknown, label: string): Record<string, unknown> | null =>
+  value === null ? null : object(value, label);
 const array = (value: unknown, label: string): readonly unknown[] => {
   const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
   if (!Array.isArray(parsed)) throw new Error(`${label} is invalid`);
@@ -239,6 +244,21 @@ export class CloudRuntimeRepository {
     return acknowledged;
   }
 
+  async blockingOrder(runId: string, lastCandleAt: number | null): Promise<ClaimedOrder | null> {
+    const rows = await this.#sql.unsafe(`select status,exchange_order_id,client_order_id,candle_close_at,
+      created_at,signal_json,intent_json,false as fresh
+      from private.cloud_order_intents
+      where run_id=$1 and (
+        status in ('claimed','unknown')
+        or (status='acknowledged' and coalesce(error_code,'') not in
+          ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+        or candle_close_at>$2
+      )
+      order by candle_close_at asc limit 1`, [runId, lastCandleAt ?? -1]);
+    const row = rows[0] as Row | undefined;
+    return row ? this.#claimedOrder(row) : null;
+  }
+
   async claimOrder(input: { runId: string; candleCloseAt: number; clientOrderId: string;
     signal: unknown; intent: unknown; now: number }): Promise<ClaimedOrder> {
     const rows = await this.#sql.unsafe(`with inserted as (
@@ -246,35 +266,49 @@ export class CloudRuntimeRepository {
           (run_id,candle_close_at,client_order_id,signal_json,intent_json,status,created_at,updated_at)
         values ($1,$2,$3,$4::jsonb,$5::jsonb,'claimed',$6,$6)
         on conflict(run_id,candle_close_at) do nothing
-        returning status,exchange_order_id,client_order_id,created_at,true as fresh
+        returning status,exchange_order_id,client_order_id,candle_close_at,created_at,
+          signal_json,intent_json,true as fresh
       )
-      select status,exchange_order_id,client_order_id,created_at,fresh from inserted
+      select status,exchange_order_id,client_order_id,candle_close_at,created_at,
+        signal_json,intent_json,fresh from inserted
       union all
-      select status,exchange_order_id,client_order_id,created_at,false as fresh
+      select status,exchange_order_id,client_order_id,candle_close_at,created_at,
+        signal_json,intent_json,false as fresh
       from private.cloud_order_intents
       where run_id=$1 and candle_close_at=$2 and not exists(select 1 from inserted)
       limit 1`,
     [input.runId, input.candleCloseAt, input.clientOrderId, this.#sql.json(jsonValue(input.signal)),
       this.#sql.json(jsonValue(input.intent)), input.now]);
     const row = rows[0] as Row | undefined;
-    if (!row || !["claimed", "risk-rejected", "acknowledged", "rejected", "unknown"].includes(String(row.status))
-      || typeof row.client_order_id !== "string" || typeof row.fresh !== "boolean") {
-      throw new Error("Cloud order claim conflict");
-    }
-    return { status: row.status as ClaimedOrder["status"],
-      exchangeOrderId: typeof row.exchange_order_id === "string" ? row.exchange_order_id : null,
-      clientOrderId: row.client_order_id,
-      createdAt: integer(row.created_at),
-      fresh: row.fresh };
+    if (!row) throw new Error("Cloud order claim conflict");
+    return this.#claimedOrder(row);
   }
 
   async recordOrder(input: { runId: string; candleCloseAt: number; status: ClaimedOrder["status"];
     intent?: unknown; exchangeOrderId?: string; errorCode?: string; now: number }): Promise<void> {
-    await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,intent_json=$4::jsonb,
+    await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,
+      intent_json=coalesce($4::jsonb,intent_json),
       exchange_order_id=$5,error_code=$6,updated_at=$7 where run_id=$1 and candle_close_at=$2`,
     [input.runId, input.candleCloseAt, input.status,
       input.intent === undefined ? null : this.#sql.json(jsonValue(input.intent)),
       input.exchangeOrderId ?? null, input.errorCode ?? null, input.now]);
+  }
+
+  #claimedOrder(row: Row): ClaimedOrder {
+    if (!["claimed", "risk-rejected", "acknowledged", "rejected", "unknown"].includes(String(row.status))
+      || typeof row.client_order_id !== "string" || typeof row.fresh !== "boolean") {
+      throw new Error("Cloud order claim conflict");
+    }
+    return {
+      status: row.status as ClaimedOrder["status"],
+      exchangeOrderId: typeof row.exchange_order_id === "string" ? row.exchange_order_id : null,
+      clientOrderId: row.client_order_id,
+      candleCloseAt: integer(row.candle_close_at),
+      createdAt: integer(row.created_at),
+      signal: object(row.signal_json, "cloud order signal"),
+      intent: nullableObject(row.intent_json, "cloud order intent"),
+      fresh: row.fresh,
+    };
   }
 
   async recordAccountSnapshot(run: CloudRun, owner: string, snapshot: AccountSnapshot): Promise<void> {
@@ -328,10 +362,13 @@ export class CloudRuntimeRepository {
   }
 
   async complete(run: CloudRun, owner: string, candleCloseAt: number, signal: unknown, now: number): Promise<void> {
-    await this.#sql.unsafe(`update public.cloud_strategy_runs set last_candle_at=$3,last_evaluated_at=$4,
-      last_signal_json=$5::jsonb,last_error_code=null,consecutive_failures=0,lease_owner=null,lease_expires_at=null,
-      evaluation_count=evaluation_count+1,
-      signal_count=signal_count+case when $5::jsonb->>'action' is distinct from 'hold' then 1 else 0 end,
+    await this.#sql.unsafe(`update public.cloud_strategy_runs set
+      last_candle_at=greatest(coalesce(last_candle_at,$3),$3),last_evaluated_at=$4,
+      last_signal_json=case when last_candle_at is null or $3>=last_candle_at then $5::jsonb else last_signal_json end,
+      last_error_code=null,consecutive_failures=0,lease_owner=null,lease_expires_at=null,
+      evaluation_count=evaluation_count+case when last_candle_at is null or $3>last_candle_at then 1 else 0 end,
+      signal_count=signal_count+case when (last_candle_at is null or $3>last_candle_at)
+        and $5::jsonb->>'action' is distinct from 'hold' then 1 else 0 end,
       updated_at=$4 where id=$1 and lease_owner=$2`,
     [run.id, owner, candleCloseAt, now, this.#sql.json(jsonValue(signal))]);
   }
