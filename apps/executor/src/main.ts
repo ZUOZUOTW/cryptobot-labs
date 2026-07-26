@@ -14,7 +14,9 @@ import { ManualWeexConnectionService, manualConnectionFailureReason } from "./ma
 import { loadRuntimeEnvironment } from "./runtime-secrets";
 import { CloudRuntimeRepository } from "./cloud-repository";
 import { CloudStrategyRuntime } from "./cloud-runtime";
+import { executorRuntimeMetadata } from "./runtime-metadata";
 
+const runtimeMetadata = executorRuntimeMetadata(process.env, Date.now());
 const runtimeEnvironment = await loadRuntimeEnvironment(process.env);
 const config = loadExecutorConfig(runtimeEnvironment);
 const kms = new AwsKmsCredentialEnvelope({ region: config.awsRegion, keyId: config.kmsKeyId });
@@ -88,13 +90,13 @@ const validPublicCallback = (request: import("node:http").IncomingMessage): bool
 const handleRequest = async (request: import("node:http").IncomingMessage,
   response: import("node:http").ServerResponse): Promise<void> => {
   if (request.method === "GET" && request.url === "/healthz") {
-    json(response, 200, { status: "ok" });
+    json(response, 200, { status: "ok", ...runtimeMetadata });
     return;
   }
   if (request.method === "GET" && request.url === "/readyz") {
     const ready = readiness.kms && readiness.fixedEgress && readiness.database && readiness.cloudRuntime
       && readiness.credentialEnvelopeAdapter;
-    json(response, ready ? 200 : 503, { status: ready ? "ready" : "not-ready",
+    json(response, ready ? 200 : 503, { status: ready ? "ready" : "not-ready", ...runtimeMetadata,
       checks: readiness, oauthEnabled: oauth.enabled, liveTradingEnabled: config.liveTradingEnabled });
     return;
   }
