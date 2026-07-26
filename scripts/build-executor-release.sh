@@ -4,9 +4,14 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly OUTPUT="${ROOT}/release/executor"
 readonly NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+readonly ESBUILD_BIN="${ROOT}/node_modules/.pnpm/esbuild@0.25.12/node_modules/esbuild/bin/esbuild"
 readonly SOURCE_REVISION="${EXECUTOR_SOURCE_REVISION:-$(git -C "${ROOT}" rev-parse HEAD)}"
 if [[ -z "${NODE_BIN}" || ! -x "${NODE_BIN}" ]]; then
   echo "Set NODE_BIN to an executable Node.js 22+ binary." >&2
+  exit 1
+fi
+if [[ ! -f "${ESBUILD_BIN}" ]]; then
+  echo "Install workspace dependencies before building the executor release." >&2
   exit 1
 fi
 if [[ ! "${SOURCE_REVISION}" =~ ^[a-f0-9]{40}$ ]]; then
@@ -14,7 +19,13 @@ if [[ ! "${SOURCE_REVISION}" =~ ^[a-f0-9]{40}$ ]]; then
   exit 1
 fi
 cd "${ROOT}"
-pnpm --filter @cryptobot-labs/executor build
+"${ESBUILD_BIN}" apps/executor/src/main.ts \
+  --bundle \
+  --platform=node \
+  --target=node22 \
+  --format=esm \
+  "--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" \
+  --outfile=apps/executor/dist/main.js
 set +e
 smoke_output="$(env -i PATH="${PATH}" NODE_ENV=production "${NODE_BIN}" apps/executor/dist/main.js 2>&1)"
 smoke_status=$?
