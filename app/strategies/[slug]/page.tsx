@@ -1,34 +1,16 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import { cache } from "react";
 import { notFound } from "next/navigation";
-import { createControlPlaneDatabase } from "@/db";
-import { createStrategyPublicationRepository } from "@/db/repositories";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { StrategyShareActions } from "@/components/StrategyShareActions";
-import { env } from "@/lib/server/platform-env";
-import { toPublicStrategyPublication } from "@/lib/server/strategy-publications";
+import { loadPublicStrategyPublication } from "@/lib/server/public-strategy-loader";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 3600;
 
 interface StrategyPageProps {
   params: Promise<{ slug: string }>;
 }
-
-const loadPublication = cache(async (slug: string) => {
-  const database = createControlPlaneDatabase(env.DB);
-  const record = await createStrategyPublicationRepository(database).getBySlug(slug);
-  if (!record) return null;
-  try { return toPublicStrategyPublication(record); }
-  catch (error) {
-    console.error("[strategy-publication] invalid public record", {
-      slug,
-      name: error instanceof Error ? error.name : "Error",
-    });
-    return null;
-  }
-});
 
 const percent = (value: string): string => {
   const parsed = Number(value);
@@ -37,7 +19,7 @@ const percent = (value: string): string => {
 
 export async function generateMetadata({ params }: StrategyPageProps): Promise<Metadata> {
   const { slug } = await params;
-  const publication = await loadPublication(slug);
+  const publication = await loadPublicStrategyPublication(slug);
   if (!publication) return {};
   const title = `${publication.name}｜${publication.publisherName} 的公開策略`;
   const description = `${publication.description}。${publication.symbol} ${publication.timeframe}，查看經 WEEX 公開歷史行情驗證的績效與完整策略結構。`;
@@ -60,7 +42,7 @@ export async function generateMetadata({ params }: StrategyPageProps): Promise<M
 
 export default async function StrategyPublicationPage({ params }: StrategyPageProps) {
   const { slug } = await params;
-  const publication = await loadPublication(slug);
+  const publication = await loadPublicStrategyPublication(slug);
   if (!publication) notFound();
   const chart = publication.equityCurve.map((point) => ({
     label: new Date(point.timestamp).toISOString().slice(0, 10),

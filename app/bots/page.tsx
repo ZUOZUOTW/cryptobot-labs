@@ -36,6 +36,7 @@ export default function BotsPage() {
   const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
   const [performanceUpdatedAt, setPerformanceUpdatedAt] = useState("");
   const [demoPerformance, setDemoPerformance] = useState(false);
+  const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
   const [publications, setPublications] = useState<PublicStrategyPublication[]>([]);
   const [publicationState, setPublicationState] = useState<"loading" | "ready" | "error">("loading");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
@@ -84,7 +85,7 @@ export default function BotsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadWeexBotPerformance().then((result) => {
+    void loadWeexBotPerformance({ forceRefresh: performanceReloadKey > 0 }).then((result) => {
       if (cancelled) return;
       const complete = !result.demo && BOT_CATALOG.every((bot) => isVerifiedWeexPerformance(result.performances[bot.id]));
       if (!complete) {
@@ -101,7 +102,7 @@ export default function BotsPage() {
       if (!cancelled) setPerformanceState("error");
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [performanceReloadKey]);
 
   const catalog = useMemo(() => BOT_CATALOG.map((bot) => {
     const performance = performances[bot.id];
@@ -256,6 +257,18 @@ export default function BotsPage() {
       {performanceState !== "ready" && (
         <p className="catalog-preference-status" role={performanceState === "error" ? "alert" : "status"}>
           {performanceState === "error" ? "近期績效暫時無法取得；未顯示替代或虛構數據。" : "正在計算近期績效…"}
+          {performanceState === "error" && (
+            <button
+              className="text-button"
+              onClick={() => {
+                setPerformanceState("loading");
+                setPerformanceReloadKey((value) => value + 1);
+              }}
+              type="button"
+            >
+              重新取得績效
+            </button>
+          )}
         </p>
       )}
 

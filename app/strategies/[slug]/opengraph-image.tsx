@@ -1,13 +1,11 @@
 import { ImageResponse } from "next/og";
-import { createControlPlaneDatabase } from "@/db";
-import { createStrategyPublicationRepository } from "@/db/repositories";
-import { env } from "@/lib/server/platform-env";
-import { toPublicStrategyPublication } from "@/lib/server/strategy-publications";
+import { loadPublicStrategyPublication } from "@/lib/server/public-strategy-loader";
 
 export const alt = "CryptoBot Labs 公開策略績效預覽";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 export const runtime = "nodejs";
+export const revalidate = 3600;
 
 const percent = (value: string): string => {
   const parsed = Number(value);
@@ -87,12 +85,7 @@ const MascotBadge = () => (
 
 export default async function OpenGraphImage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const record = await createStrategyPublicationRepository(
-    createControlPlaneDatabase(env.DB),
-  ).getBySlug(slug);
-  let publication: ReturnType<typeof toPublicStrategyPublication> | null = null;
-  try { publication = record ? toPublicStrategyPublication(record) : null; }
-  catch { publication = null; }
+  const publication = await loadPublicStrategyPublication(slug);
 
   const name = publication?.name ?? "CryptoBot Labs 公開策略";
   const market = publication?.market === "futures" ? "USDT-M 合約" : "現貨";
