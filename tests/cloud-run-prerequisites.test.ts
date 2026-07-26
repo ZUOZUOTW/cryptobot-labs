@@ -61,4 +61,43 @@ describe("cloud strategy launch prerequisites", () => {
     expect(JSON.parse(String(bindings[2]))).toEqual(risk);
     expect(first).toHaveBeenCalledOnce();
   });
+
+  it("clears stale failure and lease state when a user resumes an errored run", async () => {
+    let sql = "";
+    let bindings: unknown[] = [];
+    const first = vi.fn().mockResolvedValue(null);
+    const database = {
+      prepare: vi.fn((statement: string) => {
+        sql = statement;
+        return { bind: vi.fn((...values: unknown[]) => {
+          bindings = values;
+          return { first };
+        }) };
+      }),
+    };
+
+    await createCloudRunRepository(database as never).transition({
+      userId: "user_1",
+      id: "crun_1",
+      state: "running",
+      expectedVersion: 4,
+      now: 1_700_000_000_000,
+    });
+
+    expect(sql).toMatch(/consecutive_failures=case when \?='running' then 0/);
+    expect(sql).toMatch(/lease_owner=null,lease_expires_at=null/);
+    expect(bindings).toEqual([
+      "running",
+      1_700_000_000_000,
+      "running",
+      1_700_000_000_000,
+      "running",
+      1_700_000_000_000,
+      "running",
+      "running",
+      "user_1",
+      "crun_1",
+      4,
+    ]);
+  });
 });

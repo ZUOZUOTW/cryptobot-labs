@@ -6,7 +6,7 @@ type Row = Record<string, unknown>;
 
 export interface CloudRun {
   id: string; userId: string; connectionId: string; mode: "futures-demo" | "live";
-  version: number; config: Record<string, unknown>; risk: Record<string, unknown>;
+  version: number; configurationHash: string; config: Record<string, unknown>; risk: Record<string, unknown>;
   lastCandleAt: number | null; lastEvaluatedAt: number | null; consecutiveFailures: number;
   positions: readonly unknown[];
 }
@@ -17,6 +17,9 @@ export interface StoredCredential {
 export interface ClaimedOrder {
   status: "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
   exchangeOrderId: string | null;
+  clientOrderId: string;
+  createdAt: number;
+  fresh: boolean;
 }
 export interface AccountSnapshot {
   asset: string;
@@ -85,6 +88,7 @@ const signedDecimal = (value: unknown): string => {
   }
   return value;
 };
+const CONFIGURATION_HASH = /^[a-f0-9]{64}$/;
 
 export class CloudRuntimeRepository {
   readonly #sql: Database;
@@ -163,15 +167,18 @@ export class CloudRuntimeRepository {
       where id in (select id from public.cloud_strategy_runs
         where executor_shard_id=$3 and state='running' and (lease_expires_at is null or lease_expires_at<$2::bigint or lease_owner=$1)
         order by coalesce(last_evaluated_at,0),created_at limit $4 for update skip locked)
-      returning id,user_id,connection_id,mode,version,config_json,risk_json,last_candle_at,last_evaluated_at,
+      returning id,user_id,connection_id,mode,version,configuration_hash,config_json,risk_json,last_candle_at,last_evaluated_at,
         consecutive_failures,positions_json`,
     [owner, now, this.shardId, limit]);
     return rows.map((row) => {
       const value = row as Row;
       if ((value.mode !== "futures-demo" && value.mode !== "live") || typeof value.id !== "string"
-        || typeof value.user_id !== "string" || typeof value.connection_id !== "string") throw new Error("Cloud run is invalid");
+        || typeof value.user_id !== "string" || typeof value.connection_id !== "string"
+        || typeof value.configuration_hash !== "string"
+        || !CONFIGURATION_HASH.test(value.configuration_hash)) throw new Error("Cloud run is invalid");
       return { id: value.id, userId: value.user_id, connectionId: value.connection_id, mode: value.mode,
-        version: integer(value.version), config: object(value.config_json, "strategy config"),
+        version: integer(value.version), configurationHash: value.configuration_hash,
+        config: object(value.config_json, "strategy config"),
         risk: object(value.risk_json, "risk policy"),
         lastCandleAt: value.last_candle_at === null ? null : integer(value.last_candle_at),
         lastEvaluatedAt: value.last_evaluated_at === null ? null : integer(value.last_evaluated_at),
@@ -233,20 +240,32 @@ export class CloudRuntimeRepository {
   }
 
   async claimOrder(input: { runId: string; candleCloseAt: number; clientOrderId: string;
-    signal: unknown; now: number }): Promise<ClaimedOrder> {
-    await this.#sql.unsafe(`insert into private.cloud_order_intents
-      (run_id,candle_close_at,client_order_id,signal_json,status,created_at,updated_at)
-      values ($1,$2,$3,$4::jsonb,'claimed',$5,$5) on conflict(run_id,candle_close_at) do nothing`,
-    [input.runId, input.candleCloseAt, input.clientOrderId, this.#sql.json(jsonValue(input.signal)), input.now]);
-    const rows = await this.#sql.unsafe(`select status,exchange_order_id from private.cloud_order_intents
-      where run_id=$1 and candle_close_at=$2 and client_order_id=$3`,
-    [input.runId, input.candleCloseAt, input.clientOrderId]);
+    signal: unknown; intent: unknown; now: number }): Promise<ClaimedOrder> {
+    const rows = await this.#sql.unsafe(`with inserted as (
+        insert into private.cloud_order_intents
+          (run_id,candle_close_at,client_order_id,signal_json,intent_json,status,created_at,updated_at)
+        values ($1,$2,$3,$4::jsonb,$5::jsonb,'claimed',$6,$6)
+        on conflict(run_id,candle_close_at) do nothing
+        returning status,exchange_order_id,client_order_id,created_at,true as fresh
+      )
+      select status,exchange_order_id,client_order_id,created_at,fresh from inserted
+      union all
+      select status,exchange_order_id,client_order_id,created_at,false as fresh
+      from private.cloud_order_intents
+      where run_id=$1 and candle_close_at=$2 and not exists(select 1 from inserted)
+      limit 1`,
+    [input.runId, input.candleCloseAt, input.clientOrderId, this.#sql.json(jsonValue(input.signal)),
+      this.#sql.json(jsonValue(input.intent)), input.now]);
     const row = rows[0] as Row | undefined;
-    if (!row || !["claimed", "risk-rejected", "acknowledged", "rejected", "unknown"].includes(String(row.status))) {
+    if (!row || !["claimed", "risk-rejected", "acknowledged", "rejected", "unknown"].includes(String(row.status))
+      || typeof row.client_order_id !== "string" || typeof row.fresh !== "boolean") {
       throw new Error("Cloud order claim conflict");
     }
     return { status: row.status as ClaimedOrder["status"],
-      exchangeOrderId: typeof row.exchange_order_id === "string" ? row.exchange_order_id : null };
+      exchangeOrderId: typeof row.exchange_order_id === "string" ? row.exchange_order_id : null,
+      clientOrderId: row.client_order_id,
+      createdAt: integer(row.created_at),
+      fresh: row.fresh };
   }
 
   async recordOrder(input: { runId: string; candleCloseAt: number; status: ClaimedOrder["status"];

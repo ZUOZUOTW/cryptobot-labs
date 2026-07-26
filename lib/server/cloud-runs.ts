@@ -182,9 +182,11 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
       return database.prepare(`update cloud_strategy_runs set state=?,version=version+1,updated_at=?,
         started_at=case when ?='running' then ? else started_at end,
         stopped_at=case when ?='stopped' then ? else stopped_at end,
-        last_error_code=case when ?='running' then null else last_error_code end
+        last_error_code=case when ?='running' then null else last_error_code end,
+        consecutive_failures=case when ?='running' then 0 else consecutive_failures end,
+        lease_owner=null,lease_expires_at=null
         where user_id=? and id=? and version=? and state<>'stopped' returning ${columns}`)
-        .bind(input.state, input.now, input.state, input.now, input.state, input.now, input.state,
+        .bind(input.state, input.now, input.state, input.now, input.state, input.now, input.state, input.state,
           input.userId, input.id, input.expectedVersion).first<CloudRunRow>();
     },
   };
