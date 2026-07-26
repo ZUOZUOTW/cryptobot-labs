@@ -64,6 +64,7 @@ describe("CloudRuntimeRepository run failures", () => {
       connectionId: "wc_1",
       mode: "futures-demo" as const,
       version: 1,
+      configurationHash: "a".repeat(64),
       config: {},
       risk: {},
       lastCandleAt: null,
@@ -78,6 +79,72 @@ describe("CloudRuntimeRepository run failures", () => {
       "run_1", "owner-1", "demo_funds_required", 1_700_000_000_000, true,
     ]);
     expect(database.unsafe.mock.calls[0]?.[0]).toContain("state=case when $5::boolean");
+  });
+});
+
+describe("CloudRuntimeRepository order claims", () => {
+  beforeEach(() => {
+    database.unsafe.mockReset();
+    database.json.mockClear();
+  });
+
+  it("persists the approved intent and reports a newly inserted claim", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      status: "claimed",
+      exchange_order_id: null,
+      client_order_id: "cb_fresh",
+      created_at: 1_700_000_000_000,
+      fresh: true,
+    }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const signal = { id: "signal-1", action: "buy", reason: "entry", createdAt: 1_700_000_000_000 };
+    const intent = { symbol: "BTCUSDT", side: "buy", quantity: "0.001", price: "60000",
+      expectedSlippageBps: "30", reduceOnly: false };
+
+    await expect(repository.claimOrder({
+      runId: "run_1",
+      candleCloseAt: 1_699_999_999_999,
+      clientOrderId: "cb_fresh",
+      signal,
+      intent,
+      now: 1_700_000_000_000,
+    })).resolves.toEqual({
+      status: "claimed",
+      exchangeOrderId: null,
+      clientOrderId: "cb_fresh",
+      createdAt: 1_700_000_000_000,
+      fresh: true,
+    });
+
+    expect(database.unsafe.mock.calls[0]?.[0]).toContain("signal_json,intent_json");
+    expect(database.unsafe.mock.calls[0]?.[0]).toContain("true as fresh");
+    expect(database.unsafe.mock.calls[0]?.[0]).toContain("not exists(select 1 from inserted)");
+    expect(database.json).toHaveBeenNthCalledWith(1, signal);
+    expect(database.json).toHaveBeenNthCalledWith(2, intent);
+  });
+
+  it("returns the stored client order id when a candle was claimed by an earlier attempt", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      status: "unknown",
+      exchange_order_id: null,
+      client_order_id: "cb_original",
+      created_at: 1_700_000_000_000,
+      fresh: false,
+    }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    const claim = await repository.claimOrder({
+      runId: "run_1",
+      candleCloseAt: 1_699_999_999_999,
+      clientOrderId: "cb_retry_candidate",
+      signal: { action: "buy" },
+      intent: { side: "buy" },
+      now: 1_700_000_010_000,
+    });
+
+    expect(claim.clientOrderId).toBe("cb_original");
+    expect(claim.fresh).toBe(false);
+    expect(database.unsafe.mock.calls[0]?.[0]).not.toContain("and client_order_id=$3");
   });
 });
 

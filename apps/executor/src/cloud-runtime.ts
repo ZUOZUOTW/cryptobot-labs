@@ -5,7 +5,10 @@ import {
   evaluateOrderRisk,
   type RiskContext,
   type RiskPolicy,
+  type RiskDecision,
   type Candle,
+  type OrderIntent,
+  type StrategySignal,
   type StrategyPortfolioSnapshot,
   type VisualBotConfig,
 } from "@cryptobot-labs/trading-core";
@@ -21,18 +24,40 @@ import {
   type WeexAccountPosition,
 } from "@cryptobot-labs/weex-client";
 
-import type { CloudRun, CloudRuntimeRepository } from "./cloud-repository";
+import type { ClaimedOrder, CloudRun, CloudRuntimeRepository } from "./cloud-repository";
 import type { ClaimedAccountSnapshot } from "./cloud-repository";
 
 const CLOCK_PROBE_URL = "https://api-spot.weex.com/api/v3/market/ticker/price?symbol=BTCUSDT";
 const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 const TRADE_WINDOW_MS = 7 * 24 * 60 * 60_000;
+export const ORDER_RECONCILIATION_GRACE_MS = 30_000;
+const SAFE_READ_ATTEMPTS = 3;
 
 class AccountSyncStageError extends Error {
   constructor(readonly stage: "client" | "snapshot" | "projection" | "database", cause: unknown) {
     super("WEEX account synchronization stage failed", { cause });
   }
+}
+
+export async function retryWeexRead<T>(
+  operation: () => Promise<T>,
+  scheduler: (delayMs: number) => Promise<void> =
+    (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  maximumAttempts = SAFE_READ_ATTEMPTS,
+): Promise<T> {
+  if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1 || maximumAttempts > 5) {
+    throw new TypeError("Invalid WEEX read retry limit");
+  }
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!(error instanceof WeexApiError) || !error.retryable || attempt === maximumAttempts) throw error;
+      await scheduler(100 * 2 ** (attempt - 1));
+    }
+  }
+  throw new Error("Unreachable WEEX read retry state");
 }
 
 type CloudRunFailureStage = "account" | "exchange" | "runtime";
@@ -186,6 +211,97 @@ export const deriveFuturesPositionSnapshot = (
     layerCount: 1,
   });
 };
+
+export async function executeCloudOrder(input: {
+  repository: CloudRuntimeRepository;
+  client: Pick<WeexPrivateClient, "findOrderByClientOrderId" | "submitOrder">;
+  run: CloudRun;
+  owner: string;
+  candleCloseAt: number;
+  signal: StrategySignal;
+  intent: OrderIntent;
+  decision: RiskDecision;
+  claim: ClaimedOrder;
+  target: { market: "spot"; mode: "live" } | { market: "futures"; mode: "futures-demo" | "live" };
+  symbol: string;
+  now: number;
+}): Promise<"completed" | "deferred"> {
+  const finish = async (signal: unknown): Promise<"completed"> => {
+    await input.repository.complete(input.run, input.owner, input.candleCloseAt, signal, input.now);
+    return "completed";
+  };
+  if (!input.claim.fresh) {
+    const existing = await input.client.findOrderByClientOrderId({
+      target: input.target,
+      symbol: input.symbol,
+      clientOrderId: input.claim.clientOrderId,
+      ...(input.claim.exchangeOrderId ? { exchangeOrderId: input.claim.exchangeOrderId } : {}),
+    });
+    if (existing) {
+      await input.repository.recordOrder({
+        runId: input.run.id,
+        candleCloseAt: input.candleCloseAt,
+        status: "acknowledged",
+        intent: input.intent,
+        exchangeOrderId: existing.exchangeOrderId,
+        now: input.now,
+      });
+      return finish(input.signal);
+    }
+    if (input.now - input.claim.createdAt < ORDER_RECONCILIATION_GRACE_MS) {
+      await input.repository.release(input.run.id, input.owner, input.now);
+      return "deferred";
+    }
+    await input.repository.recordOrder({
+      runId: input.run.id,
+      candleCloseAt: input.candleCloseAt,
+      status: "rejected",
+      intent: input.intent,
+      errorCode: "stale_claim_no_exchange_order",
+      now: input.now,
+    });
+    return finish({ ...input.signal, orderSkipped: "stale_claim_no_exchange_order" });
+  }
+  if (!input.decision.allowed) {
+    await input.repository.recordOrder({
+      runId: input.run.id,
+      candleCloseAt: input.candleCloseAt,
+      status: "risk-rejected",
+      intent: input.intent,
+      errorCode: input.decision.reason,
+      now: input.now,
+    });
+    return finish({ ...input.signal, riskRejected: input.decision.reason });
+  }
+  await input.repository.recordOrder({
+    runId: input.run.id,
+    candleCloseAt: input.candleCloseAt,
+    status: "unknown",
+    intent: input.intent,
+    errorCode: "submission_in_progress",
+    now: input.now,
+  });
+  const outcome = await input.client.submitOrder({
+    target: input.target,
+    clientOrderId: input.claim.clientOrderId,
+    intent: input.intent,
+  });
+  await input.repository.recordOrder({
+    runId: input.run.id,
+    candleCloseAt: input.candleCloseAt,
+    status: outcome.status,
+    intent: input.intent,
+    ...(outcome.status === "acknowledged"
+      ? { exchangeOrderId: outcome.exchangeOrderId }
+      : { errorCode: outcome.reason ?? outcome.status }),
+    now: input.now,
+  });
+  if (outcome.status === "unknown") {
+    await input.repository.release(input.run.id, input.owner, input.now);
+    return "deferred";
+  }
+  return finish(input.signal);
+}
 const trackedSpotPosition = (
   storedPositions: readonly unknown[],
   position: WeexAccountPosition,
@@ -339,23 +455,28 @@ export class CloudStrategyRuntime {
       context: stored.context,
       kms: this.options.kms,
     });
-    const sentAt = (this.options.now ?? Date.now)();
-    const probe = await this.#transport.send({
-      method: "GET",
-      url: CLOCK_PROBE_URL,
-      headers: { Accept: "application/json" },
+    const sample = await retryWeexRead(async () => {
+      const sentAt = (this.options.now ?? Date.now)();
+      const probe = await this.#transport.send({
+        method: "GET",
+        url: CLOCK_PROBE_URL,
+        headers: { Accept: "application/json" },
+      });
+      const receivedAt = (this.options.now ?? Date.now)();
+      const serverTime = Date.parse(probe.headers.date ?? "");
+      if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) {
+        throw new WeexApiError("WEEX clock is unavailable", { category: "clock", retryable: true });
+      }
+      return { sentAt, receivedAt, serverTime };
     });
-    const receivedAt = (this.options.now ?? Date.now)();
-    const serverTime = Date.parse(probe.headers.date ?? "");
-    if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) throw new Error("WEEX clock is unavailable");
     const clock = new WeexClock(this.options.now ?? Date.now);
-    clock.recordServerTime(serverTime, sentAt, receivedAt);
+    clock.recordServerTime(sample.serverTime, sample.sentAt, sample.receivedAt);
     return new WeexPrivateClient({
       transport: this.#transport,
       credentials,
       clock,
       now: () => Math.floor(clock.now()),
-      maximumGetAttempts: 1,
+      maximumGetAttempts: SAFE_READ_ATTEMPTS,
     });
   }
 
@@ -441,25 +562,40 @@ export class CloudStrategyRuntime {
     const now = (this.options.now ?? Date.now)();
     const endTime = Math.floor(now / interval) * interval;
     const startTime = Math.max(0, endTime - interval * 300);
-    const dataset = await this.#public.collectHistoricalCandles({ market: config.market, symbol: config.symbol,
-      interval: config.timeframe, startTime, endTime, limit: 100 });
+    const dataset = await retryWeexRead(() => this.#public.collectHistoricalCandles({
+      market: config.market,
+      symbol: config.symbol,
+      interval: config.timeframe,
+      startTime,
+      endTime,
+      limit: 100,
+    }));
     const candles = dataset.candles.slice(-300);
     const latest = candles.at(-1);
     if (!latest || latest.closeTime <= (run.lastCandleAt ?? -1)) {
       await this.options.repository.release(run.id, this.#owner, (this.options.now ?? Date.now)());
       return;
     }
-    const rules = await this.#public.getInstrumentRules(config.market, config.symbol);
+    const rules = await retryWeexRead(() => this.#public.getInstrumentRules(config.market, config.symbol));
     const stored = await this.options.repository.credential(run.connectionId, run.userId);
     const credentials = await decryptWeexCredentials({ envelope: stored.envelope, context: stored.context,
       kms: this.options.kms });
-    const sentAt = (this.options.now ?? Date.now)();
-    const probe = await this.#transport.send({ method: "GET", url: CLOCK_PROBE_URL, headers: { Accept: "application/json" } });
-    const receivedAt = (this.options.now ?? Date.now)();
-    const serverTime = Date.parse(probe.headers.date ?? "");
-    if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) throw new Error("WEEX clock is unavailable");
+    const sample = await retryWeexRead(async () => {
+      const sentAt = (this.options.now ?? Date.now)();
+      const probe = await this.#transport.send({
+        method: "GET",
+        url: CLOCK_PROBE_URL,
+        headers: { Accept: "application/json" },
+      });
+      const receivedAt = (this.options.now ?? Date.now)();
+      const serverTime = Date.parse(probe.headers.date ?? "");
+      if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) {
+        throw new WeexApiError("WEEX clock is unavailable", { category: "clock", retryable: true });
+      }
+      return { sentAt, receivedAt, serverTime };
+    });
     const clock = new WeexClock(this.options.now ?? Date.now);
-    clock.recordServerTime(serverTime, sentAt, receivedAt);
+    clock.recordServerTime(sample.serverTime, sample.sentAt, sample.receivedAt);
     const target = config.market === "spot"
       ? { market: "spot" as const, mode: "live" as const }
       : { market: "futures" as const, mode: run.mode };
@@ -467,7 +603,7 @@ export class CloudStrategyRuntime {
       rulesProvider: async (_target, symbol) => {
         if (symbol !== rules.symbol) throw new Error("Instrument mismatch");
         return { rules, verifiedAt: (this.options.now ?? Date.now)() };
-      }, now: () => Math.floor(clock.now()), maximumGetAttempts: 1 });
+      }, now: () => Math.floor(clock.now()), maximumGetAttempts: SAFE_READ_ATTEMPTS });
     const verification = await client.verifyAccount(target);
     if (verification.readPermission !== true || verification.canTrade !== true) {
       throw new CloudRunExecutionError("live_api_permission_required", "account", true);
@@ -559,14 +695,6 @@ export class CloudStrategyRuntime {
       await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
       return;
     }
-    const clientOrderId = await deriveClientOrderId({ deploymentId: run.id,
-      configurationVersion: `v${run.version}`, signalId: signal.id, sequence: latest.closeTime });
-    const claim = await this.options.repository.claimOrder({ runId: run.id, candleCloseAt: latest.closeTime,
-      clientOrderId, signal, now: account.observedAt });
-    if (claim.status !== "claimed" && claim.status !== "unknown") {
-      await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
-      return;
-    }
     const currentNotional = position?.openValue ?? "0";
     const context: RiskContext = Object.freeze({ market: config.market, symbol: config.symbol, now: account.observedAt,
       priceTimestamp: latest.closeTime, lastSignalAt: run.lastEvaluatedAt, openPositions: recordedPositions.length,
@@ -583,33 +711,37 @@ export class CloudStrategyRuntime {
       instrumentRules: rules, now: account.observedAt,
     });
     const decision = evaluateOrderRisk(riskPolicy, context, intent, rules);
-    if (!decision.allowed) {
-      await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
-        status: "risk-rejected", intent, errorCode: decision.reason, now: account.observedAt });
-      await this.options.repository.complete(run, this.#owner, latest.closeTime,
-        { ...signal, riskRejected: decision.reason }, account.observedAt);
+    const clientOrderId = await deriveClientOrderId({
+      deploymentId: run.id,
+      configurationVersion: run.configurationHash,
+      signalId: "cloud-candle",
+      sequence: latest.closeTime,
+    });
+    const claim = await this.options.repository.claimOrder({
+      runId: run.id,
+      candleCloseAt: latest.closeTime,
+      clientOrderId,
+      signal,
+      intent,
+      now: account.observedAt,
+    });
+    if (claim.status !== "claimed" && claim.status !== "unknown") {
+      await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
       return;
     }
-    if (claim.status === "unknown") {
-      const existing = await client.findOrderByClientOrderId({ target, symbol: config.symbol, clientOrderId,
-        ...(claim.exchangeOrderId ? { exchangeOrderId: claim.exchangeOrderId } : {}) });
-      if (existing) {
-        await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
-          status: "acknowledged", intent, exchangeOrderId: existing.exchangeOrderId, now: account.observedAt });
-        await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
-        return;
-      }
-      await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
-        status: "unknown", intent, errorCode: "unknown_order_state", now: account.observedAt });
-      throw new CloudRunExecutionError("unknown_order_state", "exchange", true);
-    }
-    const outcome = await client.submitOrder({ target, clientOrderId, intent });
-    await this.options.repository.recordOrder({ runId: run.id, candleCloseAt: latest.closeTime,
-      status: outcome.status, intent, ...(outcome.status === "acknowledged" ? { exchangeOrderId: outcome.exchangeOrderId }
-        : { errorCode: outcome.reason ?? outcome.status }), now: account.observedAt });
-    if (outcome.status === "unknown") {
-      throw new CloudRunExecutionError("unknown_order_state", "exchange", true);
-    }
-    await this.options.repository.complete(run, this.#owner, latest.closeTime, signal, account.observedAt);
+    await executeCloudOrder({
+      repository: this.options.repository,
+      client,
+      run,
+      owner: this.#owner,
+      candleCloseAt: latest.closeTime,
+      signal,
+      intent,
+      decision,
+      claim,
+      target,
+      symbol: config.symbol,
+      now: account.observedAt,
+    });
   }
 }
