@@ -130,11 +130,50 @@ describe("landing page", () => {
     expect(within(errorRegion).queryByRole("article")).not.toBeInTheDocument();
     expect(screen.queryByText("+142.8%")).not.toBeInTheDocument();
   });
+
+  it("bypasses stale browser responses when retrying verified performance", async () => {
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        performances: {},
+        updatedAt: "",
+        demo: true,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 }));
+    const user = userEvent.setup();
+    render(<Home />);
+
+    const errorRegion = screen.getByRole("region", { name: "熱門機器人近期績效" });
+    await within(errorRegion).findByRole("heading", { name: "近期熱門策略暫時無法取得" });
+    await user.click(within(errorRegion).getByRole("button", { name: "重新載入" }));
+
+    expect(await screen.findByRole("heading", { name: "熱門機器人" })).toBeInTheDocument();
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenLastCalledWith(
+      "/api/weex/bot-performance",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
 });
 
 describe("bot catalog route", () => {
   it("exports a renderable catalog page", async () => {
     await expect(import("../app/bots/page")).resolves.toHaveProperty("default");
+  });
+
+  it("offers an explicit performance retry without hiding strategy actions", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    render(<BotsPage />);
+
+    const retry = await screen.findByRole("button", { name: "重新取得績效" });
+    const alert = retry.closest('[role="alert"]');
+    expect(alert).toHaveTextContent("近期績效暫時無法取得");
+    expect(screen.getAllByRole("link", { name: /直接套用/ })).toHaveLength(6);
+    await user.click(retry);
+
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(3);
   });
 
   it("filters the ten bots by market, risk, and strategy tag", async () => {

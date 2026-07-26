@@ -16,10 +16,15 @@ describe("Netlify production build", () => {
   });
 
   it("renders dynamic social cards without reading public assets from the function filesystem", async () => {
-    const socialImage = await readFile("app/strategies/[slug]/opengraph-image.tsx", "utf8");
+    const [socialImage, publicationLoader] = await Promise.all([
+      readFile("app/strategies/[slug]/opengraph-image.tsx", "utf8"),
+      readFile("lib/server/public-strategy-loader.ts", "utf8"),
+    ]);
 
     expect(socialImage).toContain("new ImageResponse");
     expect(socialImage).toContain("<MascotBadge />");
+    expect(socialImage).toContain("export const revalidate = 3600");
+    expect(publicationLoader).toContain("unstable_cache");
     expect(socialImage).not.toContain('from "node:fs');
     expect(socialImage).not.toContain("join(process.cwd()");
   });

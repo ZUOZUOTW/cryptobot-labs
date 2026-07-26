@@ -65,18 +65,19 @@ export async function runWeexHistoricalBacktest(
   return pending;
 }
 
-export async function loadWeexBotPerformance(): Promise<{
+export async function loadWeexBotPerformance(options: { forceRefresh?: boolean } = {}): Promise<{
   performances: Record<string, WeexHistoricalPerformance>; updatedAt: string; demo: boolean;
 }> {
+  if (options.forceRefresh) clearWeexBotPerformanceCache();
   if (botPerformanceCache && botPerformanceCache.expiresAt > Date.now()) return botPerformanceCache.value;
   if (botPerformanceRequest) return botPerformanceRequest;
   const request = (async () => {
-    const response = await fetch("/api/weex/bot-performance", { cache: "force-cache", headers: { Accept: "application/json" } });
+    const response = await fetch("/api/weex/bot-performance", { cache: "no-store", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("WEEX 歷史績效暫時無法載入");
     const body = await response.json() as BotPerformanceResponse;
     if (!body.performances || typeof body.updatedAt !== "string") throw new Error("WEEX 歷史績效格式無效");
     const value = { performances: body.performances, updatedAt: body.updatedAt, demo: body.demo === true };
-    botPerformanceCache = { value, expiresAt: Date.now() + BOT_PERFORMANCE_CACHE_TTL_MS };
+    if (!value.demo) botPerformanceCache = { value, expiresAt: Date.now() + BOT_PERFORMANCE_CACHE_TTL_MS };
     return value;
   })().finally(() => {
     if (botPerformanceRequest === request) botPerformanceRequest = null;

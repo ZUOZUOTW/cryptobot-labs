@@ -13,7 +13,7 @@ export function HomePerformanceSections() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadWeexBotPerformance().then((result) => {
+    void loadWeexBotPerformance({ forceRefresh: reloadKey > 0 }).then((result) => {
       if (cancelled) return;
       const complete = !result.demo && BOT_CATALOG.every((bot) => isVerifiedWeexPerformance(result.performances[bot.id]));
       if (!complete) {
