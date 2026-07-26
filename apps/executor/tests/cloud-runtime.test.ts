@@ -8,6 +8,7 @@ import {
   executeCloudOrder,
   ORDER_RECONCILIATION_GRACE_MS,
   retryWeexRead,
+  settleBlockingCloudOrder,
   requireSettlementBalance,
 } from "../src/cloud-runtime";
 import { WeexApiError } from "@cryptobot-labs/weex-client";
@@ -113,11 +114,26 @@ const allowed: RiskDecision = {
     dailyPnl: "0",
   },
 };
+const exchangeSnapshot = (
+  status: "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "REJECTED",
+  cumulativeFilledQuantity = status === "FILLED" ? "0.0001" : "0",
+) => ({
+  clientOrderId: "cb_original",
+  exchangeOrderId: "exchange-existing",
+  symbol: "BTCUSDT",
+  side: "buy" as const,
+  quantity: "0.0001",
+  status,
+  cumulativeFilledQuantity,
+});
 const freshClaim: ClaimedOrder = {
   status: "claimed",
   exchangeOrderId: null,
   clientOrderId: "cb_original",
+  candleCloseAt: 1_699_999_999_999,
   createdAt: 1_700_000_000_000,
+  signal,
+  intent,
   fresh: true,
 };
 
@@ -212,7 +228,7 @@ describe("cloud order crash recovery", () => {
   });
 
   it("reconciles an acknowledged exchange order without a duplicate submission", async () => {
-    const find = vi.fn(async () => ({ exchangeOrderId: "exchange-existing" }));
+    const find = vi.fn(async () => exchangeSnapshot("FILLED"));
     const submit = vi.fn();
     const value = execution({ ...freshClaim, fresh: false, status: "unknown" }, { find, submit });
 
@@ -221,7 +237,63 @@ describe("cloud order crash recovery", () => {
     expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
       status: "acknowledged",
       exchangeOrderId: "exchange-existing",
+      errorCode: "exchange_order_filled",
     }));
+  });
+
+  it.each([
+    ["NEW", "0", "exchange_order_open"],
+    ["PARTIALLY_FILLED", "0.00005", "exchange_order_partially_filled"],
+  ] as const)("keeps a %s limit order blocking newer submissions", async (status, filled, errorCode) => {
+    const submit = vi.fn();
+    const value = execution({ ...freshClaim, fresh: false, status: "acknowledged" }, {
+      find: vi.fn(async () => exchangeSnapshot(status, filled)),
+      submit,
+    });
+
+    await expect(value.promise).resolves.toBe("completed");
+    expect(submit).not.toHaveBeenCalled();
+    expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
+      status: "acknowledged",
+      errorCode,
+    }));
+  });
+
+  it("preserves ownership evidence when a partially filled order is later cancelled", async () => {
+    const value = execution({ ...freshClaim, fresh: false, status: "acknowledged" }, {
+      find: vi.fn(async () => exchangeSnapshot("CANCELED", "0.00005")),
+    });
+
+    await expect(value.promise).resolves.toBe("completed");
+    expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
+      status: "acknowledged",
+      errorCode: "exchange_order_cancelled_partially_filled",
+    }));
+  });
+
+  it("closes an unfilled cancelled order as rejected", async () => {
+    const value = execution({ ...freshClaim, fresh: false, status: "acknowledged" }, {
+      find: vi.fn(async () => exchangeSnapshot("CANCELED")),
+    });
+
+    await expect(value.promise).resolves.toBe("completed");
+    expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
+      status: "rejected",
+      errorCode: "exchange_order_cancelled",
+    }));
+  });
+
+  it("never treats a temporarily missing previously acknowledged order as rejected", async () => {
+    const value = execution({ ...freshClaim, fresh: false, status: "acknowledged",
+      exchangeOrderId: "exchange-existing" }, {
+      now: freshClaim.createdAt + ORDER_RECONCILIATION_GRACE_MS * 100,
+      find: vi.fn(async () => null),
+    });
+
+    await expect(value.promise).resolves.toBe("deferred");
+    expect(value.repository.release).toHaveBeenCalledOnce();
+    expect(value.repository.recordOrder).not.toHaveBeenCalled();
+    expect(value.repository.complete).not.toHaveBeenCalled();
   });
 
   it("keeps an ambiguous submit running for reconciliation instead of terminally failing the strategy", async () => {
@@ -250,6 +322,76 @@ describe("cloud order crash recovery", () => {
       errorCode: "submission_in_progress",
     }));
     expect(value.repository.complete).not.toHaveBeenCalled();
+  });
+
+  it("settles an older unresolved candle before any newer order can be submitted", async () => {
+    const submit = vi.fn();
+    const repository = {
+      recordOrder: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
+    };
+    const olderOrder: ClaimedOrder = {
+      ...freshClaim,
+      status: "unknown",
+      fresh: false,
+      intent: null,
+      candleCloseAt: 1_699_999_940_000,
+      createdAt: 1_699_999_940_001,
+    };
+    const client = {
+      findOrderByClientOrderId: vi.fn(async () => null),
+      submitOrder: submit,
+    };
+
+    await expect(settleBlockingCloudOrder({
+      repository: repository as unknown as CloudRuntimeRepository,
+      client,
+      run,
+      owner: "owner-1",
+      order: olderOrder,
+      target: { market: "futures", mode: "live" },
+      symbol: "BTCUSDT",
+      now: olderOrder.createdAt + ORDER_RECONCILIATION_GRACE_MS,
+    })).resolves.toBe("completed");
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
+      candleCloseAt: olderOrder.candleCloseAt,
+      status: "rejected",
+      errorCode: "stale_claim_no_exchange_order",
+    }));
+    expect(repository.complete).toHaveBeenCalledWith(
+      run,
+      "owner-1",
+      olderOrder.candleCloseAt,
+      expect.objectContaining({ orderSkipped: "stale_claim_no_exchange_order" }),
+      olderOrder.createdAt + ORDER_RECONCILIATION_GRACE_MS,
+    );
+  });
+
+  it("finishes a terminal rejected order row left behind by a crash without querying or submitting", async () => {
+    const find = vi.fn();
+    const repository = {
+      recordOrder: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
+    };
+
+    await expect(settleBlockingCloudOrder({
+      repository: repository as unknown as CloudRuntimeRepository,
+      client: { findOrderByClientOrderId: find },
+      run,
+      owner: "owner-1",
+      order: { ...freshClaim, status: "risk-rejected", fresh: false },
+      target: { market: "futures", mode: "live" },
+      symbol: "BTCUSDT",
+      now: freshClaim.createdAt + 1,
+    })).resolves.toBe("completed");
+
+    expect(find).not.toHaveBeenCalled();
+    expect(repository.recordOrder).not.toHaveBeenCalled();
+    expect(repository.complete).toHaveBeenCalledOnce();
   });
 });
 
