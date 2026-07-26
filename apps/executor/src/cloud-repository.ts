@@ -94,6 +94,7 @@ const signedDecimal = (value: unknown): string => {
   return value;
 };
 const CONFIGURATION_HASH = /^[a-f0-9]{64}$/;
+const LEASE_DURATION_MS = 180_000;
 
 export class CloudRuntimeRepository {
   readonly #sql: Database;
@@ -120,12 +121,12 @@ export class CloudRuntimeRepository {
       on conflict(connection_id) do nothing`, [this.shardId, now]);
     const rows = await this.#sql.unsafe(`with claimed as (
       update public.weex_account_snapshots set
-        lease_owner=$1,lease_expires_at=$2::bigint+30000,updated_at=greatest(updated_at,$2::bigint)
+        lease_owner=$1,lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
         where connection_id in (
           select s.connection_id from public.weex_account_snapshots s
           join public.weex_connections c on c.id=s.connection_id and c.user_id=s.user_id
           where c.executor_shard_id=$3 and c.status='active'
-            and (s.observed_at is null or s.observed_at <= $2::bigint-15000)
+            and (s.observed_at is null or s.observed_at <= $2::bigint-60000)
             and (s.lease_expires_at is null or s.lease_expires_at<$2::bigint or s.lease_owner=$1)
           order by coalesce(s.observed_at,0),s.created_at limit $4 for update of s skip locked
         )
@@ -150,6 +151,18 @@ export class CloudRuntimeRepository {
     });
   }
 
+  async renewAccountLease(
+    account: ClaimedAccountSnapshot,
+    owner: string,
+    now: number,
+  ): Promise<boolean> {
+    const result = await this.#sql.unsafe(`update public.weex_account_snapshots
+      set lease_expires_at=$4::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$4::bigint)
+      where connection_id=$1 and user_id=$2 and lease_owner=$3`,
+    [account.connectionId, account.userId, owner, now]);
+    return (result.count ?? 0) > 0;
+  }
+
   async recordConnectionPermissions(
     account: ClaimedAccountSnapshot,
     owner: string,
@@ -168,7 +181,7 @@ export class CloudRuntimeRepository {
 
   async claimRuns(owner: string, now: number, limit = 10): Promise<CloudRun[]> {
     const rows = await this.#sql.unsafe(`update public.cloud_strategy_runs set lease_owner=$1,
-      lease_expires_at=$2::bigint+30000,updated_at=greatest(updated_at,$2::bigint)
+      lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
       where id in (select id from public.cloud_strategy_runs
         where executor_shard_id=$3 and state='running' and (lease_expires_at is null or lease_expires_at<$2::bigint or lease_owner=$1)
         order by coalesce(last_evaluated_at,0),created_at limit $4 for update skip locked)
@@ -190,6 +203,13 @@ export class CloudRuntimeRepository {
         consecutiveFailures: integer(value.consecutive_failures),
         positions: array(value.positions_json, "run positions") };
     });
+  }
+
+  async renewRunLease(runId: string, owner: string, now: number): Promise<boolean> {
+    const result = await this.#sql.unsafe(`update public.cloud_strategy_runs
+      set lease_expires_at=$3::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$3::bigint)
+      where id=$1 and lease_owner=$2`, [runId, owner, now]);
+    return (result.count ?? 0) > 0;
   }
 
   async credential(connectionId: string, userId: string): Promise<StoredCredential> {

@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { EmergencyStopDialog, type EmergencyCommand } from "./EmergencyStopDialog";
 import { LiveUnlockDialog, type LivePermissions } from "./LiveUnlockDialog";
 import { parseRunView } from "./run-parser";
 import { MODE_LABEL, type RunView } from "./types";
 import { useI18n } from "@/components/I18nProvider";
+import { useAdaptiveRefresh } from "./useAdaptiveRefresh";
 
 const key = () => typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `ui-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 export const permissionsForDevice = (value: unknown, deviceId: string, market: "spot" | "futures"): LivePermissions | null => {
@@ -26,14 +27,14 @@ export function RunDetailPanel({ runId }: { runId: string }) {
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [lifecyclePending, setLifecyclePending] = useState(false);
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false): Promise<boolean> => {
     if (!silent) { setState("loading"); setFeedback(""); }
     try {
       const [runResponse, connectionsResponse] = await Promise.all([
         fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: "no-store", headers: { Accept: "application/json" } }),
         fetch("/api/connections", { cache: "no-store", headers: { Accept: "application/json" } }),
       ]);
-      if (runResponse.status === 401) { setState("unauthorized"); return; }
+      if (runResponse.status === 401) { setState("unauthorized"); return false; }
       const body: unknown = await runResponse.json();
       const parsed = body && typeof body === "object" && Object.keys(body).length === 1 ? parseRunView((body as { run?: unknown }).run) : null;
       if (!runResponse.ok || !parsed) throw new Error("invalid_run_detail");
@@ -41,13 +42,13 @@ export function RunDetailPanel({ runId }: { runId: string }) {
       if (connectionsResponse.ok) setPermissions(permissionsForDevice(await connectionsResponse.json(), parsed.device.id, parsed.market));
       else setPermissions(null);
       setState("ready");
-    } catch { if (!silent) setState("error"); }
+      return true;
+    } catch {
+      if (!silent) setState("error");
+      return false;
+    }
   }, [runId]);
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    const refresh = window.setInterval(() => void load(true), 15_000);
-    return () => { window.clearTimeout(timer); window.clearInterval(refresh); };
-  }, [load]);
+  useAdaptiveRefresh({ refresh: (initial) => load(!initial) });
 
   const command = async (input: EmergencyCommand | { type: "resume-paper" | "resume-demo" | "resume-live"
     | "enable-futures-demo" | "pause"; reason: string }) => {

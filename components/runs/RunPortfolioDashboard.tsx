@@ -2,7 +2,7 @@
 
 import type { CSSProperties } from "react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   FiActivity,
   FiAlertTriangle,
@@ -19,6 +19,7 @@ import {
 import { SiBitcoin, SiEthereum, SiSolana } from "react-icons/si";
 import { useI18n } from "@/components/I18nProvider";
 import { CLOUD_RUNS_REFRESH_EVENT } from "./events";
+import { useAdaptiveRefresh } from "./useAdaptiveRefresh";
 
 type LoadState = "loading" | "ready" | "error" | "unauthorized";
 type RunState = "running" | "paused" | "stopped" | "error";
@@ -255,7 +256,7 @@ export function RunPortfolioDashboard({
   );
   const [filter, setFilter] = useState<RunFilter>("all");
 
-  const load = useCallback(async (showLoading = true) => {
+  const load = useCallback(async (showLoading = true): Promise<boolean> => {
     if (showLoading) setState("loading");
     try {
       const response = await fetch("/api/cloud-runs", {
@@ -264,32 +265,25 @@ export function RunPortfolioDashboard({
       });
       if (response.status === 401) {
         setState("unauthorized");
-        return;
+        return false;
       }
       const parsed = parseDashboard(await response.json());
       if (!response.ok || !parsed) throw new Error("invalid_cloud_portfolio");
       setPayload(parsed);
       setLastRefreshedAt(Date.now());
       setState("ready");
+      return true;
     } catch {
       if (showLoading) setState("error");
+      return false;
     }
   }, []);
 
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const timer = window.setTimeout(() => void load(), 0);
-    const refresh = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load(false);
-    }, 15_000);
-    const refreshNow = () => void load(false);
-    window.addEventListener(CLOUD_RUNS_REFRESH_EVENT, refreshNow);
-    return () => {
-      window.clearTimeout(timer);
-      window.clearInterval(refresh);
-      window.removeEventListener(CLOUD_RUNS_REFRESH_EVENT, refreshNow);
-    };
-  }, [autoRefresh, load]);
+  useAdaptiveRefresh({
+    enabled: autoRefresh,
+    eventName: CLOUD_RUNS_REFRESH_EVENT,
+    refresh: (initial) => load(initial),
+  });
 
   const dashboard = useMemo(() => {
     const positions = payload.account?.positions ?? [];

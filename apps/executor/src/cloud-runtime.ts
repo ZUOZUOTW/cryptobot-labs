@@ -15,17 +15,21 @@ import {
 import {
   createFetchTransport,
   decryptWeexCredentials,
-  parseIntervalMs,
   WeexApiError,
   WeexClock,
   WeexPrivateClient,
   WeexPublicClient,
   type CredentialEnvelopeKms,
   type WeexAccountPosition,
+  type VerifiedAccountSummary,
+  type WeexAccountSnapshot,
 } from "@cryptobot-labs/weex-client";
 
 import type { ClaimedOrder, CloudRun, CloudRuntimeRepository } from "./cloud-repository";
 import type { ClaimedAccountSnapshot } from "./cloud-repository";
+import { CloudMarketDataCache } from "./cloud-market-cache";
+import { mapWithConcurrency } from "./concurrency";
+import { RateLimitedWeexTransport } from "./rate-limited-transport";
 
 const CLOCK_PROBE_URL = "https://api-spot.weex.com/api/v3/market/ticker/price?symbol=BTCUSDT";
 const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
@@ -33,6 +37,27 @@ const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
 const TRADE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 export const ORDER_RECONCILIATION_GRACE_MS = 30_000;
 const SAFE_READ_ATTEMPTS = 3;
+const PRIVATE_CLIENT_TTL_MS = 20_000;
+const ACCOUNT_VERIFICATION_TTL_MS = 15_000;
+const ACCOUNT_SNAPSHOT_TTL_MS = 2_000;
+const CLOCK_SAMPLE_TTL_MS = 5_000;
+const LEASE_HEARTBEAT_MS = 30_000;
+
+type LiveTarget =
+  | { readonly market: "spot"; readonly mode: "live" }
+  | { readonly market: "futures"; readonly mode: "futures-demo" | "live" };
+
+interface TimedRequest<T> {
+  readonly expiresAt: number;
+  readonly promise: Promise<T>;
+}
+
+interface CachedPrivateClient {
+  readonly client: WeexPrivateClient;
+  readonly expiresAt: number;
+  readonly verifications: Map<string, TimedRequest<VerifiedAccountSummary>>;
+  readonly snapshots: Map<string, TimedRequest<WeexAccountSnapshot>>;
+}
 
 class AccountSyncStageError extends Error {
   constructor(readonly stage: "client" | "snapshot" | "projection" | "database", cause: unknown) {
@@ -419,16 +444,27 @@ const policy = (value: Record<string, unknown>): RiskPolicy => Object.freeze({
 
 export class CloudStrategyRuntime {
   readonly #owner = `worker_${Buffer.from(crypto.getRandomValues(new Uint8Array(18))).toString("base64url")}`;
-  readonly #transport = createFetchTransport({ timeoutMs: 10_000 });
+  readonly #transport = new RateLimitedWeexTransport(createFetchTransport({ timeoutMs: 10_000 }));
   readonly #public = new WeexPublicClient(this.#transport);
+  readonly #market = new CloudMarketDataCache(this.#public, () => (this.options.now ?? Date.now)());
+  readonly #privateClients = new Map<string, CachedPrivateClient>();
+  readonly #privateClientRequests = new Map<string, Promise<CachedPrivateClient>>();
+  #clockSample: TimedRequest<{ sentAt: number; receivedAt: number; serverTime: number }> | null = null;
   #active = false;
   #timer: ReturnType<typeof setTimeout> | null = null;
+  #lastTickStartedAt: number | null = null;
+  #lastTickDurationMs: number | null = null;
+  #lastClaimedAccounts = 0;
+  #lastClaimedRuns = 0;
 
   constructor(private readonly options: {
     repository: CloudRuntimeRepository;
     kms: CredentialEnvelopeKms;
     liveTradingEnabled: boolean;
     now?: () => number;
+    accountConcurrency?: number;
+    strategyConcurrency?: number;
+    tickIntervalMs?: number;
   }) {}
 
   start(): void {
@@ -442,13 +478,44 @@ export class CloudStrategyRuntime {
     if (this.#timer) clearTimeout(this.#timer);
   }
 
+  snapshot(): Readonly<Record<string, unknown>> {
+    return Object.freeze({
+      active: this.#active,
+      owner: this.#owner,
+      lastTickStartedAt: this.#lastTickStartedAt,
+      lastTickDurationMs: this.#lastTickDurationMs,
+      lastClaimedAccounts: this.#lastClaimedAccounts,
+      lastClaimedRuns: this.#lastClaimedRuns,
+      privateClientCacheSize: this.#privateClients.size,
+      weex: this.#transport.governor.snapshot(),
+    });
+  }
+
   async #tick(): Promise<void> {
     if (!this.#active) return;
+    const tickStartedAt = (this.options.now ?? Date.now)();
+    this.#lastTickStartedAt = tickStartedAt;
     try {
-      const now = (this.options.now ?? Date.now)();
-      const accounts = await this.options.repository.claimAccountSnapshots(this.#owner, now);
-      for (const account of accounts) {
-        try { await this.#synchronizeAccount(account); }
+      const accountConcurrency = this.options.accountConcurrency ?? 4;
+      const strategyConcurrency = this.options.strategyConcurrency ?? 8;
+      const [accounts, runs] = await Promise.all([
+        this.options.repository.claimAccountSnapshots(this.#owner, tickStartedAt, Math.max(20, accountConcurrency * 10)),
+        this.options.repository.claimRuns(this.#owner, tickStartedAt, Math.max(40, strategyConcurrency * 12)),
+      ]);
+      this.#lastClaimedAccounts = accounts.length;
+      this.#lastClaimedRuns = runs.length;
+      await Promise.all([
+        mapWithConcurrency(accounts, accountConcurrency, async (account) => {
+        try {
+          await this.#withLeaseHeartbeat(
+            () => this.options.repository.renewAccountLease(
+              account,
+              this.#owner,
+              (this.options.now ?? Date.now)(),
+            ),
+            () => this.#synchronizeAccount(account),
+          );
+        }
         catch (error) {
           const failure = error instanceof AccountSyncStageError ? error.cause : error;
           const generic = failure && typeof failure === "object"
@@ -476,10 +543,14 @@ export class CloudStrategyRuntime {
           await this.options.repository.failAccountProjection(account, this.#owner, code,
             (this.options.now ?? Date.now)()).catch(() => undefined);
         }
-      }
-      const runs = await this.options.repository.claimRuns(this.#owner, now);
-      for (const run of runs) {
-        try { await this.#evaluate(run); }
+        }),
+        mapWithConcurrency(runs, strategyConcurrency, async (run) => {
+        try {
+          await this.#withLeaseHeartbeat(
+            () => this.options.repository.renewRunLease(run.id, this.#owner, (this.options.now ?? Date.now)()),
+            () => this.#evaluate(run),
+          );
+        }
         catch (error) {
           const failure = cloudRunFailure(error);
           console.warn(JSON.stringify({
@@ -498,52 +569,167 @@ export class CloudStrategyRuntime {
           await this.options.repository.fail(run, this.#owner, failure.code,
             (this.options.now ?? Date.now)(), failure.terminal).catch(() => undefined);
         }
-      }
+        }),
+      ]);
     } finally {
-      if (this.#active) this.#timer = setTimeout(() => void this.#tick(), 10_000);
+      this.#lastTickDurationMs = Math.max(0, (this.options.now ?? Date.now)() - tickStartedAt);
+      if (this.#lastClaimedAccounts > 0 || this.#lastClaimedRuns > 0
+        || this.#lastTickDurationMs > (this.options.tickIntervalMs ?? 2_000)) {
+        console.info(JSON.stringify({
+          event: "cloud_runtime_tick",
+          durationMs: this.#lastTickDurationMs,
+          accounts: this.#lastClaimedAccounts,
+          runs: this.#lastClaimedRuns,
+          rateLimit: this.#transport.governor.snapshot(),
+        }));
+      }
+      if (this.#active) {
+        this.#timer = setTimeout(() => void this.#tick(), this.options.tickIntervalMs ?? 2_000);
+      }
     }
   }
 
-  async #privateClient(connectionId: string, userId: string): Promise<WeexPrivateClient> {
+  async #withLeaseHeartbeat<T>(
+    renew: () => Promise<boolean>,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    let renewing = false;
+    const timer = setInterval(() => {
+      if (renewing) return;
+      renewing = true;
+      void renew().then((owned) => {
+        if (!owned) console.warn(JSON.stringify({ event: "cloud_runtime_lease_lost" }));
+      }).catch(() => {
+        console.warn(JSON.stringify({ event: "cloud_runtime_lease_heartbeat_failed" }));
+      }).finally(() => { renewing = false; });
+    }, LEASE_HEARTBEAT_MS);
+    timer.unref?.();
+    try {
+      return await operation();
+    } finally {
+      clearInterval(timer);
+    }
+  }
+
+  async #clock(): Promise<WeexClock> {
+    const now = (this.options.now ?? Date.now)();
+    if (!this.#clockSample || this.#clockSample.expiresAt <= now) {
+      const promise = retryWeexRead(async () => {
+        const sentAt = (this.options.now ?? Date.now)();
+        const probe = await this.#transport.send({
+          method: "GET",
+          url: CLOCK_PROBE_URL,
+          headers: { Accept: "application/json" },
+        });
+        const receivedAt = (this.options.now ?? Date.now)();
+        const serverTime = Date.parse(probe.headers.date ?? "");
+        if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) {
+          throw new WeexApiError("WEEX clock is unavailable", { category: "clock", retryable: true });
+        }
+        return { sentAt, receivedAt, serverTime };
+      });
+      this.#clockSample = { expiresAt: now + CLOCK_SAMPLE_TTL_MS, promise };
+      promise.catch(() => {
+        if (this.#clockSample?.promise === promise) this.#clockSample = null;
+      });
+    }
+    const sampleRequest = this.#clockSample;
+    const sample = await sampleRequest.promise;
+    const clock = new WeexClock(this.options.now ?? Date.now);
+    clock.recordServerTime(sample.serverTime, sample.sentAt, sample.receivedAt);
+    return clock;
+  }
+
+  async #privateClient(connectionId: string, userId: string): Promise<CachedPrivateClient> {
+    const cacheKey = `${connectionId}:${userId}`;
+    const now = (this.options.now ?? Date.now)();
+    const existing = this.#privateClients.get(cacheKey);
+    if (existing && existing.expiresAt > now) return existing;
+    const pending = this.#privateClientRequests.get(cacheKey);
+    if (pending) return pending;
+    const request = this.#createPrivateClient(cacheKey, connectionId, userId, now);
+    this.#privateClientRequests.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      this.#privateClientRequests.delete(cacheKey);
+    }
+  }
+
+  async #createPrivateClient(
+    cacheKey: string,
+    connectionId: string,
+    userId: string,
+    now: number,
+  ): Promise<CachedPrivateClient> {
     const stored = await this.options.repository.credential(connectionId, userId);
     const credentials = await decryptWeexCredentials({
       envelope: stored.envelope,
       context: stored.context,
       kms: this.options.kms,
     });
-    const sample = await retryWeexRead(async () => {
-      const sentAt = (this.options.now ?? Date.now)();
-      const probe = await this.#transport.send({
-        method: "GET",
-        url: CLOCK_PROBE_URL,
-        headers: { Accept: "application/json" },
-      });
-      const receivedAt = (this.options.now ?? Date.now)();
-      const serverTime = Date.parse(probe.headers.date ?? "");
-      if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) {
-        throw new WeexApiError("WEEX clock is unavailable", { category: "clock", retryable: true });
-      }
-      return { sentAt, receivedAt, serverTime };
-    });
-    const clock = new WeexClock(this.options.now ?? Date.now);
-    clock.recordServerTime(sample.serverTime, sample.sentAt, sample.receivedAt);
-    return new WeexPrivateClient({
+    const clock = await this.#clock();
+    const entry: CachedPrivateClient = {
+      expiresAt: now + PRIVATE_CLIENT_TTL_MS,
+      verifications: new Map(),
+      snapshots: new Map(),
+      client: new WeexPrivateClient({
       transport: this.#transport,
       credentials,
       clock,
+      rulesProvider: async (target, symbol) => ({
+        rules: await this.#market.instrumentRules(target.market, symbol),
+        verifiedAt: (this.options.now ?? Date.now)(),
+      }),
       now: () => Math.floor(clock.now()),
       maximumGetAttempts: SAFE_READ_ATTEMPTS,
+      }),
+    };
+    this.#privateClients.delete(cacheKey);
+    while (this.#privateClients.size >= 256) {
+      const oldest = this.#privateClients.keys().next().value;
+      if (oldest === undefined) break;
+      this.#privateClients.delete(oldest);
+    }
+    this.#privateClients.set(cacheKey, entry);
+    return entry;
+  }
+
+  async #verifiedAccount(entry: CachedPrivateClient, target: LiveTarget): Promise<VerifiedAccountSummary> {
+    const key = `${target.market}:${target.mode}`;
+    const now = (this.options.now ?? Date.now)();
+    const existing = entry.verifications.get(key);
+    if (existing && existing.expiresAt > now) return existing.promise;
+    const promise = entry.client.verifyAccount(target);
+    entry.verifications.set(key, { expiresAt: now + ACCOUNT_VERIFICATION_TTL_MS, promise });
+    promise.catch(() => {
+      if (entry.verifications.get(key)?.promise === promise) entry.verifications.delete(key);
     });
+    return promise;
+  }
+
+  async #accountSnapshot(entry: CachedPrivateClient, target: LiveTarget): Promise<WeexAccountSnapshot> {
+    const key = `${target.market}:${target.mode}`;
+    const now = (this.options.now ?? Date.now)();
+    const existing = entry.snapshots.get(key);
+    if (existing && existing.expiresAt > now) return existing.promise;
+    const promise = entry.client.getAccountSnapshot(target);
+    entry.snapshots.set(key, { expiresAt: now + ACCOUNT_SNAPSHOT_TTL_MS, promise });
+    promise.catch(() => {
+      if (entry.snapshots.get(key)?.promise === promise) entry.snapshots.delete(key);
+    });
+    return promise;
   }
 
   async #synchronizeAccount(account: ClaimedAccountSnapshot): Promise<void> {
-    const client = await this.#privateClient(account.connectionId, account.userId)
+    const cached = await this.#privateClient(account.connectionId, account.userId)
       .catch((error: unknown) => { throw new AccountSyncStageError("client", error); });
+    const client = cached.client;
     const now = (this.options.now ?? Date.now)();
     if (this.options.liveTradingEnabled && account.permissions.liveVerified !== true) {
       const [spot, futures] = await Promise.allSettled([
-        client.verifyAccount({ market: "spot", mode: "live" }),
-        client.verifyAccount({ market: "futures", mode: "live" }),
+        this.#verifiedAccount(cached, { market: "spot", mode: "live" }),
+        this.#verifiedAccount(cached, { market: "futures", mode: "live" }),
       ]);
       const spotSummary = spot.status === "fulfilled" ? spot.value : null;
       const futuresSummary = futures.status === "fulfilled" ? futures.value : null;
@@ -615,53 +801,33 @@ export class CloudStrategyRuntime {
       throw new CloudRunExecutionError("unsupported_market_mode", "runtime", true);
     }
     const blockingOrder = await this.options.repository.blockingOrder(run.id, run.lastCandleAt);
-    const interval = parseIntervalMs(config.timeframe);
     const now = (this.options.now ?? Date.now)();
-    const endTime = Math.floor(now / interval) * interval;
-    const startTime = Math.max(0, endTime - interval * 300);
-    const dataset = await retryWeexRead(() => this.#public.collectHistoricalCandles({
+    const expectedCloseAt = this.#market.expectedCloseAt({
       market: config.market,
       symbol: config.symbol,
-      interval: config.timeframe,
-      startTime,
-      endTime,
-      limit: 100,
-    }));
-    const candles = dataset.candles.slice(-300);
+      timeframe: config.timeframe,
+    }, now);
+    if (!blockingOrder && expectedCloseAt <= (run.lastCandleAt ?? -1)) {
+      await this.options.repository.release(run.id, this.#owner, now);
+      return;
+    }
+    const candles = await retryWeexRead(() => this.#market.history({
+      market: config.market,
+      symbol: config.symbol,
+      timeframe: config.timeframe,
+    }, now));
     const latest = candles.at(-1);
     if (!blockingOrder && (!latest || latest.closeTime <= (run.lastCandleAt ?? -1))) {
       await this.options.repository.release(run.id, this.#owner, (this.options.now ?? Date.now)());
       return;
     }
-    const rules = await retryWeexRead(() => this.#public.getInstrumentRules(config.market, config.symbol));
-    const stored = await this.options.repository.credential(run.connectionId, run.userId);
-    const credentials = await decryptWeexCredentials({ envelope: stored.envelope, context: stored.context,
-      kms: this.options.kms });
-    const sample = await retryWeexRead(async () => {
-      const sentAt = (this.options.now ?? Date.now)();
-      const probe = await this.#transport.send({
-        method: "GET",
-        url: CLOCK_PROBE_URL,
-        headers: { Accept: "application/json" },
-      });
-      const receivedAt = (this.options.now ?? Date.now)();
-      const serverTime = Date.parse(probe.headers.date ?? "");
-      if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) {
-        throw new WeexApiError("WEEX clock is unavailable", { category: "clock", retryable: true });
-      }
-      return { sentAt, receivedAt, serverTime };
-    });
-    const clock = new WeexClock(this.options.now ?? Date.now);
-    clock.recordServerTime(sample.serverTime, sample.sentAt, sample.receivedAt);
+    const rules = await retryWeexRead(() => this.#market.instrumentRules(config.market, config.symbol));
     const target = config.market === "spot"
       ? { market: "spot" as const, mode: "live" as const }
       : { market: "futures" as const, mode: run.mode };
-    const client = new WeexPrivateClient({ transport: this.#transport, credentials, clock,
-      rulesProvider: async (_target, symbol) => {
-        if (symbol !== rules.symbol) throw new Error("Instrument mismatch");
-        return { rules, verifiedAt: (this.options.now ?? Date.now)() };
-      }, now: () => Math.floor(clock.now()), maximumGetAttempts: SAFE_READ_ATTEMPTS });
-    const verification = await client.verifyAccount(target);
+    const cached = await this.#privateClient(run.connectionId, run.userId);
+    const client = cached.client;
+    const verification = await this.#verifiedAccount(cached, target);
     if (verification.readPermission !== true) {
       throw new CloudRunExecutionError("live_api_permission_required", "account", true);
     }
@@ -674,7 +840,7 @@ export class CloudStrategyRuntime {
         order: blockingOrder,
         target,
         symbol: config.symbol,
-        now: Math.floor(clock.now()),
+        now: (this.options.now ?? Date.now)(),
       });
       return;
     }
@@ -688,10 +854,10 @@ export class CloudStrategyRuntime {
       throw new CloudRunExecutionError("hedge_mode_required", "account", true);
     }
     if (!latest || latest.closeTime <= (run.lastCandleAt ?? -1)) {
-      await this.options.repository.release(run.id, this.#owner, Math.floor(clock.now()));
+      await this.options.repository.release(run.id, this.#owner, (this.options.now ?? Date.now)());
       return;
     }
-    const account = await client.getAccountSnapshot(target);
+    const account = await this.#accountSnapshot(cached, target);
     const futuresPositions = account.positions
       .filter((candidate) => candidate.symbol === config.symbol && Number(candidate.size) > 0);
     if (futuresPositions.length > 1) {

@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useI18n } from "@/components/I18nProvider";
 import { cloudRunFailureMessage } from "./CloudRunsPanel";
 import { CLOUD_RUNS_REFRESH_EVENT } from "./events";
+import { useAdaptiveRefresh } from "./useAdaptiveRefresh";
 
 type RunState = "running" | "paused" | "stopped" | "error";
 
@@ -163,31 +164,30 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false): Promise<boolean> => {
     if (!silent) { setState("loading"); setFeedback(""); }
     try {
       const response = await fetch("/api/cloud-runs", {
         cache: "no-store", headers: { Accept: "application/json" },
       });
-      if (response.status === 401) { setState("unauthorized"); return; }
+      if (response.status === 401) { setState("unauthorized"); return false; }
       const parsed = parsePayload(await response.json(), runId);
       if (!response.ok || !parsed) throw new Error("invalid_cloud_run_detail");
-      if (!parsed.run) { setState("missing"); return; }
+      if (!parsed.run) { setState("missing"); return false; }
       setRun(parsed.run);
       setAccount(parsed.account);
       setState("ready");
+      return true;
     } catch {
       if (!silent) setState("error");
+      return false;
     }
   }, [runId]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    const refresh = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load(true);
-    }, 15_000);
-    return () => { window.clearTimeout(timer); window.clearInterval(refresh); };
-  }, [load]);
+  useAdaptiveRefresh({
+    eventName: CLOUD_RUNS_REFRESH_EVENT,
+    refresh: (initial) => load(!initial),
+  });
 
   const positions = useMemo(() => account?.positions
     .filter((position) => run?.allowedSymbols.includes(position.symbol)) ?? [], [account, run]);

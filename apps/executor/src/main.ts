@@ -56,7 +56,10 @@ await Promise.all([
 ]);
 
 const cloudRuntime = new CloudStrategyRuntime({ repository: cloudRepository, kms,
-  liveTradingEnabled: config.liveTradingEnabled });
+  liveTradingEnabled: config.liveTradingEnabled,
+  accountConcurrency: config.accountConcurrency,
+  strategyConcurrency: config.strategyConcurrency,
+  tickIntervalMs: config.tickIntervalMs });
 cloudRuntime.start();
 
 const json = (response: import("node:http").ServerResponse, status: number, body: unknown): void => {
@@ -97,7 +100,8 @@ const handleRequest = async (request: import("node:http").IncomingMessage,
     const ready = readiness.kms && readiness.fixedEgress && readiness.database && readiness.cloudRuntime
       && readiness.credentialEnvelopeAdapter;
     json(response, ready ? 200 : 503, { status: ready ? "ready" : "not-ready", ...runtimeMetadata,
-      checks: readiness, oauthEnabled: oauth.enabled, liveTradingEnabled: config.liveTradingEnabled });
+      checks: readiness, oauthEnabled: oauth.enabled, liveTradingEnabled: config.liveTradingEnabled,
+      runtime: cloudRuntime.snapshot() });
     return;
   }
   if (request.method === "POST" && request.url === "/oauth/weex/start") {
