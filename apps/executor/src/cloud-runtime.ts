@@ -432,6 +432,10 @@ export class CloudStrategyRuntime {
           const failure = cloudRunFailure(error);
           console.warn(JSON.stringify({
             event: "cloud_strategy_run_failed",
+            runId: run.id,
+            mode: run.mode,
+            lastCandleAt: run.lastCandleAt,
+            failureAttempt: run.consecutiveFailures + 1,
             stage: failure.stage,
             category: failure.category,
             name: failure.name,
