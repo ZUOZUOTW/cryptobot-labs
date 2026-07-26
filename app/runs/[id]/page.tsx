@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CloudRunDetailPanel } from "../../../components/runs/CloudRunDetailPanel";
 import { RunDetailPanel } from "../../../components/runs/RunDetailPanel";
 import { DemoRunDetail } from "../../../components/runs/DemoRunDetail";
 import { demoModeEnabled } from "../../../lib/server/demo-mode";
@@ -13,7 +14,9 @@ export default async function RunDetailPage({ params }: RunDetailPageProps) {
   return (
     <div className="run-detail-page site-container">
       <Link className="back-link" href="/runs"><span aria-hidden="true">←</span> 返回所有運行</Link>
-      {demoModeEnabled() && safeId.startsWith("demo-") ? <DemoRunDetail runId={safeId} /> : <RunDetailPanel runId={safeId} />}
+      {demoModeEnabled() && safeId.startsWith("demo-") ? <DemoRunDetail runId={safeId} />
+        : safeId.startsWith("crun_") ? <CloudRunDetailPanel runId={safeId} />
+          : <RunDetailPanel runId={safeId} />}
     </div>
   );
 }
