@@ -182,9 +182,23 @@ export class CloudRuntimeRepository {
   async claimRuns(owner: string, now: number, limit = 10): Promise<CloudRun[]> {
     const rows = await this.#sql.unsafe(`update public.cloud_strategy_runs set lease_owner=$1,
       lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
-      where id in (select id from public.cloud_strategy_runs
-        where executor_shard_id=$3 and state='running' and (lease_expires_at is null or lease_expires_at<$2::bigint or lease_owner=$1)
-        order by coalesce(last_evaluated_at,0),created_at limit $4 for update skip locked)
+      where id in (select r.id from public.cloud_strategy_runs r
+        cross join lateral (values (case r.config_json->>'timeframe'
+          when '1m' then 60000::bigint when '5m' then 300000::bigint
+          when '15m' then 900000::bigint when '30m' then 1800000::bigint
+          when '1h' then 3600000::bigint when '4h' then 14400000::bigint
+          when '1d' then 86400000::bigint else 60000::bigint end)) schedule(interval_ms)
+        where r.executor_shard_id=$3 and r.state='running'
+          and (r.lease_expires_at is null or r.lease_expires_at<$2::bigint or r.lease_owner=$1)
+          and (r.last_candle_at is null
+            or r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1
+            or exists (select 1 from private.cloud_order_intents o where o.run_id=r.id and (
+              o.status in ('claimed','unknown')
+              or (o.status='acknowledged' and coalesce(o.error_code,'') not in
+                ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+              or o.candle_close_at>coalesce(r.last_candle_at,-1)
+            )))
+        order by coalesce(r.last_evaluated_at,0),r.created_at limit $4 for update of r skip locked)
       returning id,user_id,connection_id,mode,version,configuration_hash,config_json,risk_json,last_candle_at,last_evaluated_at,
         consecutive_failures,positions_json`,
     [owner, now, this.shardId, limit]);

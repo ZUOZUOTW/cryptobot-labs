@@ -11,6 +11,28 @@ vi.mock("postgres", () => ({
 
 import { CloudRuntimeRepository } from "../src/cloud-repository";
 
+describe("CloudRuntimeRepository run scheduling", () => {
+  beforeEach(() => {
+    database.unsafe.mockReset().mockResolvedValue([]);
+  });
+
+  it("claims only runs with a newly closed candle or unresolved order evidence", async () => {
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.claimRuns("owner-1", 1_700_000_000_000, 96)).resolves.toEqual([]);
+
+    const query = String(database.unsafe.mock.calls[0]?.[0]);
+    expect(query).toContain("r.config_json->>'timeframe'");
+    expect(query).toContain("schedule.interval_ms");
+    expect(query).toContain("r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1");
+    expect(query).toContain("exists (select 1 from private.cloud_order_intents");
+    expect(query).toContain("o.status in ('claimed','unknown')");
+    expect(database.unsafe.mock.calls[0]?.[1]).toEqual([
+      "owner-1", 1_700_000_000_000, "executor-a", 96,
+    ]);
+  });
+});
+
 describe("CloudRuntimeRepository account projection", () => {
   beforeEach(() => {
     database.unsafe.mockReset().mockResolvedValue(Object.assign([], { count: 1 }));
