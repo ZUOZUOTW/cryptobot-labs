@@ -12,6 +12,7 @@ export type SourceValidationResult = ValidationResult;
 export type BotConfigCandidate = Omit<BotConfig, "exchange"> & { exchange: string };
 
 const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
+const LONG_ONLY_ENTRY_BLOCKS = new Set(["dca"]);
 const NETWORK_URL_CANDIDATE_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/.*?(?=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/|[\s"'`<>]|$)/g;
 const SUPPORTED_NETWORK_SCHEMES = new Set(["http", "https", "ws", "wss"]);
 const FORBIDDEN_EXCHANGES = [
@@ -66,6 +67,10 @@ export const hasBotConfigShape = (value: unknown): value is BotConfigCandidate =
   && isNonEmptyString(value.symbol)
   && isNonEmptyString(value.timeframe)
   && (value.logicMode === "all" || value.logicMode === "any")
+  && (value.tradeDirection === undefined
+    || value.tradeDirection === "long"
+    || value.tradeDirection === "short"
+    || value.tradeDirection === "both")
   && isFiniteNumber(value.leverage)
   && Array.isArray(value.blocks)
   && value.blocks.every(isStrategyBlock)
@@ -482,8 +487,22 @@ export const validateConfig = (value: unknown): ValidationResult => {
   }
 
   if (config.market === "spot" && config.leverage !== 1) errors.push("現貨交易槓桿必須為 1");
+  if (config.market === "spot" && config.tradeDirection !== undefined && config.tradeDirection !== "long") {
+    errors.push("現貨策略只能設定為只做多");
+  }
   if (config.market === "futures" && (!Number.isFinite(config.leverage) || config.leverage < 1 || config.leverage > 500)) {
     errors.push("合約交易槓桿必須介於 1 到 WEEX 支援上限（最高 500）");
+  }
+  const tradeDirection = config.tradeDirection ?? (config.market === "spot" ? "long" : "both");
+  if (config.source === undefined && config.market === "futures" && tradeDirection !== "long") {
+    const entries = config.blocks.filter((block) => block.group === "entry");
+    const shortCapable = entries.filter((block) => !LONG_ONLY_ENTRY_BLOCKS.has(block.id));
+    const shortPathAvailable = config.logicMode === "all"
+      ? entries.length > 0 && shortCapable.length === entries.length
+      : shortCapable.length > 0;
+    if (!shortPathAvailable) {
+      errors.push("目前進場模組無法產生做空訊號；請移除只做多模組或改選只做多");
+    }
   }
 
   for (const strategy of config.blocks) {

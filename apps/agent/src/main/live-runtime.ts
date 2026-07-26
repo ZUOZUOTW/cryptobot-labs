@@ -30,6 +30,11 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
     repository: options.repository, exchange, circuitBreaker, failureClassifier: () => "unknown" });
   const runtime = options.source === undefined || options.source === null
     ? new VisualExecutionRuntime({ evaluator: createVisualStrategyEvaluator(options.config), coordinator, audit: options.audit })
-    : new ExecutionRuntime({ worker: options.worker ?? new StrategyWorker(), coordinator, audit: options.audit });
+    : new ExecutionRuntime({
+      worker: options.worker ?? new StrategyWorker(),
+      coordinator,
+      audit: options.audit,
+      tradeDirection: options.config.tradeDirection,
+    });
   return Object.freeze({ runtime, coordinator, circuitBreaker, exchange });
 }

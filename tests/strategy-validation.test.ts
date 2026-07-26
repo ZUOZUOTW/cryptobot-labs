@@ -129,6 +129,24 @@ describe("validateConfig", () => {
     expect(validateConfig({ ...validConfig, leverage: 400 }).valid).toBe(true);
   });
 
+  it("enforces a valid market and entry-path combination for each trade direction", () => {
+    expect(validateConfig({
+      ...validConfig,
+      market: "spot",
+      tradeDirection: "short",
+      leverage: 1,
+    }).errors).toContain("現貨策略只能設定為只做多");
+
+    expect(validateConfig({
+      ...validConfig,
+      tradeDirection: "short",
+      blocks: [cloneBlock("dca"), riskBlock],
+    }).errors).toContain("目前進場模組無法產生做空訊號；請移除只做多模組或改選只做多");
+
+    expect(validateConfig({ ...validConfig, tradeDirection: "short" }).valid).toBe(true);
+    expect(validateConfig({ ...validConfig, tradeDirection: "both" }).valid).toBe(true);
+  });
+
   it("rejects parameter values outside their declared range", () => {
     const invalidEntry = {
       ...entryBlock,

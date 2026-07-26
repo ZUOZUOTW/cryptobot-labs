@@ -10,9 +10,10 @@ import type {
 type Direction = -1 | 0 | 1;
 type UnknownRecord = Record<string, unknown>;
 
-const CONFIG_KEYS = ["blocks", "exchange", "id", "leverage", "logicMode", "market", "name", "source", "symbol", "timeframe"];
+const CONFIG_KEYS = ["blocks", "exchange", "id", "leverage", "logicMode", "market", "name", "source", "symbol", "timeframe", "tradeDirection"];
 const BLOCK_KEYS = ["description", "group", "id", "name", "parameters"];
 const PARAMETER_KEYS = ["key", "label", "max", "min", "step", "suffix", "value"];
+const LONG_ONLY_ENTRY_BLOCKS = new Set(["dca"]);
 
 const isRecord = (value: unknown): value is UnknownRecord => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -22,6 +23,18 @@ const exactKeys = (value: UnknownRecord, allowed: readonly string[]): boolean =>
 };
 
 const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+const resolvedTradeDirection = (config: Pick<VisualBotConfig, "market" | "tradeDirection">) => (
+  config.tradeDirection ?? (config.market === "spot" ? "long" : "both")
+);
+const positionSideAllowed = (
+  config: Pick<VisualBotConfig, "market" | "tradeDirection">,
+  side: "long" | "short",
+): boolean => {
+  const direction = resolvedTradeDirection(config);
+  return side === "long"
+    ? direction === "long" || direction === "both"
+    : config.market === "futures" && (direction === "short" || direction === "both");
+};
 
 const parameterValue = (block: Readonly<VisualStrategyBlock>, key: string): number => {
   const value = block.parameters.find((item) => item.key === key)?.value;
@@ -34,12 +47,17 @@ function validateConfig(candidate: unknown): asserts candidate is VisualBotConfi
   if (!nonEmptyString(candidate.id) || !nonEmptyString(candidate.name) || candidate.exchange !== "WEEX" ||
       (candidate.market !== "spot" && candidate.market !== "futures") || !nonEmptyString(candidate.symbol) ||
       !nonEmptyString(candidate.timeframe) || (candidate.logicMode !== "all" && candidate.logicMode !== "any") ||
+      (candidate.tradeDirection !== undefined && candidate.tradeDirection !== "long"
+        && candidate.tradeDirection !== "short" && candidate.tradeDirection !== "both") ||
       typeof candidate.leverage !== "number" || !Number.isFinite(candidate.leverage) || !Array.isArray(candidate.blocks)) {
     throw new TypeError("Invalid visual BotConfig shape");
   }
   if (candidate.source !== undefined) throw new TypeError("Custom JavaScript requires the QuickJS sandbox");
   if (candidate.market === "spot" ? candidate.leverage !== 1 : candidate.leverage < 1 || candidate.leverage > 500) {
     throw new RangeError("Invalid leverage for visual strategy market");
+  }
+  if (candidate.market === "spot" && candidate.tradeDirection !== undefined && candidate.tradeDirection !== "long") {
+    throw new RangeError("Spot visual strategies are long-only");
   }
 
   const seenBlocks = new Set<string>();
@@ -77,6 +95,14 @@ function validateConfig(candidate: unknown): asserts candidate is VisualBotConfi
   if (!candidate.blocks.some((block) => isRecord(block) && (block.group === "exit" || block.group === "risk"))) {
     throw new TypeError("Visual strategy requires an exit or risk block");
   }
+  const entries = candidate.blocks.filter((block) => isRecord(block) && block.group === "entry") as unknown as VisualStrategyBlock[];
+  const tradeDirection = candidate.tradeDirection ?? (candidate.market === "spot" ? "long" : "both");
+  if (candidate.market === "futures" && tradeDirection !== "long") {
+    const shortCapable = entries.filter((block) => !LONG_ONLY_ENTRY_BLOCKS.has(block.id));
+    if (candidate.logicMode === "all" ? shortCapable.length !== entries.length : shortCapable.length === 0) {
+      throw new TypeError("Visual strategy entry blocks cannot produce a short signal");
+    }
+  }
   const sma = candidate.blocks.find((block) => isRecord(block) && block.id === "sma-cross") as unknown as VisualStrategyBlock | undefined;
   if (sma && parameterValue(sma, "shortPeriod") >= parameterValue(sma, "longPeriod")) throw new TypeError("SMA short period must be below long period");
   const ema = candidate.blocks.find((block) => isRecord(block) && block.id === "ema-cross") as unknown as VisualStrategyBlock | undefined;
@@ -92,7 +118,11 @@ const cloneAndFreezeConfig = (value: VisualBotConfig): Readonly<VisualBotConfig>
     const parameters = canonical.parameters.map((item) => Object.freeze({ ...item, value: values.get(item.key)! }));
     return Object.freeze({ ...canonical, parameters: Object.freeze(parameters) });
   });
-  return Object.freeze({ ...value, blocks: Object.freeze(blocks) as unknown as VisualStrategyBlock[] });
+  return Object.freeze({
+    ...value,
+    tradeDirection: resolvedTradeDirection(value),
+    blocks: Object.freeze(blocks) as unknown as VisualStrategyBlock[],
+  });
 };
 
 const decimal = (value: string): number => {
@@ -330,7 +360,11 @@ const entryDirection = (block: Readonly<VisualStrategyBlock>, candles: readonly 
     }
     case "roc-momentum": {
       const period = parameterValue(block, "period"); if (values.length <= period + 1) return 0; const roc = (end: number) => (values[end - 1]! / values[end - 1 - period]! - 1) * 100;
-      return crossover(roc(values.length - 1), parameterValue(block, "threshold"), roc(values.length), parameterValue(block, "threshold"));
+      const threshold = Math.abs(parameterValue(block, "threshold"));
+      const previous = roc(values.length - 1);
+      const current = roc(values.length);
+      if (previous <= threshold && current > threshold) return 1;
+      return previous >= -threshold && current < -threshold ? -1 : 0;
     }
     case "ichimoku-breakout": {
       const conversion = midpointAt(candles, parameterValue(block, "conversionPeriod")); const base = midpointAt(candles, parameterValue(block, "basePeriod")); const span = midpointAt(candles, parameterValue(block, "spanPeriod"));
@@ -509,6 +543,15 @@ export const createVisualStrategyEvaluator = (candidate: VisualBotConfig): Visua
         const suppress = exit.endsWith(":suppress");
         return { id: `visual-${input.now}-${suppress ? "hold" : "close"}`, action: suppress ? "hold" : "close", reason: exit, createdAt: input.now };
       }
+      const position = input.portfolio?.position;
+      if (position && !positionSideAllowed(config, position.side)) {
+        return {
+          id: `visual-${input.now}-close`,
+          action: "close",
+          reason: `trade-direction:${resolvedTradeDirection(config)}:position-not-allowed`,
+          createdAt: input.now,
+        };
+      }
       const entries = config.blocks.filter((block) => block.group === "entry");
       const directions = entries.map((block) => entryDirection(block, input.candles));
       let direction: Direction = 0;
@@ -522,18 +565,26 @@ export const createVisualStrategyEvaluator = (candidate: VisualBotConfig): Visua
       }
       const confirmations = config.blocks.filter((block) => block.group === "confirm").map((block) => confirmationPassed(block, input.candles));
       const confirmed = confirmations.length === 0 || (config.logicMode === "all" ? confirmations.every(Boolean) : confirmations.some(Boolean));
-      if (direction === 0 || !confirmed || (direction === -1 && config.market === "spot" && !input.portfolio?.position)) {
-        const reason = direction === 0 ? `entry:${config.logicMode}:not-triggered` : !confirmed ? "confirm:not-triggered" : "spot:bearish-signal-suppressed";
+      const signalSide = direction === 1 ? "long" : "short";
+      if (direction === 0 || !confirmed || (!position && !positionSideAllowed(config, signalSide))) {
+        const reason = direction === 0
+          ? `entry:${config.logicMode}:not-triggered`
+          : !confirmed
+            ? "confirm:not-triggered"
+            : `trade-direction:${resolvedTradeDirection(config)}:entry-suppressed`;
         return { id: `visual-${input.now}-hold`, action: "hold", reason, createdAt: input.now };
       }
       const action = direction === 1 ? "buy" : "sell";
+      const layered = entries.some((block) => block.id === "grid" || block.id === "dca");
+      const sameDirection = position && ((position.side === "long" && action === "buy") || (position.side === "short" && action === "sell"));
+      if (position && !sameDirection && !layered) {
+        return { id: `visual-${input.now}-close`, action: "close", reason: "entry:opposite-signal", createdAt: input.now };
+      }
+      if (position && sameDirection && !layered) {
+        return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-open:no-add", createdAt: input.now };
+      }
       const allocation = allocationRate(config, input.candles);
       if (allocation === undefined) return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-sizing:atr-not-ready", createdAt: input.now };
-      const position = input.portfolio?.position;
-      if (position && !entries.some((block) => block.id === "grid" || block.id === "dca")) {
-        return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-open:no-exit", createdAt: input.now };
-      }
-      const sameDirection = position && ((position.side === "long" && action === "buy") || (position.side === "short" && action === "sell"));
       const reducing = position && !sameDirection;
       const grid = config.blocks.find((block) => block.id === "grid");
       if (sameDirection && grid && position.layerCount >= parameterValue(grid, "gridCount")) {

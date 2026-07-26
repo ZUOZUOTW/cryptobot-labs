@@ -46,6 +46,7 @@ export interface ExecutionRuntimeDependencies {
   readonly worker: StrategyWorker;
   readonly coordinator: Pick<ExecutionCoordinator, "propose">;
   readonly audit: (event: RuntimeAuditEvent) => void | Promise<void>;
+  readonly tradeDirection?: "long" | "short" | "both";
 }
 
 /** Trusted bridge from a signal-only sandbox to the mandatory risk coordinator. */
@@ -53,6 +54,7 @@ export class ExecutionRuntime {
   readonly #worker: StrategyWorker;
   readonly #coordinator: Pick<ExecutionCoordinator, "propose">;
   readonly #audit: ExecutionRuntimeDependencies["audit"];
+  readonly #tradeDirection: ExecutionRuntimeDependencies["tradeDirection"];
   #deployment: RuntimeDeployment | null = null;
   #epoch = 0;
   #tail: Promise<void> = Promise.resolve();
@@ -62,6 +64,7 @@ export class ExecutionRuntime {
     this.#worker = dependencies.worker;
     this.#coordinator = dependencies.coordinator;
     this.#audit = dependencies.audit;
+    this.#tradeDirection = dependencies.tradeDirection;
   }
 
   get paused(): boolean {
@@ -154,14 +157,15 @@ export class ExecutionRuntime {
     if (result.scriptHash !== deployment.scriptHash) {
       return this.#pause(deployment, request.now, "script-hash-mismatch");
     }
-    if (result.signal.action === "hold") {
-      await this.#auditSafely(deployment, request.now, "signal-discarded", result.signal.reason);
+    const signal = this.#directionFilteredSignal(request.input, result.signal);
+    if (signal.action === "hold") {
+      await this.#auditSafely(deployment, request.now, "signal-discarded", signal.reason);
       return { status: "discarded", reason: "hold" };
     }
 
     try {
       // This is the only path by which an executable sandbox signal can leave the runtime.
-      const outcome = await this.#coordinator.propose(result.signal, request.context);
+      const outcome = await this.#coordinator.propose(signal, request.context);
       if (!this.#isCurrent(deployment, epoch)) {
         await this.#auditSafely(deployment, request.now, "signal-discarded", "stale-proposal-result");
         return { status: "discarded", reason: "stale" };
@@ -170,8 +174,8 @@ export class ExecutionRuntime {
         deployment,
         request.now,
         "signal-proposed",
-        `${result.signal.reason}:${outcome.status}`.slice(0, 256),
-        { signal: result.signal, outcome, symbol: request.input.symbol },
+        `${signal.reason}:${outcome.status}`.slice(0, 256),
+        { signal, outcome, symbol: request.input.symbol },
       );
       return { status: "proposed", outcome };
     } catch {
@@ -194,6 +198,37 @@ export class ExecutionRuntime {
       riskContext.market === context.market &&
       riskContext.now === context.now &&
       (input.leverage === undefined || input.leverage === riskContext.leverage);
+  }
+
+  #directionFilteredSignal(
+    input: Readonly<StrategyInput>,
+    signal: Readonly<StrategySignal>,
+  ): StrategySignal {
+    const direction = this.#tradeDirection ?? (input.market === "spot" ? "long" : "both");
+    const position = input.portfolio?.position;
+    const positionAllowed = position === undefined || (position.side === "long"
+      ? direction === "long" || direction === "both"
+      : input.market === "futures" && (direction === "short" || direction === "both"));
+    if (!positionAllowed) {
+      return {
+        id: `${signal.id}-direction-close`,
+        action: "close",
+        reason: `trade-direction:${direction}:position-not-allowed`,
+        createdAt: signal.createdAt,
+      };
+    }
+    if (signal.action === "hold" || signal.action === "close") return { ...signal };
+    const signalSide = signal.action === "buy" ? "long" : "short";
+    if (position && position.side !== signalSide) return { ...signal };
+    const allowed = signalSide === "long"
+      ? direction === "long" || direction === "both"
+      : input.market === "futures" && (direction === "short" || direction === "both");
+    return allowed ? { ...signal } : {
+      id: `${signal.id}-direction-filtered`,
+      action: "hold",
+      reason: `trade-direction:${direction}:entry-suppressed`,
+      createdAt: signal.createdAt,
+    };
   }
 
   async #pause(

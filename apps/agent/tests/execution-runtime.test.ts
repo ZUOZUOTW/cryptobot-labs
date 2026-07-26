@@ -65,7 +65,11 @@ function sandbox(
   return { evaluate, dispose: vi.fn(async () => undefined) } satisfies StrategySandboxLike;
 }
 
-function setup(candidate = sandbox(), timeoutMs = 50) {
+function setup(
+  candidate = sandbox(),
+  timeoutMs = 50,
+  tradeDirection?: "long" | "short" | "both",
+) {
   const propose = vi.fn(async () => blocked);
   const audit: RuntimeAuditEvent[] = [];
   const worker = new StrategyWorker(async () => candidate, timeoutMs);
@@ -73,6 +77,7 @@ function setup(candidate = sandbox(), timeoutMs = 50) {
     worker,
     coordinator: { propose },
     audit: async (event) => { audit.push(event); },
+    tradeDirection,
   });
   runtime.start(deployment);
   return { runtime, worker, propose, audit, candidate };
@@ -179,6 +184,18 @@ describe("ExecutionRuntime", () => {
       .resolves.toEqual({status:"discarded",reason:"hold"});
     expect(runtime.paused).toBe(false); expect(propose).not.toHaveBeenCalled();
     expect(audit).toContainEqual(expect.objectContaining({type:"signal-discarded",reason:"deterministic-test"}));
+  });
+
+  it("suppresses sandbox entries that violate the configured trade direction", async () => {
+    const { runtime, propose, audit } = setup(sandbox(), 50, "short");
+
+    await expect(runtime.evaluate({ input, now: 1_000, randomSeed: "seed", context }))
+      .resolves.toEqual({ status: "discarded", reason: "hold" });
+    expect(propose).not.toHaveBeenCalled();
+    expect(audit).toContainEqual(expect.objectContaining({
+      type: "signal-discarded",
+      reason: "trade-direction:short:entry-suppressed",
+    }));
   });
 
   it("rejects a configuration fence before sandbox evaluation", async () => {

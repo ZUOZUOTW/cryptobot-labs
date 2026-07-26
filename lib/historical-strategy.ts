@@ -7,10 +7,11 @@ import type {
 import { STRATEGY_BLOCKS } from "../data/strategies";
 import type { BotConfig, StrategyBlock } from "./types";
 import { validateConfig } from "./strategy-validation";
+import { positionSideAllowed, resolvedTradeDirection } from "./trade-direction";
 
 type Direction = -1 | 0 | 1;
 
-const CONFIG_KEYS = ["blocks", "exchange", "id", "leverage", "logicMode", "market", "name", "source", "symbol", "timeframe"];
+const CONFIG_KEYS = ["blocks", "exchange", "id", "leverage", "logicMode", "market", "name", "source", "symbol", "timeframe", "tradeDirection"];
 const BLOCK_KEYS = ["description", "group", "id", "name", "parameters"];
 const PARAMETER_KEYS = ["key", "label", "max", "min", "step", "suffix", "value"];
 
@@ -56,6 +57,7 @@ const cloneAndFreezeConfig = (value: BotConfig): Readonly<BotConfig> => {
     symbol: value.symbol,
     timeframe: value.timeframe,
     logicMode: value.logicMode,
+    tradeDirection: resolvedTradeDirection(value),
     leverage: value.leverage,
     blocks: Object.freeze(blocks) as unknown as StrategyBlock[],
   });
@@ -357,7 +359,11 @@ const entryDirection = (block: Readonly<StrategyBlock>, candles: readonly Candle
       const period = parameter(block, "period");
       if (values.length <= period + 1) return 0;
       const roc = (end: number) => (values[end - 1]! / values[end - 1 - period]! - 1) * 100;
-      return crossover(roc(values.length - 1), parameter(block, "threshold"), roc(values.length), parameter(block, "threshold"));
+      const threshold = Math.abs(parameter(block, "threshold"));
+      const previous = roc(values.length - 1);
+      const current = roc(values.length);
+      if (previous <= threshold && current > threshold) return 1;
+      return previous >= -threshold && current < -threshold ? -1 : 0;
     }
     case "ichimoku-breakout": {
       const conversion = midpointAt(candles, parameter(block, "conversionPeriod"));
@@ -570,6 +576,15 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
           createdAt: input.now,
         };
       }
+      const position = input.portfolio?.position;
+      if (position && !positionSideAllowed(config, position.side)) {
+        return {
+          id: `visual-${input.now}-close`,
+          action: "close",
+          reason: `trade-direction:${resolvedTradeDirection(config)}:position-not-allowed`,
+          createdAt: input.now,
+        };
+      }
       const entryBlocks = config.blocks.filter((block) => block.group === "entry");
       const directions = entryBlocks.map((block) => entryDirection(block, input.candles));
       let direction: Direction = 0;
@@ -585,21 +600,33 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
         .filter((block) => block.group === "confirm")
         .map((block) => confirmationPassed(block, input.candles));
       const confirmed = confirmations.length === 0 || (config.logicMode === "all" ? confirmations.every(Boolean) : confirmations.some(Boolean));
-      if (direction === 0 || !confirmed || (direction === -1 && config.market === "spot" && !input.portfolio?.position)) {
-        const reason = direction === 0 ? `entry:${config.logicMode}:not-triggered` : !confirmed ? "confirm:not-triggered" : "spot:bearish-signal-suppressed";
+      const signalSide = direction === 1 ? "long" : "short";
+      if (direction === 0 || !confirmed || (!position && !positionSideAllowed(config, signalSide))) {
+        const reason = direction === 0
+          ? `entry:${config.logicMode}:not-triggered`
+          : !confirmed
+            ? "confirm:not-triggered"
+            : `trade-direction:${resolvedTradeDirection(config)}:entry-suppressed`;
         return { id: `visual-${input.now}-hold`, action: "hold", reason, createdAt: input.now };
       }
       const action = direction === 1 ? "buy" : "sell";
+      const layered = entryBlocks.some((block) => block.id === "grid" || block.id === "dca");
+      const sameDirection = position && ((position.side === "long" && action === "buy") || (position.side === "short" && action === "sell"));
+      if (position && !sameDirection && !layered) {
+        return {
+          id: `visual-${input.now}-close`,
+          action: "close",
+          reason: "entry:opposite-signal",
+          createdAt: input.now,
+        };
+      }
+      if (position && sameDirection && !layered) {
+        return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-open:no-add", createdAt: input.now };
+      }
       const allocation = allocationRate(config, input.candles);
       if (allocation === undefined) {
         return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-sizing:atr-not-ready", createdAt: input.now };
       }
-      const position = input.portfolio?.position;
-      const layered = entryBlocks.some((block) => block.id === "grid" || block.id === "dca");
-      if (position && !layered) {
-        return { id: `visual-${input.now}-hold`, action: "hold", reason: "position-open:no-exit", createdAt: input.now };
-      }
-      const sameDirection = position && ((position.side === "long" && action === "buy") || (position.side === "short" && action === "sell"));
       const reducing = position && !sameDirection;
       const grid = config.blocks.find((block) => block.id === "grid");
       if (sameDirection && grid && position.layerCount >= parameter(grid, "gridCount")) {

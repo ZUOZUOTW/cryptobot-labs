@@ -23,6 +23,7 @@ const templateFor = (bot: BotDefinition): CloudAutomationTemplate => ({
     symbol: bot.symbol,
     timeframe: bot.timeframe,
     logicMode: bot.logicMode,
+    tradeDirection: bot.tradeDirection,
     leverage: bot.leverage,
     blocks: bot.blocks,
   },

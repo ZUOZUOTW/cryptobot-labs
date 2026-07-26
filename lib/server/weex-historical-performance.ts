@@ -5,6 +5,7 @@ import type {
   BacktestReport, BotConfig, BotMetrics, EquityPoint, WeexHistoricalPerformance,
 } from "../types";
 import { validateConfig } from "../strategy-validation";
+import { enforceTradeDirection } from "../trade-direction";
 import {
   BACKTEST_SANDBOX_BUDGET,
   createQuickJsStrategySandbox,
@@ -118,6 +119,20 @@ function metrics(result: HistoricalBacktestResult, startTime: number, endTime: n
   };
 }
 
+function directionalMetrics(result: HistoricalBacktestResult) {
+  const long = result.trades.filter((trade) => trade.side === "long");
+  const short = result.trades.filter((trade) => trade.side === "short");
+  const netPnl = (trades: typeof result.trades): number => round(
+    trades.reduce((total, trade) => total + Number(trade.realizedPnl), 0),
+  );
+  return {
+    longTrades: long.length,
+    shortTrades: short.length,
+    longNetPnl: netPnl(long),
+    shortNetPnl: netPnl(short),
+  };
+}
+
 function chartPoints(result: HistoricalBacktestResult, initialCapital: number): EquityPoint[] {
   const maximumPoints = 48;
   const step = Math.max(1, Math.ceil(result.equityCurve.length / maximumPoints));
@@ -145,7 +160,7 @@ async function evaluatorFor(config: BotConfig, createSandbox?: () => Promise<Str
       evaluate: async (input) => {
         const evaluated = await sandbox.evaluate({ source: config.source!, input, now: input.now, randomSeed: `${sourceHash}:${input.now}` });
         if (evaluated.scriptHash !== sourceHash) throw new Error("JavaScript 策略完整性驗證失敗");
-        return evaluated.signal;
+        return enforceTradeDirection(config, input, evaluated.signal);
       },
     },
   };
@@ -231,6 +246,7 @@ export async function runWeexHistoricalPerformance(
     generatedAt: new Date(evidence.collectedAt).toISOString(),
     metrics: metrics(result, window.startTime, window.endTime),
     equityCurve: chartPoints(result, initialCapital),
+    directionalMetrics: directionalMetrics(result),
     disclaimer: WEEX_HISTORICAL_DISCLAIMER,
     evidence,
   };
@@ -260,6 +276,7 @@ export async function runWeexBotCatalogPerformance(
         symbol: bot.symbol,
         timeframe: bot.timeframe,
         logicMode: bot.logicMode,
+        tradeDirection: bot.tradeDirection,
         leverage: bot.leverage,
         blocks: bot.blocks.map((block) => ({ ...block, parameters: block.parameters.map((parameter) => ({ ...parameter })) })),
         ...(bot.source === undefined ? {} : { source: bot.source }),

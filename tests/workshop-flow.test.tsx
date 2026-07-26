@@ -132,6 +132,28 @@ describe("multi-strategy workshop", () => {
     expect(fundingMode).toHaveValue("historical");
   });
 
+  it("makes trade direction explicit and resets spot strategies to long-only", async () => {
+    const user = userEvent.setup();
+    renderWorkshop();
+    const direction = screen.getByRole("group", { name: "交易方向" });
+
+    expect(within(direction).getByRole("button", { name: /^只做多/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(direction).getByRole("button", { name: /^多空雙向/ })).toBeDisabled();
+    expect(within(direction).getByRole("button", { name: /^只做空/ })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /^合約/ }));
+    expect(within(direction).getByRole("button", { name: /^只做空/ })).toBeEnabled();
+    await user.click(within(direction).getByRole("button", { name: /^只做空/ }));
+    expect(within(direction).getByRole("button", { name: /^只做空/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("region", { name: "交易政策摘要" })).toHaveTextContent("只做空");
+    expect(screen.getByRole("region", { name: "策略摘要" }))
+      .toHaveTextContent("空頭訊號可開倉，多頭訊號只用於平空倉");
+
+    await user.click(screen.getByRole("button", { name: /^現貨/ }));
+    expect(within(direction).getByRole("button", { name: /^只做多/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(direction).getByRole("button", { name: /^只做空/ })).toBeDisabled();
+  });
+
   it("quickly checks the signal flow without calling the market API", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi.spyOn(globalThis, "fetch");

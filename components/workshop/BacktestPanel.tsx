@@ -7,6 +7,7 @@ import type { BacktestReport, BotConfig, BotMetrics } from "../../lib/types";
 import { runWeexHistoricalBacktest, type PublicHistoricalBacktestAssumptions } from "../../lib/weex-historical-client";
 import { PerformanceChart } from "../PerformanceChart";
 import { useI18n } from "../I18nProvider";
+import { tradeDirectionLabel } from "../../lib/trade-direction";
 
 type BacktestState = "idle" | "validating" | "running" | "complete" | "error";
 
@@ -181,6 +182,14 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
 
       <p className="backtest-panel__lead">取得 WEEX 公開歷史 K 線後，以目前策略、槓桿、手續費與滑價假設計算最近 30 天績效；不需要 API Key，也不會送出訂單。若行情無法取得，回測會直接停止，不使用合成資料替代。</p>
 
+      <div className="backtest-direction-policy" aria-label="回測方向政策">
+        <span>回測方向</span>
+        <strong>{tradeDirectionLabel(config)}</strong>
+        <p>{config.market === "spot"
+          ? "現貨只允許建立多單；空頭訊號只會平掉既有多單。"
+          : "方向限制會在訊號進入歷史撮合前套用，反向訊號會先平掉既有部位。"}</p>
+      </div>
+
       <fieldset className="backtest-assumptions" disabled={busy}>
         <legend>最近 30 天回測假設</legend>
         <label>
@@ -246,6 +255,20 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
               </article>
             ))}
           </div>
+          {report.directionalMetrics && (
+            <div className="directional-backtest-metrics" aria-label="多空回測拆分">
+              <article data-side="long">
+                <span>多單成交</span>
+                <strong>{report.directionalMetrics.longTrades}</strong>
+                <small>淨損益 {report.directionalMetrics.longNetPnl >= 0 ? "+" : ""}{report.directionalMetrics.longNetPnl} USDT</small>
+              </article>
+              <article data-side="short">
+                <span>空單成交</span>
+                <strong>{report.directionalMetrics.shortTrades}</strong>
+                <small>淨損益 {report.directionalMetrics.shortNetPnl >= 0 ? "+" : ""}{report.directionalMetrics.shortNetPnl} USDT</small>
+              </article>
+            </div>
+          )}
           <p className="simulation-disclosure" role="note">{report.disclaimer}</p>
           {report.evidence && (
             <p className="backtest-seed">

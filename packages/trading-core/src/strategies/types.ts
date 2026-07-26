@@ -2,6 +2,7 @@ import type { StrategyEvaluator } from "../contracts";
 
 export type VisualStrategyGroup = "entry" | "confirm" | "exit" | "position" | "risk";
 export type VisualLogicMode = "all" | "any";
+export type VisualTradeDirection = "long" | "short" | "both";
 
 export interface VisualStrategyParameter {
   key: string;
@@ -29,6 +30,8 @@ export interface VisualBotConfig {
   symbol: string;
   timeframe: string;
   logicMode: VisualLogicMode;
+  /** Optional only for compatibility with strategy versions saved before direction controls existed. */
+  tradeDirection?: VisualTradeDirection;
   leverage: number;
   blocks: VisualStrategyBlock[];
   source?: string;

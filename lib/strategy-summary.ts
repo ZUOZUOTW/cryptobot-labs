@@ -1,4 +1,5 @@
 import type { BotConfig, StrategyBlock } from "./types";
+import { resolvedTradeDirection, tradeDirectionLabel } from "./trade-direction";
 
 const value = (strategy: StrategyBlock, key: string): string => {
   const item = strategy.parameters.find((parameter) => parameter.key === key);
@@ -49,6 +50,12 @@ export const summarizeStrategy = (config: BotConfig): string[] => {
     `使用 ${config.timeframe} 時間週期，於${logic}時觸發策略。`,
     `交易標的是 WEEX ${market} ${config.symbol}，使用 ${config.leverage} 倍槓桿。`,
   ];
+  const direction = resolvedTradeDirection(config);
+  rules.push(direction === "long"
+    ? `交易方向為${tradeDirectionLabel(config)}：多頭訊號可開倉，空頭訊號只用於平多倉。`
+    : direction === "short"
+      ? `交易方向為${tradeDirectionLabel(config)}：空頭訊號可開倉，多頭訊號只用於平空倉。`
+      : `交易方向為${tradeDirectionLabel(config)}：多頭訊號開多、空頭訊號開空，反向訊號先平既有部位。`);
 
   for (const strategy of config.blocks) {
     const summarize = BLOCK_SUMMARIES[strategy.id];

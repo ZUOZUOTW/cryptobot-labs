@@ -5,6 +5,7 @@ import { backtestConfigFingerprint } from "../../lib/backtest";
 import { summarizeStrategy } from "../../lib/strategy-summary";
 import type { BotConfig } from "../../lib/types";
 import type { ValidationResult } from "../../lib/strategy-validation";
+import { tradeDirectionLabel } from "../../lib/trade-direction";
 
 interface StrategySummaryProps {
   config: BotConfig;
@@ -19,6 +20,8 @@ export function StrategySummary({ config, onFlowCheck, validation }: StrategySum
   const configFingerprint = backtestConfigFingerprint(config);
   const [checkedFlow, setCheckedFlow] = useState<{ fingerprint: string; state: "passed" | "failed" } | null>(null);
   const flowCheck = checkedFlow?.fingerprint === configFingerprint ? checkedFlow.state : "idle";
+  const positionBlock = config.blocks.find((block) => block.group === "position");
+  const riskBlocks = config.blocks.filter((block) => block.group === "risk");
 
   const testSignalFlow = () => {
     const state = validation.valid && config.blocks.length > 0 ? "passed" : "failed";
@@ -36,6 +39,24 @@ export function StrategySummary({ config, onFlowCheck, validation }: StrategySum
         <span className={`validation-badge ${validation.valid ? "is-valid" : "is-invalid"}`}>
           {validation.valid ? "設定可回測" : "需要調整"}
         </span>
+      </div>
+      <div className="strategy-policy-grid" aria-label="交易政策摘要" role="region">
+        <article data-policy="direction">
+          <span>方向</span>
+          <strong>{tradeDirectionLabel(config)}</strong>
+        </article>
+        <article data-policy="leverage">
+          <span>槓桿</span>
+          <strong>{config.leverage}×</strong>
+        </article>
+        <article data-policy="position">
+          <span>倉位</span>
+          <strong>{positionBlock?.name ?? "未設定"}</strong>
+        </article>
+        <article data-policy="risk">
+          <span>風控</span>
+          <strong>{riskBlocks.length > 0 ? riskBlocks.map((block) => block.name).join("、") : "未設定"}</strong>
+        </article>
       </div>
       <ol>
         {summary.map((sentence, index) => <li key={`${index}-${sentence}`}>{sentence}</li>)}

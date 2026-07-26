@@ -88,6 +88,32 @@ describe("visual strategy evaluator", () => {
     })).rejects.toThrow(/does not match/i);
   });
 
+  it("enforces long-only, short-only, and bidirectional futures entries", async () => {
+    const futuresInput = (values: readonly number[]) => ({
+      ...input(candles(values)),
+      market: "futures" as const,
+      leverage: "2",
+    });
+    const futures = {
+      ...config(),
+      market: "futures" as const,
+      leverage: 2,
+    };
+
+    await expect(createVisualStrategyEvaluator({ ...futures, tradeDirection: "long" })
+      .evaluate(futuresInput([100, 102])))
+      .resolves.toMatchObject({ action: "hold", reason: "trade-direction:long:entry-suppressed" });
+    await expect(createVisualStrategyEvaluator({ ...futures, tradeDirection: "short" })
+      .evaluate(futuresInput([100, 98])))
+      .resolves.toMatchObject({ action: "hold", reason: "trade-direction:short:entry-suppressed" });
+    await expect(createVisualStrategyEvaluator({ ...futures, tradeDirection: "short" })
+      .evaluate(futuresInput([100, 102])))
+      .resolves.toMatchObject({ action: "sell" });
+    await expect(createVisualStrategyEvaluator({ ...futures, tradeDirection: "both" })
+      .evaluate(futuresInput([100, 98])))
+      .resolves.toMatchObject({ action: "buy" });
+  });
+
   it("fails closed on oversized, unordered, incomplete, and incoherent portfolio input", async () => {
     const evaluator = createVisualStrategyEvaluator(config());
     const valid = candles([100, 98]);
