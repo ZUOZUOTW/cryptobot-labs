@@ -193,9 +193,10 @@ describe("historical backtest UI", () => {
     const user = userEvent.setup();
     render(<WorkshopPage />);
     expect(screen.getByText("快速驗證 · 公開歷史 K 線 · 無需登入")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "保存與分享策略" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "保存、發布與分享策略" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "保存策略" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "建立分享連結" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "發布到公開策略列表" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "分享策略連結" })).toBeInTheDocument();
     expect(document.querySelector('img[src*="ai-strategy-vault-v1.webp"]')).toBeInTheDocument();
     expect(document.querySelector('img[src*="ai-version-broadcast-v1.webp"]')).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "開始模擬運行" })).not.toBeInTheDocument();

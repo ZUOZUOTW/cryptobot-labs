@@ -42,7 +42,7 @@ const report: BacktestReport = {
 };
 
 describe("production strategy publishing UI", () => {
-  it("saves an immutable version, creates verified evidence, and publishes a public page", async () => {
+  it("keeps publication and link sharing as two separate user actions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/strategies") {
@@ -72,9 +72,11 @@ describe("production strategy publishing UI", () => {
       </PlatformAuthProvider>,
     );
 
+    const shareButton = screen.getByRole("button", { name: "複製策略分享連結" });
+    expect(shareButton).toBeDisabled();
     await user.type(screen.getByRole("textbox", { name: "你的 WEEX 邀請註冊連結" }),
       "https://www.weex.com/register?inviteCode=TEST");
-    await user.click(screen.getByRole("button", { name: "建立分享連結" }));
+    await user.click(screen.getByRole("button", { name: "發布策略到公開列表" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
@@ -82,6 +84,15 @@ describe("production strategy publishing UI", () => {
       "/api/backtests",
       "/api/strategy-publications",
     ]);
-    expect(await screen.findByRole("status")).toHaveTextContent("策略已發布到公開列表");
+    expect(await screen.findByRole("status")).toHaveTextContent("策略已發布到公開策略列表");
+    expect(shareButton).toBeEnabled();
+    expect(screen.getByRole("link", { name: "查看公開策略" }))
+      .toHaveAttribute("href", `${window.location.origin}/strategies/strategy-communitycopy`);
+
+    await user.click(shareButton);
+    expect(await screen.findByRole("status")).toHaveTextContent("策略分享連結已複製");
+    expect(await navigator.clipboard.readText())
+      .toBe(`${window.location.origin}/strategies/strategy-communitycopy`);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

@@ -81,7 +81,7 @@ const MOBILE_WORKSHOP_STEPS = [
   { id: "build", number: "01", label: "組裝" },
   { id: "parameters", number: "02", label: "參數" },
   { id: "test", number: "03", label: "驗證" },
-  { id: "publish", number: "04", label: "保存" },
+  { id: "publish", number: "04", label: "保存／發布" },
 ] as const satisfies ReadonlyArray<{ id: MobileWorkshopStep; number: string; label: string }>;
 
 interface AssociatedReport {
@@ -231,7 +231,7 @@ export default function WorkshopPage() {
   const updateSource = (source: string) => updateConfig((current) => ({ ...current, source }));
   const acceptReport = (report: BacktestReport) => {
     setAssociatedReport({ fingerprint: configFingerprint, report });
-    setMobileMessage("回測完成，可保存或分享策略");
+    setMobileMessage("回測完成，可保存或發布策略");
   };
   const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
     const next = cloneConfig(importedConfig);
@@ -352,7 +352,7 @@ export default function WorkshopPage() {
       </div>
 
       <section className="workshop-mobile-actions" aria-label="手機版組裝操作">
-        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可保存或分享策略" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
+        <p aria-live="polite">{mobileMessage || (validation.valid ? currentReport ? "回測完成，可保存或發布策略" : "設定可回測" : `尚有 ${validation.errors.length} 項設定問題`)}</p>
         <div>
           <button aria-label="行動列：上一步" disabled={mobileStepIndex === 0} onClick={() => moveToMobileStep(mobileStepIndex - 1)} type="button">上一步</button>
           {mobileStep === "test" && (

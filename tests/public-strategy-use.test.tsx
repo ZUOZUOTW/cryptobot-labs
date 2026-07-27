@@ -92,6 +92,7 @@ describe("public strategy reuse", () => {
     expect(screen.getAllByText("策略名稱包含敏感詞、不雅字眼或誤導性用語，請重新命名"))
       .not.toHaveLength(0);
     expect(screen.getByRole("button", { name: "保存策略" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "建立分享連結" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "發布策略到公開列表" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "複製策略分享連結" })).toBeDisabled();
   });
 });

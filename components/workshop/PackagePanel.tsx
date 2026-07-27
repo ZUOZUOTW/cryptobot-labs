@@ -9,7 +9,6 @@ import { demoAuthPath } from "../../lib/demo-auth";
 import { usePlatformAuth } from "../PlatformAuthProvider";
 import { backtestConfigFingerprint } from "../../lib/backtest";
 import { saveDemoStrategy } from "../../lib/demo-strategies";
-import { BOT_CATALOG } from "../../data/bots";
 import type { SignalFlowCheckState } from "./StrategySummary";
 import { validateStrategyName } from "../../lib/strategy-name";
 
@@ -25,7 +24,7 @@ interface SavedVersion { id: string; configHash: string }
 
 const ACTION_MASCOTS = {
   save: "/mascots/ai-strategy-vault-v1.webp",
-  share: "/mascots/ai-version-broadcast-v1.webp",
+  publish: "/mascots/ai-version-broadcast-v1.webp",
 } as const;
 
 function ActionVisual({ type }: { type: keyof typeof ACTION_MASCOTS }) {
@@ -41,6 +40,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
   const { mode: authMode, user } = usePlatformAuth();
   const [actionState, setActionState] = useState<WorkState>("idle");
   const [publishState, setPublishState] = useState<WorkState>("idle");
+  const [shareState, setShareState] = useState<WorkState>("idle");
   const [importState, setImportState] = useState<WorkState>("idle");
   const [message, setMessage] = useState("");
   const [description, setDescription] = useState("");
@@ -80,7 +80,8 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     }
   };
 
-  const hasError = actionState === "error" || publishState === "error" || importState === "error";
+  const hasError = actionState === "error" || publishState === "error"
+    || shareState === "error" || importState === "error";
   const requireLogin = () => { window.location.assign(demoAuthPath(`${window.location.pathname}${window.location.search}`)); };
   const parseSavedVersion = (value: unknown): SavedVersion | null => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -145,7 +146,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     } catch { return false; }
   };
 
-  const shareStrategy = async () => {
+  const publishStrategy = async () => {
     if (!strategyName.valid) {
       setMessage(strategyName.reason);
       setPublishState("error");
@@ -153,15 +154,12 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     }
     if (!user) { requireLogin(); return; }
     if (publishedUrl) {
-      try { await navigator.clipboard.writeText(publishedUrl); setMessage("公開分享連結已複製。"); }
-      catch { setMessage(publishedUrl); }
+      setMessage("目前策略版本已發布；分享連結不會重新發布或變更策略。");
       return;
     }
     if (authMode === "demo") {
-      const publicBot = BOT_CATALOG.some((bot) => bot.id === config.id) ? config.id : "orbit-dca";
-      const url = `${window.location.origin}/bots/${encodeURIComponent(publicBot)}`;
-      try { await navigator.clipboard.writeText(url); setMessage("展示分享連結已複製。"); }
-      catch { setMessage(url); }
+      setMessage("展示環境不會發布會員策略；請登入正式會員帳號後再發布。");
+      setPublishState("error");
       return;
     }
     if (!configurationReady || flowCheckState !== "passed" || !report?.evidence?.complete) {
@@ -239,23 +237,36 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       const url = `${window.location.origin}/strategies/${encodeURIComponent(publicationBody.publication.slug)}`;
       setPublication({ fingerprint, url });
       setPublishState("complete");
-      try {
-        await navigator.clipboard.writeText(url);
-        setMessage("策略已發布到公開列表，分享連結已複製；訪客頁會顯示你的 WEEX 邀請註冊按鈕。");
-      } catch {
-        setMessage(`策略已發布到公開列表：${url}`);
-      }
+      setShareState("idle");
+      setMessage("策略已發布到公開策略列表；你現在可以查看公開頁或分享策略連結。");
     } catch {
       setPublishState("error");
       setMessage("發布未完成；策略不會出現在公開列表。請確認行情資料與 WEEX 邀請連結後重試。");
+    }
+  };
+
+  const sharePublishedStrategy = async () => {
+    if (!publishedUrl) {
+      setShareState("error");
+      setMessage("請先將目前策略版本發布到公開策略列表，再分享策略連結。");
+      return;
+    }
+    setShareState("working");
+    try {
+      await navigator.clipboard.writeText(publishedUrl);
+      setShareState("complete");
+      setMessage("策略分享連結已複製。");
+    } catch {
+      setShareState("error");
+      setMessage(`無法自動複製，請手動分享此策略連結：${publishedUrl}`);
     }
   };
   return (
     <section className="workshop-panel package-panel glass-panel" aria-labelledby="package-panel-title">
       <div className="workshop-panel__heading">
         <div>
-          <p className="eyebrow">04 / SAVE &amp; SHARE</p>
-          <h2 id="package-panel-title">保存與分享策略</h2>
+          <p className="eyebrow">04 / SAVE · PUBLISH · SHARE</p>
+          <h2 id="package-panel-title">保存、發布與分享策略</h2>
         </div>
         <span className="workshop-count">{authMode === "demo" ? "CLOUD DEMO" : "MEMBER WORKSPACE"}</span>
       </div>
@@ -292,11 +303,11 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           <small>不會因此啟用交易或連接交易帳戶</small>
           <button aria-label="保存策略" className="button button--secondary" disabled={actionState === "working" || !configurationReady} onClick={() => void saveStrategy()} type="button">{actionState === "working" ? "保存中…" : user ? "保存到工作區" : "登入並保存"}</button>
         </article>
-        <article className="workshop-action-card" data-action="share">
-          <div className="workshop-action-card__top"><span>02 / SHARE</span><em>VERSION LINK</em></div>
-          <ActionVisual type="share" />
-          <h3>建立分享連結</h3>
-          <p>完成驗證後發布至策略列表，建立適合 LINE、X、Facebook 與 Telegram 預覽的固定版本頁。</p>
+        <article className="workshop-action-card" data-action="publish">
+          <div className="workshop-action-card__top"><span>02 / PUBLISH</span><em>PUBLIC LIST</em></div>
+          <ActionVisual type="publish" />
+          <h3>發布到公開策略列表</h3>
+          <p>完成驗證後固定目前策略版本，發布到會員公開策略列表，讓其他用戶可以查看與套用。</p>
           {authMode === "production" && (
             <div className="publication-fields">
               <label>
@@ -324,16 +335,54 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           )}
           <small>訪客只能查看；自訂原始碼、Email 與交易憑證不會公開</small>
           <button
-            aria-label="建立分享連結"
+            aria-label="發布策略到公開列表"
             className="button button--secondary"
-            disabled={publishState === "working" || !strategyName.valid}
-            onClick={() => void shareStrategy()}
+            disabled={publishState === "working" || !strategyName.valid || authMode === "demo"}
+            onClick={() => void publishStrategy()}
             type="button"
           >
-            {publishState === "working" ? "驗證並發布中…" : publishedUrl ? "複製公開連結" : user ? "驗證、發布並複製連結" : "登入並建立連結"}
+            {publishState === "working"
+              ? "驗證並發布中…"
+              : publishedUrl
+                ? "目前版本已發布"
+                : authMode === "demo"
+                  ? "展示環境無法公開發布"
+                  : user
+                    ? "發布策略到公開列表"
+                    : "登入並發布策略"}
           </button>
         </article>
       </div>
+
+      <section
+        aria-labelledby="workshop-share-strategy-title"
+        className="workshop-share-action"
+        data-ready={Boolean(publishedUrl)}
+      >
+        <div className="workshop-share-action__copy">
+          <span>03 / SHARE</span>
+          <h3 id="workshop-share-strategy-title">分享策略連結</h3>
+          <p>
+            {publishedUrl
+              ? "分享目前已發布版本的公開網址；這個動作不會修改或重新發布策略。"
+              : "發布完成後，才可複製公開策略網址並分享給其他用戶。"}
+          </p>
+        </div>
+        <div className="workshop-share-action__controls">
+          {publishedUrl
+            ? <a className="button button--secondary" href={publishedUrl}>查看公開策略</a>
+            : <span>尚未發布，暫無可分享連結</span>}
+          <button
+            aria-label="複製策略分享連結"
+            className="button button--primary"
+            disabled={!publishedUrl || shareState === "working"}
+            onClick={() => void sharePublishedStrategy()}
+            type="button"
+          >
+            {shareState === "working" ? "正在複製…" : "複製策略連結"}
+          </button>
+        </div>
+      </section>
 
       <details className="legacy-package workshop-legacy-package"><summary>匯入策略檔案（進階）</summary><div className="package-panel__grid package-panel__grid--single">
         <section aria-labelledby="package-import-title">

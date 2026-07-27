@@ -984,7 +984,7 @@ describe("multi-strategy workshop", () => {
     await user.click(within(bar).getByRole("button", { name: "行動列：執行回測" }));
     expect(within(bar).getByText("正在取得公開歷史行情並執行回測…")).toBeInTheDocument();
     await completeBacktest();
-    expect(within(bar).getByText("回測完成，可保存或分享策略")).toBeInTheDocument();
+    expect(within(bar).getByText("回測完成，可保存或發布策略")).toBeInTheDocument();
     expect(within(bar).queryByRole("button", { name: "行動列：開始模擬運行" })).not.toBeInTheDocument();
   });
 
