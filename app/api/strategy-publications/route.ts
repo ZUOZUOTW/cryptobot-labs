@@ -1,11 +1,13 @@
 import { createControlPlaneDatabase } from "@/db";
 import {
   createStrategyPublicationRepository,
+  createStrategyVersionRepository,
   createUserRepository,
 } from "@/db/repositories";
 import { requireApiUser, platformIdentityProvider, deriveWorkspaceUserId } from "@/lib/server/auth";
 import { HttpProblem, errorResponse } from "@/lib/server/http";
 import { env } from "@/lib/server/platform-env";
+import { validateStrategyName } from "@/lib/strategy-name";
 import {
   parsePublicationInput,
   publicationSlug,
@@ -56,6 +58,17 @@ export async function POST(request: Request): Promise<Response> {
     let raw: unknown;
     try { raw = await request.json(); } catch { throw new HttpProblem(400, "invalid_request"); }
     const input = parsePublicationInput(raw);
+    const version = await createStrategyVersionRepository(db).getOwned(identity.user.id, input.strategyVersionId);
+    if (!version) throw new HttpProblem(409, "verified_backtest_required");
+    let savedConfig: unknown;
+    try { savedConfig = JSON.parse(version.configJson) as unknown; }
+    catch { throw new HttpProblem(422, "invalid_strategy_configuration"); }
+    const strategyName = validateStrategyName(
+      savedConfig && typeof savedConfig === "object" && !Array.isArray(savedConfig)
+        ? (savedConfig as { name?: unknown }).name
+        : undefined,
+    );
+    if (!strategyName.valid) throw new HttpProblem(422, "invalid_strategy_name");
     const repository = createStrategyPublicationRepository(db);
     const publicationId = `publication_${crypto.randomUUID()}`;
     const saved = await repository.publish({

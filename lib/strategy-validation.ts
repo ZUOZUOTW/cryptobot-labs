@@ -2,6 +2,7 @@ import { parse } from "acorn";
 import { STRATEGY_BLOCKS } from "../data/strategies";
 import type { BotConfig } from "./types";
 import { isWeexApiTradingSymbol } from "./weex-market-catalog";
+import { validateStrategyName } from "./strategy-name";
 
 export interface ValidationResult {
   valid: boolean;
@@ -450,6 +451,7 @@ const sourceConfigErrors = (source: string, config: BotConfig): string[] => {
 
 export const canonicalizeBotConfig = (config: BotConfig): BotConfig => ({
   ...config,
+  name: config.name.trim(),
   blocks: config.blocks.map((block) => {
     const canonical = STRATEGY_BLOCKS.find((item) => item.id === block.id)!;
     const values = new Map(block.parameters.map((parameter) => [parameter.key, parameter.value]));
@@ -466,6 +468,8 @@ export const canonicalizeBotConfig = (config: BotConfig): BotConfig => ({
 export const validateDraftConfig = (value: unknown): ValidationResult => {
   if (!hasBotConfigShape(value)) return { valid: false, errors: ["策略設定格式不正確"] };
   const errors: string[] = [];
+  const strategyName = validateStrategyName(value.name);
+  if (!strategyName.valid) errors.push(strategyName.reason);
   if (value.exchange !== "WEEX") errors.push("目前可用的實盤連線為 WEEX API");
   errors.push(...canonicalBlockErrors(value as BotConfig, false));
   return { valid: errors.length === 0, errors };
@@ -476,6 +480,8 @@ export const validateConfig = (value: unknown): ValidationResult => {
   const config = value;
   const errors: string[] = [];
 
+  const strategyName = validateStrategyName(config.name);
+  if (!strategyName.valid) errors.push(strategyName.reason);
   if (config.exchange !== "WEEX") errors.push("目前可用的實盤連線為 WEEX API");
   if (!isWeexApiTradingSymbol(config.market, config.symbol)) {
     errors.push(`${config.symbol} 不在 WEEX API 公告支援的${config.market === "spot" ? "現貨" : "合約"}交易對中`);

@@ -495,6 +495,18 @@
   color: var(--text);
   font-size: 0.86rem;
 }
+.strategy-name-guidance {
+  color: var(--muted);
+  display: block;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin-top: 0.45rem;
+}
+.strategy-name-guidance[data-state="invalid"] { color: #ff9d9d; }
+.market-control--name input[aria-invalid="true"] {
+  border-color: rgba(255, 107, 107, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 107, 107, 0.18);
+}
 .workshop-capability-note {
   max-width: 48rem;
   margin: 0.7rem 0 0;

@@ -11,6 +11,7 @@ import { backtestConfigFingerprint } from "../../lib/backtest";
 import { saveDemoStrategy } from "../../lib/demo-strategies";
 import { BOT_CATALOG } from "../../data/bots";
 import type { SignalFlowCheckState } from "./StrategySummary";
+import { validateStrategyName } from "../../lib/strategy-name";
 
 interface PackagePanelProps {
   config: BotConfig;
@@ -48,6 +49,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
   const saveAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const savedVersionRef = useRef<{ fingerprint: string; version: SavedVersion } | null>(null);
   const configurationReady = validateConfig(config).valid;
+  const strategyName = validateStrategyName(config.name);
   const fingerprint = backtestConfigFingerprint(config);
   const publishedUrl = publication?.fingerprint === fingerprint ? publication.url : "";
   const flowCheckLabel = flowCheckState === "passed" ? "通過測試" : flowCheckState === "failed" ? "未通過測試" : "未測試";
@@ -89,6 +91,16 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       && /^[a-f0-9]{64}$/.test(record.configHash) ? { id: record.id, configHash: record.configHash } : null;
   };
   const saveStrategy = async (announce = true): Promise<SavedVersion | null> => {
+    if (!strategyName.valid) {
+      setMessage(strategyName.reason);
+      setActionState("error");
+      return null;
+    }
+    if (!configurationReady) {
+      setMessage("請先完成有效的策略名稱、進場條件與風控設定。");
+      setActionState("error");
+      return null;
+    }
     if (!user) { requireLogin(); return null; }
     if (authMode === "demo") {
       saveDemoStrategy(config, report, backtestConfigFingerprint(config));
@@ -134,6 +146,11 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
   };
 
   const shareStrategy = async () => {
+    if (!strategyName.valid) {
+      setMessage(strategyName.reason);
+      setPublishState("error");
+      return;
+    }
     if (!user) { requireLogin(); return; }
     if (publishedUrl) {
       try { await navigator.clipboard.writeText(publishedUrl); setMessage("公開分享連結已複製。"); }
@@ -273,7 +290,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           <h3>保存策略</h3>
           <p>將目前積木、參數與程式碼存入會員工作區，之後可回來繼續調整。</p>
           <small>不會因此啟用交易或連接交易帳戶</small>
-          <button aria-label="保存策略" className="button button--secondary" disabled={actionState === "working"} onClick={() => void saveStrategy()} type="button">{actionState === "working" ? "保存中…" : user ? "保存到工作區" : "登入並保存"}</button>
+          <button aria-label="保存策略" className="button button--secondary" disabled={actionState === "working" || !configurationReady} onClick={() => void saveStrategy()} type="button">{actionState === "working" ? "保存中…" : user ? "保存到工作區" : "登入並保存"}</button>
         </article>
         <article className="workshop-action-card" data-action="share">
           <div className="workshop-action-card__top"><span>02 / SHARE</span><em>VERSION LINK</em></div>
@@ -309,7 +326,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           <button
             aria-label="建立分享連結"
             className="button button--secondary"
-            disabled={publishState === "working"}
+            disabled={publishState === "working" || !strategyName.valid}
             onClick={() => void shareStrategy()}
             type="button"
           >

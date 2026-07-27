@@ -67,8 +67,14 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
             <h1>{publication.name}</h1>
             <p className="bot-detail-hero__lead">{publication.description}</p>
             <div className="bot-detail-hero__actions">
+              <Link
+                className="button button--primary"
+                href={`/workshop?publication=${encodeURIComponent(publication.slug)}`}
+              >
+                {publication.hasPrivateSource ? "套用公開積木版本" : "套用並自行調整"}
+              </Link>
               <a
-                className="button button--primary weex-referral-cta"
+                className="button button--secondary weex-referral-cta"
                 href={publication.weexReferralUrl}
                 rel="nofollow sponsored noopener noreferrer"
                 target="_blank"
@@ -98,7 +104,9 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
         <div className="strategy-publisher">
           <span>發布者</span>
           <strong>{publication.publisherName}</strong>
-          <span>公開固定版本 · 原始程式碼與 Email 不公開</span>
+          <span>{publication.hasPrivateSource
+            ? "公開固定版本 · 自訂程式碼不公開，套用時使用公開積木設定 · Email 不公開"
+            : "公開固定版本 · 可建立自己的可編輯副本 · Email 不公開"}</span>
         </div>
         <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效；邀請連結由發布者提供。</p>
       </header>
@@ -126,7 +134,9 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
         <div className="section-heading">
           <p className="eyebrow">STRATEGY FLOW</p>
           <h2 id="public-structure-title">策略結構與參數</h2>
-          <p>公開頁只顯示可審查的策略規則；自訂 JavaScript 原始碼與會員資料不會被公開。</p>
+          <p>{publication.hasPrivateSource
+            ? "公開頁顯示可審查的積木規則；其他用戶可建立積木副本，但發布者的自訂 JavaScript 原始碼不會被複製或公開。"
+            : "公開頁顯示可審查的策略規則；其他用戶可將設定帶入組裝車間，建立自己的可編輯版本。"}</p>
         </div>
         <ol className="bot-detail-flow">
           {publication.blocks.map((block, index) => (
@@ -146,8 +156,14 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
           <p>透過 {publication.publisherName} 的專屬邀請連結前往 WEEX 註冊；註冊完成後再回到 CryptoBot Labs 連線並自行設定風險限制。</p>
         </div>
         <div className="button-row">
-          <a
+          <Link
             className="button button--primary"
+            href={`/workshop?publication=${encodeURIComponent(publication.slug)}`}
+          >
+            {publication.hasPrivateSource ? "使用公開積木建立副本" : "使用這個策略"}
+          </Link>
+          <a
+            className="button button--secondary"
             href={publication.weexReferralUrl}
             rel="nofollow sponsored noopener noreferrer"
             target="_blank"

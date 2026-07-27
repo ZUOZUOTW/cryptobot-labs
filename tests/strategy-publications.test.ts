@@ -114,6 +114,8 @@ describe("strategy publications", () => {
     expect(toPublicStrategyPublication(record!)).toMatchObject({
       name: "測試公開策略",
       symbol: "BTCUSDT",
+      tradeDirection: "long",
+      hasPrivateSource: false,
       metrics: { totalReturn: "0.12", trades: 12 },
     });
 
@@ -149,5 +151,31 @@ describe("strategy publications", () => {
     })).toThrow();
     expect(publicationSlug("publication_12345678-1234-1234-1234-123456789abc"))
       .toMatch(/^strategy-[a-z0-9]{20}$/);
+  });
+
+  it("refuses to expose a legacy saved version whose name now fails moderation", async () => {
+    const database = new SqliteDatabase();
+    seedVerifiedBacktest(database);
+    const record = await createStrategyPublicationRepository(database).getBySlug("strategy-publicationa");
+    expect(record).toBeNull();
+    const repository = createStrategyPublicationRepository(database);
+    await repository.publish({
+      id: "publication_a",
+      userId: "usr_a",
+      strategyVersionId: "version_a",
+      backtestJobId: "job_a",
+      slug: "strategy-publicationa",
+      description: "這是經完整公開歷史行情驗證的測試策略，適合檢查名稱審核。",
+      publisherName: "發布者 A",
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=TEST",
+      now: 5,
+    });
+    const published = await repository.getBySlug("strategy-publicationa");
+    const config = JSON.parse(published!.configJson) as Record<string, unknown>;
+    expect(() => toPublicStrategyPublication({
+      ...published!,
+      name: "WEEX 官方策略",
+      configJson: JSON.stringify({ ...config, name: "WEEX 官方策略" }),
+    })).toThrow(/configuration is invalid/i);
   });
 });

@@ -9,6 +9,7 @@ import {
 } from "../../lib/weex-market-catalog";
 import type { BotConfig } from "../../lib/types";
 import { resolvedTradeDirection } from "../../lib/trade-direction";
+import { STRATEGY_NAME_MAX_LENGTH, validateStrategyName } from "../../lib/strategy-name";
 import { TradingPairCombobox } from "./TradingPairCombobox";
 
 const commonParameterValue = (blockId: string, parameterKey: string): number | undefined => (
@@ -90,6 +91,7 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
   );
   const maximumLeverage = config.market === "spot" ? 1 : selectedPair?.maxLeverage ?? 1;
   const tradeDirection = resolvedTradeDirection(config);
+  const strategyName = validateStrategyName(config.name);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "test") return;
@@ -146,13 +148,24 @@ export function ParameterPanel({ config, onConfigField, onParameter }: Parameter
         <label className="market-control--name">
           <span>策略名稱</span>
           <input
+            aria-describedby="strategy-name-guidance"
+            aria-invalid={!strategyName.valid}
             aria-label="策略名稱"
-            maxLength={100}
+            maxLength={STRATEGY_NAME_MAX_LENGTH}
             onChange={(event) => onConfigField("name", event.target.value)}
             placeholder="為這個策略版本命名"
             type="text"
             value={config.name}
           />
+          <small
+            className="strategy-name-guidance"
+            data-state={strategyName.valid ? "valid" : "invalid"}
+            id="strategy-name-guidance"
+          >
+            {strategyName.valid
+              ? "名稱會顯示在會員工作區與公開策略頁。"
+              : strategyName.reason}
+          </small>
         </label>
         <div className="market-control market-control--visual">
           <span className="market-control__label">市場</span>

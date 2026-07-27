@@ -1,4 +1,4 @@
-import type { LogicMode, Market, StrategyBlock } from "./types";
+import type { LogicMode, Market, StrategyBlock, TradeDirection } from "./types";
 
 export interface PublicStrategyMetrics {
   totalReturn: string;
@@ -25,6 +25,8 @@ export interface PublicStrategyPublication {
   timeframe: string;
   leverage: number;
   logicMode: LogicMode;
+  tradeDirection: TradeDirection;
+  hasPrivateSource: boolean;
   blocks: StrategyBlock[];
   metrics: PublicStrategyMetrics;
   equityCurve: PublicStrategyEquityPoint[];

@@ -108,6 +108,11 @@ describe("backtest runtime and strategy save wiring", () => {
 
     const conflict = await handlers.strategy(makeRequest({ config: config({ name: "Different" }) }));
     expect(conflict.status).toBe(409);
+    const blockedName = await handlers.strategy(makeRequest({
+      config: config({ name: "f.u.c.k guaranteed profit" }),
+    }, "save-blocked-name"));
+    expect(blockedName.status).toBe(422);
+    expect(await blockedName.json()).toMatchObject({ error: { code: "invalid_strategy_name" } });
     const custom = await handlers.strategy(makeRequest({ config: config({ source: "return {action:'buy'}" }) }, "save-custom"));
     expect(custom.status).toBe(422);
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM strategy_versions").get()).toEqual({ count: 1 });

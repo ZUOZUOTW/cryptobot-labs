@@ -75,6 +75,9 @@ export default function BotsPage() {
           && typeof (entry as { slug?: unknown }).slug === "string"
           && typeof (entry as { name?: unknown }).name === "string"
           && typeof (entry as { publisherName?: unknown }).publisherName === "string"
+          && ["long", "short", "both"].includes(String((entry as { tradeDirection?: unknown }).tradeDirection))
+          && typeof (entry as { hasPrivateSource?: unknown }).hasPrivateSource === "boolean"
+          && Array.isArray((entry as { blocks?: unknown }).blocks)
           && Array.isArray((entry as { equityCurve?: unknown }).equityCurve)
         ));
         if (!cancelled) { setPublications(valid); setPublicationState("ready"); }

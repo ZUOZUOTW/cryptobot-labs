@@ -6,6 +6,7 @@ import type {
   PublicStrategyPublication,
 } from "../strategy-publications";
 import { validateConfig } from "../strategy-validation";
+import { resolvedTradeDirection } from "../trade-direction";
 import { HttpProblem } from "./http";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -124,7 +125,7 @@ export function publicationSlug(id: string): string {
 
 export function toPublicStrategyPublication(record: StrategyPublicationRecord): PublicStrategyPublication {
   const config = configOf(record.configJson);
-  if (config.market !== record.market || config.symbol !== record.symbol) {
+  if (config.name !== record.name || config.market !== record.market || config.symbol !== record.symbol) {
     throw new Error("published strategy identity mismatch");
   }
   return {
@@ -138,6 +139,8 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord): 
     timeframe: config.timeframe,
     leverage: config.leverage,
     logicMode: config.logicMode,
+    tradeDirection: resolvedTradeDirection(config),
+    hasPrivateSource: config.source !== undefined,
     blocks: config.blocks.map((block) => ({
       ...block,
       parameters: block.parameters.map((parameter) => ({ ...parameter })),

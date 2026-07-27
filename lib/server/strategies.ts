@@ -2,6 +2,7 @@ import type { SavedStrategyVersionRecord } from "../../db/repositories";
 import { STRATEGY_BLOCKS } from "../../data/strategies";
 import type { BotConfig } from "../types";
 import { canonicalizeBotConfig, validateConfig } from "../strategy-validation";
+import { validateStrategyName } from "../strategy-name";
 import { safeCanonicalJsonStringify } from "../control-plane/schemas";
 import { createVisualHistoricalEvaluator } from "../historical-strategy";
 import type { ApiAuthDependencies } from "./auth";
@@ -31,6 +32,8 @@ const parseBody = (value: unknown): { config: BotConfig } => {
     || !Object.hasOwn(value, "config")) throw new HttpProblem(400, "invalid_request");
   const config = (value as { config: unknown }).config;
   if (config === null || typeof config !== "object" || Array.isArray(config)) throw new HttpProblem(400, "invalid_request");
+  const strategyName = validateStrategyName((config as { name?: unknown }).name);
+  if (!strategyName.valid) throw new HttpProblem(422, "invalid_strategy_name");
   let evaluator: ReturnType<typeof createVisualHistoricalEvaluator>;
   const source = Object.hasOwn(config, "source") ? (config as { source?: unknown }).source : undefined;
   if (source !== undefined && (typeof source !== "string" || source.length < 1 || source.length > 262_144)) {

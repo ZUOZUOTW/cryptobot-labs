@@ -50,6 +50,30 @@ const blankConfig = (): BotConfig => ({
 const draftSaveWarning = (reason: string): string => (
   `${reason}；目前內容仍保留在本頁，可調整後再次儲存。`
 );
+
+const configFromPublication = (value: unknown): BotConfig | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.slug !== "string" || typeof record.name !== "string"
+    || (record.market !== "spot" && record.market !== "futures")
+    || typeof record.symbol !== "string" || typeof record.timeframe !== "string"
+    || (record.logicMode !== "all" && record.logicMode !== "any")
+    || (record.tradeDirection !== "long" && record.tradeDirection !== "short" && record.tradeDirection !== "both")
+    || typeof record.leverage !== "number" || !Array.isArray(record.blocks)) return null;
+  const candidate = {
+    id: `published-${record.slug}`,
+    name: record.name,
+    exchange: "WEEX",
+    market: record.market,
+    symbol: record.symbol,
+    timeframe: record.timeframe,
+    logicMode: record.logicMode,
+    tradeDirection: record.tradeDirection,
+    leverage: record.leverage,
+    blocks: record.blocks,
+  } as BotConfig;
+  return validateConfig(candidate).valid ? cloneConfig(candidate) : null;
+};
 type WorkshopMode = "visual" | "javascript";
 type MobileWorkshopStep = "build" | "parameters" | "test" | "publish";
 
@@ -80,19 +104,63 @@ export default function WorkshopPage() {
   const [mobileStep, setMobileStep] = useState<MobileWorkshopStep>("build");
 
   useEffect(() => {
+    let active = true;
     const timer = window.setTimeout(() => {
-      const search = new URLSearchParams(window.location.search);
-      captureAttribution(search.get("via"));
-      const draft = loadDraft();
-      const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
-      const deliberateNew = search.get("new") === "1";
-      const next = deliberateNew ? blankConfig() : requestedBot ? configFromBot(requestedBot) : draft ? cloneConfig(draft) : cloneConfig(DEFAULT_CONFIG);
-      const requestedJavaScript = search.get("mode") === "javascript";
-      if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next);
-      setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
-      setConfig(next);
+      void (async () => {
+        const search = new URLSearchParams(window.location.search);
+        captureAttribution(search.get("via"));
+        const deliberateNew = search.get("new") === "1";
+        const publicationSlug = deliberateNew ? null : search.get("publication");
+        if (publicationSlug) {
+          try {
+            const response = await fetch(`/api/strategy-publications/${encodeURIComponent(publicationSlug)}`, {
+              cache: "no-store",
+              headers: { Accept: "application/json" },
+            });
+            const body = await response.json().catch(() => null) as { publication?: unknown } | null;
+            const published = response.ok ? configFromPublication(body?.publication) : null;
+            if (!published) throw new Error("invalid_publication");
+            const hasPrivateSource = Boolean(
+              body?.publication
+              && typeof body.publication === "object"
+              && !Array.isArray(body.publication)
+              && (body.publication as { hasPrivateSource?: unknown }).hasPrivateSource === true,
+            );
+            if (!active) return;
+            const saved = saveDraft(published);
+            setDraftError(saved.ok ? "" : draftSaveWarning(saved.reason));
+            setMode("visual");
+            setConfig(published);
+            setAssociatedReport(null);
+            setAssociatedFlowCheck(null);
+            setMobileMessage(hasPrivateSource
+              ? `已載入「${published.name}」的公開積木副本；發布者的自訂程式碼未公開，請檢查規則並重新回測。`
+              : `已載入「${published.name}」的公開可編輯副本；請重新回測後再保存或發布。`);
+            return;
+          } catch {
+            if (active) setDraftError("無法載入這個公開策略；已保留目前可用的本機草稿。");
+          }
+        }
+        if (!active) return;
+        const draft = loadDraft();
+        const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
+        const next = deliberateNew
+          ? blankConfig()
+          : requestedBot
+            ? configFromBot(requestedBot)
+            : draft
+              ? cloneConfig(draft)
+              : cloneConfig(DEFAULT_CONFIG);
+        const requestedJavaScript = search.get("mode") === "javascript";
+        if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next);
+        setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
+        setConfig(next);
+      })();
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   const validation = useMemo(() => validateConfig(config), [config]);

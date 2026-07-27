@@ -34,7 +34,13 @@ export function PublishedStrategyCard({ publication }: { publication: PublicStra
         <div><dt>交易次數</dt><dd>{publication.metrics.trades}</dd></div>
       </dl>
       <div className="bot-card__actions">
-        <Link className="button button--primary button--small" href={`/strategies/${publication.slug}`}>查看公開策略</Link>
+        <Link
+          className="button button--primary button--small"
+          href={`/workshop?publication=${encodeURIComponent(publication.slug)}`}
+        >
+          {publication.hasPrivateSource ? "套用公開積木版本" : "套用到組裝車間"}
+        </Link>
+        <Link className="button button--secondary button--small" href={`/strategies/${publication.slug}`}>查看公開策略</Link>
       </div>
       <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效</p>
     </article>
