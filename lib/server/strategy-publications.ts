@@ -9,6 +9,11 @@ import { validateConfig } from "../strategy-validation";
 import { resolvedTradeDirection } from "../trade-direction";
 import { HttpProblem } from "./http";
 
+export const publicStrategyFreshnessHeaders = Object.freeze({
+  "cache-control": "no-store, max-age=0",
+  "netlify-cdn-cache-control": "no-store",
+});
+
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
 const DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;

@@ -16,6 +16,7 @@ import {
   parseWeexReferralUrl,
   parseWeexReferralUpdateInput,
   publicationSlug,
+  publicStrategyFreshnessHeaders,
   toPublicStrategyPublication,
 } from "../lib/server/strategy-publications";
 
@@ -96,6 +97,13 @@ const seedVerifiedBacktest = (database: SqliteDatabase) => {
 };
 
 describe("strategy publications", () => {
+  it("keeps public publication reads out of browser and Netlify durable caches", () => {
+    expect(publicStrategyFreshnessHeaders).toEqual({
+      "cache-control": "no-store, max-age=0",
+      "netlify-cdn-cache-control": "no-store",
+    });
+  });
+
   it("publishes only an owned immutable version with complete historical evidence", async () => {
     const database = new SqliteDatabase();
     seedVerifiedBacktest(database);

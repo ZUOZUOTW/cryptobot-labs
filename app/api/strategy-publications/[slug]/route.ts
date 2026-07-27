@@ -5,6 +5,7 @@ import { errorResponse, HttpProblem, readStrictJson } from "@/lib/server/http";
 import { env } from "@/lib/server/platform-env";
 import {
   parseWeexReferralUpdateInput,
+  publicStrategyFreshnessHeaders,
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
 import { revalidatePath } from "next/cache";
@@ -22,7 +23,7 @@ export async function GET(
     if (!record) {
       return Response.json({ error: "not_found" }, {
         status: 404,
-        headers: { "cache-control": "public, max-age=30, s-maxage=60" },
+        headers: publicStrategyFreshnessHeaders,
       });
     }
     let publication;
@@ -35,13 +36,11 @@ export async function GET(
       });
       return Response.json({ error: "not_found" }, {
         status: 404,
-        headers: { "cache-control": "public, max-age=30, s-maxage=60" },
+        headers: publicStrategyFreshnessHeaders,
       });
     }
     return Response.json({ publication }, {
-      headers: {
-        "cache-control": "public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
-      },
+      headers: publicStrategyFreshnessHeaders,
     });
   } catch (error) {
     console.error("[strategy-publication] detail failed", {
@@ -49,7 +48,7 @@ export async function GET(
     });
     return Response.json({ error: "publication_service_unavailable" }, {
       status: 503,
-      headers: { "cache-control": "no-store" },
+      headers: publicStrategyFreshnessHeaders,
     });
   }
 }
@@ -85,7 +84,7 @@ export async function PATCH(
     if (!record) throw new HttpProblem(404, "not_found");
     revalidatePath(`/strategies/${slug}`);
     return Response.json({ publication: toPublicStrategyPublication(record) }, {
-      headers: { "cache-control": "no-store" },
+      headers: publicStrategyFreshnessHeaders,
     });
   } catch (error) {
     if (error instanceof HttpProblem) return errorResponse(error, { status: error.status, code: error.code });
