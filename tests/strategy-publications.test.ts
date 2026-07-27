@@ -12,6 +12,7 @@ import { STRATEGY_PRESETS } from "../data/strategies";
 import {
   parsePublicationInput,
   parseWeexReferralUrl,
+  parseWeexReferralUpdateInput,
   publicationSlug,
   toPublicStrategyPublication,
 } from "../lib/server/strategy-publications";
@@ -105,7 +106,6 @@ describe("strategy publications", () => {
       slug: "strategy-publicationa",
       description: "這是經完整公開歷史行情驗證的測試策略，適合檢查發布流程。",
       publisherName: "發布者 A",
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=TEST",
       now: 5,
     });
     expect(saved).not.toBeNull();
@@ -116,8 +116,25 @@ describe("strategy publications", () => {
       symbol: "BTCUSDT",
       tradeDirection: "long",
       hasPrivateSource: false,
+      weexReferralUrl: null,
       metrics: { totalReturn: "0.12", trades: 12 },
     });
+    await expect(repository.updateReferralUrl({
+      userId: "usr_b",
+      slug: "strategy-publicationa",
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=OTHER",
+      now: 6,
+    })).resolves.toBe(false);
+    await expect(repository.updateReferralUrl({
+      userId: "usr_a",
+      slug: "strategy-publicationa",
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
+      now: 7,
+    })).resolves.toBe(true);
+    expect((await repository.getBySlug("strategy-publicationa"))?.weexReferralUrl)
+      .toBe("https://www.weex.com/register?inviteCode=SAFE");
+    await expect(repository.listByUser("usr_a")).resolves.toHaveLength(1);
+    await expect(repository.listByUser("usr_b")).resolves.toHaveLength(0);
 
     await expect(repository.publish({
       id: "publication_b",
@@ -127,26 +144,32 @@ describe("strategy publications", () => {
       slug: "strategy-publicationb",
       description: "另一位會員不能發布不屬於自己的固定策略版本與歷史證據。",
       publisherName: "發布者 B",
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=OTHER",
-      now: 6,
+      now: 8,
     })).resolves.toBeNull();
   });
 
-  it("accepts only HTTPS WEEX referral URLs and strict publication payloads", () => {
+  it("keeps publication input separate from the optional HTTPS WEEX sharing metadata", () => {
     expect(parseWeexReferralUrl("https://www.weex.com/register?inviteCode=SAFE"))
       .toBe("https://www.weex.com/register?inviteCode=SAFE");
     expect(() => parseWeexReferralUrl("https://weex.com.evil.example/register")).toThrow();
     expect(() => parseWeexReferralUrl("http://www.weex.com/register")).toThrow();
+    expect(parseWeexReferralUpdateInput({
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
+    })).toEqual({ weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE" });
     expect(parsePublicationInput({
       strategyVersionId: "version_a",
       backtestJobId: "job_a",
       description: "這是一段足夠完整、可供公開策略頁顯示的策略介紹文字。",
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
     })).toMatchObject({ strategyVersionId: "version_a", backtestJobId: "job_a" });
     expect(() => parsePublicationInput({
       strategyVersionId: "version_a",
       backtestJobId: "job_a",
       description: "太短",
+    })).toThrow();
+    expect(() => parsePublicationInput({
+      strategyVersionId: "version_a",
+      backtestJobId: "job_a",
+      description: "這是一段足夠完整、可供公開策略頁顯示的策略介紹文字。",
       weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
     })).toThrow();
     expect(publicationSlug("publication_12345678-1234-1234-1234-123456789abc"))
@@ -167,7 +190,6 @@ describe("strategy publications", () => {
       slug: "strategy-publicationa",
       description: "這是經完整公開歷史行情驗證的測試策略，適合檢查名稱審核。",
       publisherName: "發布者 A",
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=TEST",
       now: 5,
     });
     const published = await repository.getBySlug("strategy-publicationa");

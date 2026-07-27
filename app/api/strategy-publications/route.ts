@@ -8,6 +8,7 @@ import { requireApiUser, platformIdentityProvider, deriveWorkspaceUserId } from 
 import { HttpProblem, errorResponse } from "@/lib/server/http";
 import { env } from "@/lib/server/platform-env";
 import { validateStrategyName } from "@/lib/strategy-name";
+import { revalidatePath } from "next/cache";
 import {
   parsePublicationInput,
   publicationSlug,
@@ -79,12 +80,12 @@ export async function POST(request: Request): Promise<Response> {
       slug: publicationSlug(publicationId),
       description: input.description,
       publisherName: identity.user.displayName,
-      weexReferralUrl: input.weexReferralUrl,
       now: Date.now(),
     });
     if (!saved) throw new HttpProblem(409, "verified_backtest_required");
     const record = await repository.getBySlug(saved.slug);
     if (!record) throw new Error("published record could not be loaded");
+    revalidatePath(`/strategies/${saved.slug}`);
     return response(saved.id === publicationId ? 201 : 200, {
       publication: toPublicStrategyPublication(record),
     });

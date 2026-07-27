@@ -12,7 +12,7 @@ export interface StrategyPublicationRecord {
   name: string;
   description: string;
   publisherName: string;
-  weexReferralUrl: string;
+  weexReferralUrl: string | null;
   market: "spot" | "futures";
   symbol: string;
   configJson: string;
@@ -51,11 +51,10 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
       slug: string;
       description: string;
       publisherName: string;
-      weexReferralUrl: string;
       now: number;
     }): Promise<StrategyPublicationRecord | null> {
       exactInput(input, ["id", "userId", "strategyVersionId", "backtestJobId", "slug", "description",
-        "publisherName", "weexReferralUrl", "now"]);
+        "publisherName", "now"]);
       const publicationId = id(input.id, "publicationId");
       const owner = id(input.userId, "userId");
       const versionId = id(input.strategyVersionId, "strategyVersionId");
@@ -67,8 +66,6 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
       if (description.length < 20 || description.length > 400 || /[\u0000-\u001f\u007f]/.test(description)) {
         throw new Error("publication description is invalid");
       }
-      if (input.weexReferralUrl.length > 2_048) throw new Error("WEEX referral URL is invalid");
-
       return database.prepare(`INSERT INTO strategy_publications
         (id,user_id,strategy_version_id,backtest_job_id,slug,description,publisher_name,weex_referral_url,
           published_at,updated_at)
@@ -85,7 +82,6 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
           backtest_job_id=excluded.backtest_job_id,
           description=excluded.description,
           publisher_name=excluded.publisher_name,
-          weex_referral_url=excluded.weex_referral_url,
           updated_at=excluded.updated_at
         WHERE strategy_publications.user_id=excluded.user_id
         RETURNING id,user_id AS userId,strategy_version_id AS strategyVersionId,
@@ -93,8 +89,29 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
           weex_referral_url AS weexReferralUrl,'' AS market,'' AS symbol,'' AS configJson,
           '' AS metricsJson,'' AS equityCurveJson,NULL AS actualStartAt,NULL AS actualEndAt,
           published_at AS publishedAt,updated_at AS updatedAt`)
-        .bind(publicationId, input.slug, description, publisher, input.weexReferralUrl, now, now,
+        .bind(publicationId, input.slug, description, publisher, null, now, now,
           jobId, owner, versionId).first<StrategyPublicationRecord>();
+    },
+
+    async updateReferralUrl(input: {
+      userId: string;
+      slug: string;
+      weexReferralUrl: string;
+      now: number;
+    }): Promise<boolean> {
+      exactInput(input, ["userId", "slug", "weexReferralUrl", "now"]);
+      const owner = id(input.userId, "userId");
+      const now = time(input.now, "now");
+      if (!SLUG.test(input.slug)) return false;
+      if (input.weexReferralUrl.length < 12 || input.weexReferralUrl.length > 2_048) {
+        throw new Error("WEEX referral URL is invalid");
+      }
+      const updated = await database.prepare(`UPDATE strategy_publications
+        SET weex_referral_url=?,updated_at=?
+        WHERE user_id=? AND slug=?
+        RETURNING slug`)
+        .bind(input.weexReferralUrl, now, owner, input.slug).first<{ slug: string }>();
+      return updated !== null;
     },
 
     getBySlug(slug: string): Promise<StrategyPublicationRecord | null> {
@@ -107,6 +124,15 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("publication limit is invalid");
       const result = await database.prepare(`SELECT ${projection} ${publishedJoin}
         ORDER BY p.published_at DESC,p.id DESC LIMIT ?`).bind(limit).all<StrategyPublicationRecord>();
+      return result.results;
+    },
+
+    async listByUser(userId: string, limit = 100): Promise<StrategyPublicationRecord[]> {
+      const owner = id(userId, "userId");
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("publication limit is invalid");
+      const result = await database.prepare(`SELECT ${projection} ${publishedJoin}
+        WHERE p.user_id=?
+        ORDER BY p.published_at DESC,p.id DESC LIMIT ?`).bind(owner, limit).all<StrategyPublicationRecord>();
       return result.results;
     },
   };

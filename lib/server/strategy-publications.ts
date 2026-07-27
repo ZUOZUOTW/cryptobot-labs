@@ -91,16 +91,23 @@ export function parseWeexReferralUrl(value: unknown): string {
   return url.toString();
 }
 
+export function parseWeexReferralUpdateInput(value: unknown): { weexReferralUrl: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype) throw new HttpProblem(400, "invalid_request");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).join(",") !== "weexReferralUrl") throw new HttpProblem(400, "invalid_request");
+  return { weexReferralUrl: parseWeexReferralUrl(record.weexReferralUrl) };
+}
+
 export function parsePublicationInput(value: unknown): {
   strategyVersionId: string;
   backtestJobId: string;
   description: string;
-  weexReferralUrl: string;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.getPrototypeOf(value) !== Object.prototype) throw new HttpProblem(400, "invalid_request");
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join(",") !== "backtestJobId,description,strategyVersionId,weexReferralUrl"
+  if (Object.keys(record).sort().join(",") !== "backtestJobId,description,strategyVersionId"
     || typeof record.strategyVersionId !== "string" || !ID.test(record.strategyVersionId)
     || typeof record.backtestJobId !== "string" || !ID.test(record.backtestJobId)
     || typeof record.description !== "string") throw new HttpProblem(400, "invalid_request");
@@ -112,7 +119,6 @@ export function parsePublicationInput(value: unknown): {
     strategyVersionId: record.strategyVersionId,
     backtestJobId: record.backtestJobId,
     description,
-    weexReferralUrl: parseWeexReferralUrl(record.weexReferralUrl),
   };
 }
 
@@ -133,7 +139,7 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord): 
     name: record.name,
     description: record.description,
     publisherName: record.publisherName,
-    weexReferralUrl: parseWeexReferralUrl(record.weexReferralUrl),
+    weexReferralUrl: record.weexReferralUrl === null ? null : parseWeexReferralUrl(record.weexReferralUrl),
     market: config.market,
     symbol: config.symbol,
     timeframe: config.timeframe,
