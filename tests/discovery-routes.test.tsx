@@ -251,6 +251,28 @@ describe("bot catalog route", () => {
     expect(screen.getAllByRole("button", { name: /啟動策略/ })).toHaveLength(20);
   });
 
+  it("shows newly published community strategies with an uncached index request", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/strategy-publications") {
+        return new Response(JSON.stringify({ publications: [ownedPublication] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看公開策略" }))
+      .toHaveAttribute("href", "/strategies/strategy-ownedrelease");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/strategy-publications",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
   it("sorts visible bots from derived catalog data", async () => {
     const user = userEvent.setup();
     render(<BotsPage />);

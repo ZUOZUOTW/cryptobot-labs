@@ -12,6 +12,7 @@ import { revalidatePath } from "next/cache";
 import {
   parsePublicationInput,
   publicationSlug,
+  publicStrategyFreshnessHeaders,
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
 
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 const response = (status: number, body: unknown) => Response.json(body, {
   status,
-  headers: { "cache-control": status === 200 ? "public, max-age=30, s-maxage=300, stale-while-revalidate=3600" : "no-store" },
+  headers: publicStrategyFreshnessHeaders,
 });
 
 const database = () => createControlPlaneDatabase(env.DB);
@@ -85,6 +86,8 @@ export async function POST(request: Request): Promise<Response> {
     if (!saved) throw new HttpProblem(409, "verified_backtest_required");
     const record = await repository.getBySlug(saved.slug);
     if (!record) throw new Error("published record could not be loaded");
+    revalidatePath("/api/strategy-publications");
+    revalidatePath("/bots");
     revalidatePath(`/strategies/${saved.slug}`);
     return response(saved.id === publicationId ? 201 : 200, {
       publication: toPublicStrategyPublication(record),

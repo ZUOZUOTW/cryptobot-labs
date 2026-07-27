@@ -66,7 +66,10 @@ export default function BotsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/strategy-publications", { headers: { Accept: "application/json" } })
+    void fetch("/api/strategy-publications", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
       .then(async (response) => {
         const body = await response.json() as { publications?: unknown };
         if (!response.ok || !Array.isArray(body.publications)) throw new Error("publication_list_failed");
