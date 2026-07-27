@@ -39,7 +39,7 @@ describe("D1 tenant integrity migrations", () => {
     database.exec("PRAGMA foreign_keys=ON");
 
     const migrationFiles = (await readdir(resolve("drizzle"))).filter((file) => file.endsWith(".sql")).sort();
-    expect(migrationFiles.map((file) => file.slice(0, 4))).toEqual(["0000", "0001", "0002", "0003"]);
+    expect(migrationFiles.map((file) => file.slice(0, 4))).toEqual(["0000", "0001", "0002", "0003", "0004"]);
     const migrations = await Promise.all(migrationFiles.map((file) => readFile(resolve("drizzle", file), "utf8")));
     const sql = migrations.join("\n");
     expect(sql).not.toMatch(/PRAGMA\s+foreign_keys\s*=\s*OFF/i);

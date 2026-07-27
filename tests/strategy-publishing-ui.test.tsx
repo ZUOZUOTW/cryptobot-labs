@@ -60,6 +60,11 @@ describe("production strategy publishing UI", () => {
           publication: { slug: "strategy-communitycopy" },
         }), { status: 201 });
       }
+      if (url === "/api/strategy-publications/strategy-communitycopy") {
+        return new Response(JSON.stringify({
+          publication: { slug: "strategy-communitycopy" },
+        }), { status: 200 });
+      }
       throw new Error(`unexpected request: ${url}`);
     });
     const user = userEvent.setup();
@@ -73,9 +78,10 @@ describe("production strategy publishing UI", () => {
     );
 
     const shareButton = screen.getByRole("button", { name: "複製策略分享連結" });
+    const referralInput = screen.getByRole("textbox", { name: "WEEX 邀請註冊連結（選填）" });
     expect(shareButton).toBeDisabled();
-    await user.type(screen.getByRole("textbox", { name: "你的 WEEX 邀請註冊連結" }),
-      "https://www.weex.com/register?inviteCode=TEST");
+    expect(referralInput).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "公開策略介紹" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "發布策略到公開列表" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
@@ -84,15 +90,27 @@ describe("production strategy publishing UI", () => {
       "/api/backtests",
       "/api/strategy-publications",
     ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      strategyVersionId: "version_1",
+      backtestJobId: "backtest_1",
+      description: expect.any(String),
+    });
     expect(await screen.findByRole("status")).toHaveTextContent("策略已發布到公開策略列表");
     expect(shareButton).toBeEnabled();
+    expect(referralInput).toBeEnabled();
     expect(screen.getByRole("link", { name: "查看公開策略" }))
       .toHaveAttribute("href", `${window.location.origin}/strategies/strategy-communitycopy`);
 
+    await user.type(referralInput, "https://www.weex.com/register?inviteCode=TEST");
     await user.click(shareButton);
-    expect(await screen.findByRole("status")).toHaveTextContent("策略分享連結已複製");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/strategy-publications/strategy-communitycopy");
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "PATCH" });
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=TEST",
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("邀請連結已保存，策略分享連結已複製");
     expect(await navigator.clipboard.readText())
       .toBe(`${window.location.origin}/strategies/strategy-communitycopy`);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

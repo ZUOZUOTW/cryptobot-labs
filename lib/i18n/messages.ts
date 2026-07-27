@@ -59,6 +59,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 發布",
     "PUBLIC LIST": "公開列表",
     "03 / SHARE": "03 / 分享",
+    "WEEX / USDT": "WEEX 市場 / USDT", "v": "版本",
   },
   "zh-Hans": {
     "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟",
@@ -107,6 +108,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 发布",
     "PUBLIC LIST": "公开列表",
     "03 / SHARE": "03 / 分享",
+    "WEEX / USDT": "WEEX 市场 / USDT", "v": "版本",
   },
   en: {
     "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO",
@@ -155,6 +157,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / PUBLISH",
     "PUBLIC LIST": "PUBLIC LIST",
     "03 / SHARE": "03 / SHARE",
+    "WEEX / USDT": "WEEX / USDT", "v": "v",
   },
   ar: {
     "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة",
@@ -204,6 +207,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / نشر",
     "PUBLIC LIST": "القائمة العامة",
     "03 / SHARE": "03 / مشاركة",
+    "WEEX / USDT": "سوق WEEX / USDT", "v": "الإصدار",
   },
   ru: {
     "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX",
@@ -253,6 +257,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / ОПУБЛИКОВАТЬ",
     "PUBLIC LIST": "ОБЩИЙ СПИСОК",
     "03 / SHARE": "03 / ПОДЕЛИТЬСЯ",
+    "WEEX / USDT": "РЫНОК WEEX / USDT", "v": "версия",
   },
   ja: {
     "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ",
@@ -302,6 +307,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 公開",
     "PUBLIC LIST": "公開一覧",
     "03 / SHARE": "03 / 共有",
+    "WEEX / USDT": "WEEX 市場 / USDT", "v": "バージョン",
   },
 };
 

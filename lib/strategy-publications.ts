@@ -19,7 +19,7 @@ export interface PublicStrategyPublication {
   name: string;
   description: string;
   publisherName: string;
-  weexReferralUrl: string;
+  weexReferralUrl: string | null;
   market: Market;
   symbol: string;
   timeframe: string;

@@ -6,11 +6,14 @@ import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
 import { benchmarkSeries } from "../lib/benchmark-series";
 import BotsPage from "../app/bots/page";
 import FavoritesPage from "../app/favorites/page";
+import { PlatformAuthProvider } from "../components/PlatformAuthProvider";
 import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
 import { StrategyShareActions } from "../components/StrategyShareActions";
 import { BOT_CATALOG } from "../data/bots";
+import { STRATEGY_PRESETS } from "../data/strategies";
 import { signInDemo } from "../lib/demo-auth";
+import type { PublicStrategyPublication } from "../lib/strategy-publications";
 import type { WeexHistoricalPerformance } from "../lib/types";
 import { clearWeexBotPerformanceCache } from "../lib/weex-historical-client";
 
@@ -43,6 +46,39 @@ const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Obje
     fundingIncluded: false, datasetDigest: "d".repeat(64), engineVersion: "test",
   },
 }]));
+
+const ownedPublication: PublicStrategyPublication = {
+  slug: "strategy-ownedrelease",
+  name: "我的公開雙向策略",
+  description: "這是目前會員發布並完成公開歷史行情驗證的策略版本。",
+  publisherName: "會員 A",
+  weexReferralUrl: null,
+  market: STRATEGY_PRESETS[0].market,
+  symbol: STRATEGY_PRESETS[0].symbol,
+  timeframe: STRATEGY_PRESETS[0].timeframe,
+  leverage: STRATEGY_PRESETS[0].leverage,
+  logicMode: STRATEGY_PRESETS[0].logicMode,
+  tradeDirection: "both",
+  hasPrivateSource: false,
+  blocks: STRATEGY_PRESETS[0].blocks,
+  metrics: {
+    totalReturn: "0.12",
+    annualizedReturn: "0.24",
+    maxDrawdown: "-0.08",
+    winRate: "0.56",
+    profitFactor: "1.4",
+    sharpe: "1.2",
+    trades: 18,
+  },
+  equityCurve: [
+    { timestamp: 1_700_000_000_000, equity: "10000" },
+    { timestamp: 1_700_086_400_000, equity: "11200" },
+  ],
+  actualStartAt: 1_700_000_000_000,
+  actualEndAt: 1_700_086_400_000,
+  publishedAt: 1_700_086_400_000,
+  updatedAt: 1_700_086_400_000,
+};
 
 beforeEach(() => {
   localStorage.clear();
@@ -316,6 +352,36 @@ describe("favorite strategies route", () => {
 
     expect(await screen.findByRole("heading", { name: "尚未收藏任何策略" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "探索策略" })).toHaveAttribute("href", "/bots");
+  });
+
+  it("lists only the signed-in member's public releases under My Strategies", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/strategy-publications/mine") {
+        return new Response(JSON.stringify({ publications: [ownedPublication] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+    const user = userEvent.setup();
+    render(
+      <PlatformAuthProvider
+        initialUser={{ id: "usr_a", email: "member@example.test", displayName: "會員 A" }}
+        mode="production"
+      >
+        <FavoritesPage />
+      </PlatformAuthProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /我的策略/ }));
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看公開策略" }))
+      .toHaveAttribute("href", "/strategies/strategy-ownedrelease");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/strategy-publications/mine",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
   });
 });
 

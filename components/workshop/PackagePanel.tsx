@@ -45,7 +45,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
   const [message, setMessage] = useState("");
   const [description, setDescription] = useState("");
   const [weexReferralUrl, setWeexReferralUrl] = useState("");
-  const [publication, setPublication] = useState<{ fingerprint: string; url: string } | null>(null);
+  const [publication, setPublication] = useState<{ fingerprint: string; slug: string; url: string } | null>(null);
   const saveAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const savedVersionRef = useRef<{ fingerprint: string; version: SavedVersion } | null>(null);
   const configurationReady = validateConfig(config).valid;
@@ -167,11 +167,6 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       setPublishState("error");
       return;
     }
-    if (!validReferralUrl(weexReferralUrl.trim())) {
-      setMessage("請輸入有效的 WEEX HTTPS 邀請註冊連結；為避免錯誤導流，不接受其他網域。");
-      setPublishState("error");
-      return;
-    }
     const publicDescription = description.trim()
       || `${config.name} 使用 ${config.symbol} ${config.timeframe} 週期，由 ${config.blocks.length} 個進出場、倉位與風控模組組成。`;
     if (publicDescription.length < 20 || publicDescription.length > 400) {
@@ -224,7 +219,6 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           strategyVersionId: version.id,
           backtestJobId: backtestBody.backtest.id,
           description: publicDescription,
-          weexReferralUrl: weexReferralUrl.trim(),
         }),
       });
       if (publicationResponse.status === 401) { requireLogin(); return; }
@@ -235,30 +229,54 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
         throw new Error("publish_failed");
       }
       const url = `${window.location.origin}/strategies/${encodeURIComponent(publicationBody.publication.slug)}`;
-      setPublication({ fingerprint, url });
+      setPublication({ fingerprint, slug: publicationBody.publication.slug, url });
       setPublishState("complete");
       setShareState("idle");
       setMessage("策略已發布到公開策略列表；你現在可以查看公開頁或分享策略連結。");
     } catch {
       setPublishState("error");
-      setMessage("發布未完成；策略不會出現在公開列表。請確認行情資料與 WEEX 邀請連結後重試。");
+      setMessage("發布未完成；策略不會出現在公開列表。請確認行情資料後重試。");
     }
   };
 
   const sharePublishedStrategy = async () => {
-    if (!publishedUrl) {
+    if (!publishedUrl || !publication || publication.fingerprint !== fingerprint) {
       setShareState("error");
       setMessage("請先將目前策略版本發布到公開策略列表，再分享策略連結。");
       return;
     }
+    const referralUrl = weexReferralUrl.trim();
+    if (referralUrl && !validReferralUrl(referralUrl)) {
+      setShareState("error");
+      setMessage("請輸入有效的 WEEX HTTPS 邀請註冊連結；為避免錯誤導流，不接受其他網域。");
+      return;
+    }
     setShareState("working");
+    try {
+      if (referralUrl) {
+        const response = await fetch(`/api/strategy-publications/${encodeURIComponent(publication.slug)}`, {
+          method: "PATCH",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ weexReferralUrl: referralUrl }),
+        });
+        if (response.status === 401) { requireLogin(); return; }
+        if (!response.ok) throw new Error("referral_update_failed");
+      }
+    } catch {
+      setShareState("error");
+      setMessage("邀請連結無法保存；公開策略未變更，請確認網址後重試。");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(publishedUrl);
       setShareState("complete");
-      setMessage("策略分享連結已複製。");
+      setMessage(referralUrl ? "邀請連結已保存，策略分享連結已複製。" : "策略分享連結已複製。");
     } catch {
       setShareState("error");
-      setMessage(`無法自動複製，請手動分享此策略連結：${publishedUrl}`);
+      setMessage(referralUrl
+        ? `邀請連結已保存，但無法自動複製；請手動分享此策略連結：${publishedUrl}`
+        : `無法自動複製，請手動分享此策略連結：${publishedUrl}`);
     }
   };
   return (
@@ -320,17 +338,6 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
                   value={description}
                 />
               </label>
-              <label>
-                <span>你的 WEEX 邀請註冊連結</span>
-                <input
-                  autoComplete="url"
-                  inputMode="url"
-                  onChange={(event) => setWeexReferralUrl(event.target.value)}
-                  placeholder="https://www.weex.com/..."
-                  type="url"
-                  value={weexReferralUrl}
-                />
-              </label>
             </div>
           )}
           <small>訪客只能查看；自訂原始碼、Email 與交易憑證不會公開</small>
@@ -364,9 +371,25 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           <h3 id="workshop-share-strategy-title">分享策略連結</h3>
           <p>
             {publishedUrl
-              ? "分享目前已發布版本的公開網址；這個動作不會修改或重新發布策略。"
+              ? "可選填 WEEX 邀請連結，再複製目前已發布版本的公開網址。"
               : "發布完成後，才可複製公開策略網址並分享給其他用戶。"}
           </p>
+          {authMode === "production" && (
+            <label className="workshop-share-action__referral">
+              <span>WEEX 邀請註冊連結（選填）</span>
+              <input
+                aria-label="WEEX 邀請註冊連結（選填）"
+                autoComplete="url"
+                disabled={!publishedUrl || shareState === "working"}
+                inputMode="url"
+                onChange={(event) => setWeexReferralUrl(event.target.value)}
+                placeholder="https://www.weex.com/..."
+                type="url"
+                value={weexReferralUrl}
+              />
+              <small>不填仍可分享；填寫後會顯示在公開策略頁，且只會套用到這個已發布版本。</small>
+            </label>
+          )}
         </div>
         <div className="workshop-share-action__controls">
           {publishedUrl
@@ -379,7 +402,9 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
             onClick={() => void sharePublishedStrategy()}
             type="button"
           >
-            {shareState === "working" ? "正在複製…" : "複製策略連結"}
+            {shareState === "working"
+              ? weexReferralUrl.trim() ? "正在儲存並複製…" : "正在複製…"
+              : "複製策略連結"}
           </button>
         </div>
       </section>

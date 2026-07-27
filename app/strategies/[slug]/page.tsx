@@ -73,14 +73,16 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
               >
                 {publication.hasPrivateSource ? "套用公開積木版本" : "套用並自行調整"}
               </Link>
-              <a
-                className="button button--secondary weex-referral-cta"
-                href={publication.weexReferralUrl}
-                rel="nofollow sponsored noopener noreferrer"
-                target="_blank"
-              >
-                透過發布者邀請註冊 WEEX
-              </a>
+              {publication.weexReferralUrl && (
+                <a
+                  className="button button--secondary weex-referral-cta"
+                  href={publication.weexReferralUrl}
+                  rel="nofollow sponsored noopener noreferrer"
+                  target="_blank"
+                >
+                  透過發布者邀請註冊 WEEX
+                </a>
+              )}
               <StrategyShareActions
                 botId={publication.slug}
                 botName={publication.name}
@@ -108,7 +110,9 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
             ? "公開固定版本 · 自訂程式碼不公開，套用時使用公開積木設定 · Email 不公開"
             : "公開固定版本 · 可建立自己的可編輯副本 · Email 不公開"}</span>
         </div>
-        <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效；邀請連結由發布者提供。</p>
+        {publication.weexReferralUrl
+          ? <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效；邀請連結由發布者提供。</p>
+          : <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效</p>}
       </header>
 
       <section className="detail-section site-container public-strategy-performance" aria-labelledby="public-performance-title">
@@ -151,9 +155,13 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
 
       <section className="detail-section detail-cta site-container glass-panel public-strategy-referral">
         <div>
-          <p className="eyebrow">START WITH WEEX</p>
-          <h2>準備在 WEEX 開始驗證這個策略？</h2>
-          <p>透過 {publication.publisherName} 的專屬邀請連結前往 WEEX 註冊；註冊完成後再回到 CryptoBot Labs 連線並自行設定風險限制。</p>
+          <p className="eyebrow">
+            {publication.weexReferralUrl ? "START WITH WEEX" : "COMMUNITY STRATEGY / IMMUTABLE VERSION"}
+          </p>
+          <h2>{publication.weexReferralUrl ? "準備在 WEEX 開始驗證這個策略？" : "建立自己的可編輯策略副本"}</h2>
+          <p>{publication.weexReferralUrl
+            ? <>透過 {publication.publisherName} 的專屬邀請連結前往 WEEX 註冊；註冊完成後再回到 CryptoBot Labs 連線並自行設定風險限制。</>
+            : "將公開策略帶入組裝車間，檢查模組、方向與風控參數後，再建立自己的固定版本。"}</p>
         </div>
         <div className="button-row">
           <Link
@@ -162,14 +170,16 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
           >
             {publication.hasPrivateSource ? "使用公開積木建立副本" : "使用這個策略"}
           </Link>
-          <a
-            className="button button--secondary"
-            href={publication.weexReferralUrl}
-            rel="nofollow sponsored noopener noreferrer"
-            target="_blank"
-          >
-            使用發布者邀請連結註冊
-          </a>
+          {publication.weexReferralUrl && (
+            <a
+              className="button button--secondary"
+              href={publication.weexReferralUrl}
+              rel="nofollow sponsored noopener noreferrer"
+              target="_blank"
+            >
+              使用發布者邀請連結註冊
+            </a>
+          )}
           <StrategyShareActions
             botId={publication.slug}
             botName={publication.name}

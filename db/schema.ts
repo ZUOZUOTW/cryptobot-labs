@@ -293,7 +293,7 @@ export const strategyPublications = sqliteTable("strategy_publications", {
   slug: text("slug").notNull(),
   description: text("description").notNull(),
   publisherName: text("publisher_name").notNull(),
-  weexReferralUrl: text("weex_referral_url").notNull(),
+  weexReferralUrl: text("weex_referral_url"),
   publishedAt: timestamp("published_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
