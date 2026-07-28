@@ -2,7 +2,7 @@ import {
   parseWeexAuthStage,
   weexAuthCapabilities,
   type WeexAuthStage,
-} from "@cryptobot-labs/weex-client";
+} from "@cryptobot-labs/weex-client/auth-stage";
 
 type DeploymentEnvironment = Record<string, string | undefined>;
 
