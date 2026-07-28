@@ -12,6 +12,7 @@ describe("AWS Secrets Manager runtime configuration", () => {
       return { SecretString: JSON.stringify({
         PUBLIC_ORIGIN: "https://www.example.test",
         LIVE_TRADING_ENABLED: "false",
+        WEEX_AUTH_STAGE: "transition",
         WEEX_BROKER_ID: "WEEX111162",
       }) };
     });
@@ -20,6 +21,7 @@ describe("AWS Secrets Manager runtime configuration", () => {
     expect(result).toMatchObject({
       AWS_REGION: "ap-northeast-1",
       PUBLIC_ORIGIN: "https://www.example.test",
+      WEEX_AUTH_STAGE: "transition",
       WEEX_BROKER_ID: "WEEX111162",
     });
     expect(destroy).toHaveBeenCalledOnce();

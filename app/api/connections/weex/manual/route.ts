@@ -5,6 +5,7 @@ import { createControlPlaneDatabase } from "@/db";
 import { createUserRepository } from "@/db/repositories";
 import { env } from "@/lib/server/platform-env";
 import { AUTH_ACCESS_COOKIE, getCurrentSupabaseUser } from "@/lib/server/supabase-auth";
+import { manualWeexConnectionEnabled } from "@/lib/server/weex-auth-stage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ const SAFE_FAILURE_REASONS = new Set([
 ]);
 
 export async function POST(request: Request): Promise<Response> {
+  if (!manualWeexConnectionEnabled()) return reply(404, { error: "manual_connection_unavailable" });
   if (request.headers.get("sec-fetch-site") !== "same-origin") return reply(403, { error: "forbidden_origin" });
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     return reply(415, { error: "unsupported_media_type" });
@@ -80,8 +82,9 @@ export async function POST(request: Request): Promise<Response> {
     }
     const result = await response.json() as { maskedApiKeySuffix?: unknown; liveReady?: unknown };
     if (typeof result.maskedApiKeySuffix !== "string") return reply(502, { error: "invalid_executor_response" });
-    return reply(200, { connection: { status: "active", maskedApiKeySuffix: result.maskedApiKeySuffix,
-      futuresDemoReady: true, liveReady: result.liveReady === true } });
+    return reply(200, { connection: { status: "active", credentialSource: "manual",
+      maskedApiKeySuffix: result.maskedApiKeySuffix, futuresDemoReady: true,
+      liveReady: result.liveReady === true } });
   } catch {
     return reply(503, { error: "executor_unavailable" });
   }

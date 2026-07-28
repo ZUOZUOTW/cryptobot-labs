@@ -27,4 +27,9 @@ When WEEX issues the OAuth credentials, still record or test:
 - The created platform API key has read/trade access only and no withdrawal permission.
 - Key deletion, relinking, rate limits, incident escalation, and test-account procedure.
 
+Receiving credentials does not itself authorize launch. Store them in AWS Secrets Manager while
+`WEEX_AUTH_STAGE=transition`; this keeps OAuth disabled. Move to `dual` only after the above evidence is complete.
+Move to `oauth-only` only after the WEEX identity callback has a stable platform-user mapping and existing users
+have a tested migration and rollback path.
+
 Secrets must be inserted directly into AWS Secrets Manager, never pasted into an issue, chat, source file, Terraform variable, Netlify public variable, URL, or application log.

@@ -118,6 +118,10 @@ const handleRequest = async (request: import("node:http").IncomingMessage,
     return;
   }
   if (request.method === "POST" && request.url === "/connections/weex/manual") {
+    if (!config.manualConnectionsEnabled) {
+      json(response, 404, { error: "manual_connection_unavailable" });
+      return;
+    }
     const authorization = header(request.headers.authorization);
     if (!authorization.startsWith("Handoff ")) { json(response, 401, { error: "unauthorized" }); return; }
     try {
@@ -181,6 +185,8 @@ console.info(JSON.stringify({
   event: "executor_runtime_started",
   ...runtimeMetadata,
   checks: readiness,
+  authStage: config.authStage,
+  manualConnectionsEnabled: config.manualConnectionsEnabled,
   oauthEnabled: oauth.enabled,
   liveTradingEnabled: config.liveTradingEnabled,
 }));

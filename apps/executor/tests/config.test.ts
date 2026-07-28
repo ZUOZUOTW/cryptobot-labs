@@ -15,13 +15,15 @@ const env = {
   WEEX_OAUTH_REDIRECT_URI: "https://api.example.com/oauth/weex/callback",
   EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-32-bytes",
   LIVE_TRADING_ENABLED: "false",
+  WEEX_AUTH_STAGE: "transition",
 } satisfies Record<string, string>;
 
 describe("cloud executor production gates", () => {
   it("accepts a complete fail-closed configuration", () => {
     expect(loadExecutorConfig(env)).toMatchObject({ shardId: env.EXECUTOR_SHARD_ID, liveTradingEnabled: false,
       weexBrokerId: "WEEX111162", healthPort: 8080, accountConcurrency: 4,
-      strategyConcurrency: 8, tickIntervalMs: 2_000 });
+      strategyConcurrency: 8, tickIntervalMs: 2_000, authStage: "transition",
+      manualConnectionsEnabled: true, oauthEnabled: false });
   });
 
   it("bounds worker concurrency and scheduler cadence", () => {
@@ -41,6 +43,20 @@ describe("cloud executor production gates", () => {
       liveTradingEnabled: true,
       oauthEnabled: false,
     });
+  });
+
+  it("enables OAuth only in an approved rollout stage and disables manual input in OAuth-only mode", () => {
+    expect(loadExecutorConfig({ ...env, WEEX_AUTH_STAGE: "dual" })).toMatchObject({
+      authStage: "dual",
+      manualConnectionsEnabled: true,
+      oauthEnabled: true,
+    });
+    expect(loadExecutorConfig({ ...env, WEEX_AUTH_STAGE: "oauth-only" })).toMatchObject({
+      authStage: "oauth-only",
+      manualConnectionsEnabled: false,
+      oauthEnabled: true,
+    });
+    expect(() => loadExecutorConfig({ ...env, WEEX_AUTH_STAGE: "oauth" })).toThrow(/WEEX_AUTH_STAGE/);
   });
 
   it("rejects missing KMS, insecure database, and invalid callback configuration", () => {

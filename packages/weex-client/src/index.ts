@@ -1,4 +1,5 @@
 export * from "./clock";
+export * from "./auth-stage";
 export * from "./credential-envelope";
 export * from "./errors";
 export * from "./execution-adapter";

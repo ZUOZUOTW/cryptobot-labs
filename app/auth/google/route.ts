@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { demoModeEnabled } from "../../../lib/server/demo-mode";
+import { legacyPlatformLoginEnabled } from "../../../lib/server/weex-auth-stage";
 import {
   callbackUrl,
   createAuthTransaction,
@@ -10,7 +11,7 @@ import {
 
 export async function GET(request: Request): Promise<Response> {
   const authPage = new URL("/auth?error=unavailable", request.url);
-  if (demoModeEnabled()) return NextResponse.redirect(authPage, 303);
+  if (demoModeEnabled() || !legacyPlatformLoginEnabled()) return NextResponse.redirect(authPage, 303);
   try {
     const config = getSupabaseAuthConfig();
     const returnTo = safeReturnTo(new URL(request.url).searchParams.get("return_to"), "/bots");

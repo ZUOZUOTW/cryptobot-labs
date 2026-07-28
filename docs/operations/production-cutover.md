@@ -27,6 +27,8 @@
 - Supabase Auth now uses the production Site URL `https://www.cryptobotlabs.app` and the exact redirect allow-list entry `https://www.cryptobotlabs.app/auth/callback`; no wildcard production redirect is enabled.
 - The Google OAuth web client is configured with the exact production origin and Supabase callback, its secret is stored in Supabase Auth, and the Google provider is enabled. The external OAuth app is published as `In production` rather than limited to test users. A production-browser smoke test completed Google account selection, PKCE callback, authenticated `/connections` rendering, Supabase session creation, same-origin sign-out, remote revoke attempt, and deterministic local cookie clearing on 2026-07-14.
 - WEEX registered Broker ID `WEEX111162` for CryptoBot Labs (Broker UID `5459424221`). New Spot, Futures, and Futures Demo submissions fail closed unless their `newClientOrderId` uses the 35-character `b-WEEX111162-<22-character deterministic suffix>` format. Legacy `cb_` IDs remain queryable and cancellable for safe rollout reconciliation.
+- Supabase's production migration history is mirrored by version and normalized SQL hash in the repository. Leaked Password Protection is enabled for the current Google/Email transition login.
+- `WEEX_AUTH_STAGE=transition` is the production rollout state: Google/Email login and the KMS-encrypted manual API path remain available, while WEEX OAuth start is disabled even if credentials are pre-provisioned. `dual` and `oauth-only` require separate reviewed cutovers.
 
 ## External gates still required
 
@@ -44,3 +46,12 @@
 7. Load and failover tests with `LIVE_TRADING_ENABLED=false`.
 8. Authorized account Paper soak, then operator-approved minimum-size spot live order; futures live remains disabled until separately approved.
 9. Audit evidence records the approver, exact strategy/risk hashes, timestamps, Broker-attributed order ID, order/fill reconciliation, and successful credential revocation.
+
+## Authentication rollout order
+
+1. `transition`: keep Supabase Google/Email identity and manual API entry; reject WEEX OAuth start at both Netlify and the executor.
+2. `dual`: only after WEEX approval, deploy the client credentials to AWS Secrets Manager and prove callback, no-withdrawal permissions, relink, revoke, and rollback behavior before changing the stage.
+3. `oauth-only`: only after a stable WEEX-to-platform user identity contract and account migration are implemented. Legacy login and manual API entry are then rejected at both UI and API boundaries.
+
+The safe `public.weex_connections` projection records `credential_source` as `manual` or `oauth`. Completion and
+failure updates are fenced by that source so overlapping transition flows cannot overwrite one another.

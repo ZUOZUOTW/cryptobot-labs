@@ -37,6 +37,9 @@ describe("executor OAuth service", () => {
     const handoff = await createExecutorOAuthHandoff({ userId: "user-1", sessionHash: await sha256Base64Url("session"),
       returnTo: "/connections", secret, now: 1_000_000 });
     const authorizationUrl = new URL(await service.start(handoff));
+    expect(repository.prepareConnection).toHaveBeenCalledWith(expect.objectContaining({
+      credentialSource: "oauth",
+    }));
     expect(repository.createState).toHaveBeenCalledOnce();
     expect(JSON.stringify(state)).not.toContain("codeVerifier");
     const callback = await service.callback({ state: authorizationUrl.searchParams.get("state")!, code: "code-1" });

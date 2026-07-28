@@ -1,10 +1,13 @@
 import type { ControlPlaneDatabase } from "../index";
+import type { WeexCredentialSource } from "@cryptobot-labs/weex-client";
 import { id } from "./shared";
 
 export type WeexOAuthConnectionStatus = "pending" | "processing" | "active" | "reauthorization_required" | "revoked" | "error";
+export type { WeexCredentialSource } from "@cryptobot-labs/weex-client";
 export interface SafeWeexOAuthConnection {
   id: string;
   status: WeexOAuthConnectionStatus;
+  credentialSource: WeexCredentialSource;
   maskedApiKeySuffix: string | null;
   permissions: { read: boolean; spotTrade: boolean; futuresTrade: boolean; withdrawal: false };
   withdrawalAccessAbsent: boolean;
@@ -16,6 +19,7 @@ export interface SafeWeexOAuthConnection {
 interface Row {
   id: string;
   status: string;
+  credentialSource: string;
   maskedApiKeySuffix: string | null;
   permissionsJson: string | Record<string, unknown>;
   withdrawalAccessAbsent: boolean | number;
@@ -30,12 +34,16 @@ const STATUSES = new Set<WeexOAuthConnectionStatus>([
 
 const parse = (row: Row): SafeWeexOAuthConnection => {
   if (!STATUSES.has(row.status as WeexOAuthConnectionStatus)) throw new Error("stored WEEX connection status is invalid");
+  if (row.credentialSource !== "manual" && row.credentialSource !== "oauth") {
+    throw new Error("stored WEEX credential source is invalid");
+  }
   const permissions = typeof row.permissionsJson === "string" ? JSON.parse(row.permissionsJson) as unknown : row.permissionsJson;
   if (!permissions || typeof permissions !== "object" || Array.isArray(permissions)) throw new Error("stored permissions are invalid");
   const value = permissions as Record<string, unknown>;
   const safePermissions = { read: value.read === true, spotTrade: value.spotTrade === true,
     futuresTrade: value.futuresTrade === true, withdrawal: false as const };
-  return { id: row.id, status: row.status as WeexOAuthConnectionStatus, maskedApiKeySuffix: row.maskedApiKeySuffix,
+  return { id: row.id, status: row.status as WeexOAuthConnectionStatus,
+    credentialSource: row.credentialSource, maskedApiKeySuffix: row.maskedApiKeySuffix,
     permissions: safePermissions, withdrawalAccessAbsent: Boolean(row.withdrawalAccessAbsent),
     verifiedAt: row.verifiedAt, revokedAt: row.revokedAt, updatedAt: row.updatedAt };
 };
@@ -43,7 +51,8 @@ const parse = (row: Row): SafeWeexOAuthConnection => {
 export function createWeexOAuthConnectionRepository(database: ControlPlaneDatabase) {
   return {
     async latestForUser(userId: string): Promise<SafeWeexOAuthConnection | null> {
-      const row = await database.prepare(`select id,status,masked_api_key_suffix as maskedApiKeySuffix,
+      const row = await database.prepare(`select id,status,credential_source as credentialSource,
+        masked_api_key_suffix as maskedApiKeySuffix,
         permissions_json as permissionsJson,withdrawal_access_absent as withdrawalAccessAbsent,
         verified_at as verifiedAt,revoked_at as revokedAt,updated_at as updatedAt
         from weex_connections where user_id=? and provider='weex' order by updated_at desc,id desc limit 1`)

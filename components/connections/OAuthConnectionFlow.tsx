@@ -14,11 +14,17 @@ export function OAuthConnectionFlow() {
   const { mode, user } = usePlatformAuth();
   const demoConnection = useDemoConnection();
   const [choice, setChoice] = useState<AccountChoice>(null);
-  const [productionConnection, setProductionConnection] = useState<{ status: string; withdrawalAccessAbsent: boolean } | null>(null);
+  const [productionConnection, setProductionConnection] = useState<{
+    status: string;
+    credentialSource: "manual" | "oauth";
+    withdrawalAccessAbsent: boolean;
+  } | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const ready = mode === "demo" ? demoConnection.status === "paper-ready"
-    : productionConnection?.status === "active" && productionConnection.withdrawalAccessAbsent;
-  const processing = mode === "production" && ["pending", "processing"].includes(productionConnection?.status ?? "");
+    : productionConnection?.credentialSource === "oauth" && productionConnection.status === "active"
+      && productionConnection.withdrawalAccessAbsent;
+  const processing = mode === "production" && productionConnection?.credentialSource === "oauth"
+    && ["pending", "processing"].includes(productionConnection.status);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

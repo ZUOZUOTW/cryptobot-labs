@@ -1,6 +1,6 @@
 export { createUserRepository, normalizeUserEmail, type UserRecord } from "./users";
 export { createWeexOAuthConnectionRepository, type SafeWeexOAuthConnection,
-  type WeexOAuthConnectionStatus } from "./weex-oauth";
+  type WeexCredentialSource, type WeexOAuthConnectionStatus } from "./weex-oauth";
 export {
   createDeviceRepository,
   createPairingCodeRepository,
