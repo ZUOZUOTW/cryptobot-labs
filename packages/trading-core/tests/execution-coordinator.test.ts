@@ -97,6 +97,7 @@ function setup(overrides: Partial<ConstructorParameters<typeof ExecutionCoordina
     exchange,
     circuitBreaker: breaker,
     failureClassifier: () => "unknown",
+    brokerId: "WEEX111162",
     ...overrides,
   });
   return { coordinator, repository, normalizer, exchange, breaker };
@@ -110,6 +111,7 @@ describe("ExecutionCoordinator", () => {
     expect(outcome.status).toBe("submitted");
     if (outcome.status !== "submitted") throw new Error("expected submission");
     expect(outcome.order).toMatchObject({ status: "acknowledged", exchangeOrderId: "exchange-1" });
+    expect(outcome.order.clientOrderId).toMatch(/^b-WEEX111162-[A-Za-z0-9_-]{22}$/u);
     expect(repository.orders.get(outcome.order.clientOrderId)).toEqual(outcome.order);
     expect(normalizer.normalize).toHaveBeenCalledTimes(1);
     expect(exchange.submit).toHaveBeenCalledTimes(1);
@@ -120,6 +122,13 @@ describe("ExecutionCoordinator", () => {
     });
     expect(outcome.order.executionTarget).toEqual({ market: "spot", mode: "live" });
     expect(breaker.state).toBe("closed");
+  });
+
+  it("fails closed before persistence when private execution has no broker attribution", async () => {
+    const { coordinator, repository, exchange } = setup({ brokerId: undefined });
+    await expect(coordinator.propose(signal, executionContext)).rejects.toThrow(/broker attribution/i);
+    expect(repository.orders.size).toBe(0);
+    expect(exchange.submit).not.toHaveBeenCalled();
   });
 
   it.each([

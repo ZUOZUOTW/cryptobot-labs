@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { createVaultWeexExecutionClient } from "../src/main/vault-weex-execution-client";
 
 const NOW = 1_700_000_000_000;
+const BROKER_ID = "WEEX111162";
+const CLIENT_ORDER_ID = `b-${BROKER_ID}-demo-client-1_________`;
 const response = (body: unknown, headers: Record<string, string> = {}): HttpResponse => ({ status: 200, headers, body });
 
 class Transport implements HttpTransport {
@@ -30,15 +32,15 @@ describe("vault WEEX execution client", () => {
     const transport = new Transport([
       response({ symbol: "BTCUSDT", price: "50000" }, { date: new Date(NOW).toUTCString() }),
       response(balances),
-      response({ orderId: "demo-42", clientOrderId: "demo-client-1", success: true, errorCode: "", errorMessage: "" }),
+      response({ orderId: "demo-42", clientOrderId: CLIENT_ORDER_ID, success: true, errorCode: "", errorMessage: "" }),
     ]);
     const vault = { withCredentials: async <T>(operation: (value: Readonly<{
       apiKey: string; secretKey: string; passphrase: string;
     }>) => T | Promise<T>) => operation({ apiKey: "api-key", secretKey: "secret-key", passphrase: "passphrase" }) };
-    const client = createVaultWeexExecutionClient({ vault, transport, now: () => NOW,
+    const client = createVaultWeexExecutionClient({ brokerId: BROKER_ID, vault, transport, now: () => NOW,
       rulesProvider: async () => ({ rules, verifiedAt: NOW }) });
 
-    await expect(client.submitOrder({ target, clientOrderId: "demo-client-1", intent: {
+    await expect(client.submitOrder({ target, clientOrderId: CLIENT_ORDER_ID, intent: {
       symbol: "BTCSUSDT", side: "buy", quantity: "0.001", price: "50000",
       expectedSlippageBps: "2", reduceOnly: false,
     } })).resolves.toEqual({ status: "acknowledged", exchangeOrderId: "demo-42" });
@@ -54,6 +56,7 @@ describe("vault WEEX execution client", () => {
     let credentialReads = 0;
     const transport = new Transport([]);
     const client = createVaultWeexExecutionClient({
+      brokerId: BROKER_ID,
       vault: { withCredentials: async () => { credentialReads += 1; throw new Error("must not read credentials"); } },
       transport, now: () => NOW, rulesProvider: async () => ({ rules, verifiedAt: NOW }),
     });

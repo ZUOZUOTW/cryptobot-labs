@@ -1,3 +1,5 @@
+import { isWeexBrokerId } from "@cryptobot-labs/trading-core";
+
 const SHARD = /^exec_[A-Za-z0-9_-]{16,64}$/;
 const AWS_REGION = /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/;
 const KMS_ARN = /^arn:aws:kms:[a-z0-9-]+:\d{12}:key\/[0-9a-f-]{36}$/i;
@@ -14,6 +16,7 @@ export interface ExecutorConfig {
   readonly databaseUrl: string;
   readonly weexClientId: string | null;
   readonly weexClientSecret: string | null;
+  readonly weexBrokerId: string;
   readonly weexOAuthRedirectUri: string;
   readonly handoffSecret: string;
   readonly oauthEnabled: boolean;
@@ -78,6 +81,10 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   }
   const handoffSecret = required(env, "EXECUTOR_HANDOFF_SECRET", 512);
   if (handoffSecret.length < 32) throw new Error("EXECUTOR_HANDOFF_SECRET must contain at least 32 characters");
+  const weexBrokerId = required(env, "WEEX_BROKER_ID", 32);
+  if (!isWeexBrokerId(weexBrokerId)) {
+    throw new Error("WEEX_BROKER_ID must use the WEEX plus six digits format");
+  }
   const weexClientId = env.WEEX_CLIENT_ID?.trim() || null;
   const weexClientSecret = env.WEEX_CLIENT_SECRET || null;
   if ((weexClientId === null) !== (weexClientSecret === null)) {
@@ -93,7 +100,7 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   const tickIntervalMs = boundedInteger(env.EXECUTOR_TICK_INTERVAL_MS, 2_000, 500, 60_000,
     "EXECUTOR_TICK_INTERVAL_MS");
   return Object.freeze({ shardId, awsRegion, kmsKeyId, expectedEgressIp, healthPort, publicOrigin, databaseUrl,
-    weexClientId, weexClientSecret, weexOAuthRedirectUri, handoffSecret, oauthEnabled, liveTradingEnabled,
+    weexClientId, weexClientSecret, weexBrokerId, weexOAuthRedirectUri, handoffSecret, oauthEnabled, liveTradingEnabled,
     accountConcurrency, strategyConcurrency, tickIntervalMs });
 }
 

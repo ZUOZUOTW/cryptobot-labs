@@ -42,6 +42,7 @@ import { IPC_EVENTS } from "../shared/ipc-contract";
 export { createStartAtLoginController } from "./login-item";
 
 declare const __CBL_CONTROL_PLANE_ORIGIN__: string;
+declare const __CBL_WEEX_BROKER_ID__: string;
 
 function trustedDevelopmentUrl(value: string): string {
   const url = new URL(value);
@@ -167,6 +168,7 @@ export async function bootstrapAgent(): Promise<void> {
     runAudit,
   });
   const liveExecutionClient = createVaultWeexExecutionClient({
+    brokerId: __CBL_WEEX_BROKER_ID__,
     vault,
     rulesProvider: async (target, symbol) => instrumentState.requireFreshSnapshot(target.market, symbol, Date.now()),
   });
@@ -177,7 +179,8 @@ export async function bootstrapAgent(): Promise<void> {
       createNodeVaultFileStore(join(vaultDirectory, "live-states", `${deploymentId}.bin`)));
     liveStates.set(deploymentId, created); return created;
   };
-  const liveRunner = new LiveRunRunner({ repository: orderRepository, client: liveExecutionClient,
+  const liveRunner = new LiveRunRunner({ brokerId: __CBL_WEEX_BROKER_ID__,
+    repository: orderRepository, client: liveExecutionClient,
     market: marketState, clock: clockState, connection: connectionRegistry, instruments: instrumentState,
     runtimeAudit, runAudit,
     onReconciledOrder: async (order, snapshot) => {

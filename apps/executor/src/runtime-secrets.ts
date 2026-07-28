@@ -4,7 +4,7 @@ import type { ExecutorEnvironment } from "./config";
 const ALLOWED = new Set([
   "AWS_KMS_KEY_ID", "EXECUTOR_HANDOFF_SECRET", "EXECUTOR_SHARD_ID", "EXPECTED_EGRESS_IP", "HEALTH_PORT",
   "LIVE_TRADING_ENABLED", "PUBLIC_ORIGIN", "SUPABASE_DATABASE_URL", "WEEX_CLIENT_ID", "WEEX_CLIENT_SECRET",
-  "WEEX_OAUTH_REDIRECT_URI",
+  "WEEX_BROKER_ID", "WEEX_OAUTH_REDIRECT_URI",
 ]);
 
 export async function loadRuntimeEnvironment(environment: ExecutorEnvironment,

@@ -42,6 +42,7 @@ const oauth = new ExecutorOAuthService({ repository, kms, oauthClient, clientId:
   shardId: config.shardId });
 const manualConnection = new ManualWeexConnectionService({ repository, kms,
   handoffSecret: config.handoffSecret, shardId: config.shardId,
+  brokerId: config.weexBrokerId,
   liveTradingEnabled: config.liveTradingEnabled });
 
 await Promise.all([
@@ -56,6 +57,7 @@ await Promise.all([
 ]);
 
 const cloudRuntime = new CloudStrategyRuntime({ repository: cloudRepository, kms,
+  brokerId: config.weexBrokerId,
   liveTradingEnabled: config.liveTradingEnabled,
   accountConcurrency: config.accountConcurrency,
   strategyConcurrency: config.strategyConcurrency,

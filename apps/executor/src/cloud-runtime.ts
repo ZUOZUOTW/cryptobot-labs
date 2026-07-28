@@ -460,6 +460,7 @@ export class CloudStrategyRuntime {
   constructor(private readonly options: {
     repository: CloudRuntimeRepository;
     kms: CredentialEnvelopeKms;
+    brokerId: string;
     liveTradingEnabled: boolean;
     now?: () => number;
     accountConcurrency?: number;
@@ -674,15 +675,16 @@ export class CloudStrategyRuntime {
       verifications: new Map(),
       snapshots: new Map(),
       client: new WeexPrivateClient({
-      transport: this.#transport,
-      credentials,
-      clock,
-      rulesProvider: async (target, symbol) => ({
-        rules: await this.#market.instrumentRules(target.market, symbol),
-        verifiedAt: (this.options.now ?? Date.now)(),
-      }),
-      now: () => Math.floor(clock.now()),
-      maximumGetAttempts: SAFE_READ_ATTEMPTS,
+        transport: this.#transport,
+        credentials,
+        clock,
+        brokerId: this.options.brokerId,
+        rulesProvider: async (target, symbol) => ({
+          rules: await this.#market.instrumentRules(target.market, symbol),
+          verifiedAt: (this.options.now ?? Date.now)(),
+        }),
+        now: () => Math.floor(clock.now()),
+        maximumGetAttempts: SAFE_READ_ATTEMPTS,
       }),
     };
     this.#privateClients.delete(cacheKey);
@@ -959,6 +961,7 @@ export class CloudStrategyRuntime {
       configurationVersion: run.configurationHash,
       signalId: "cloud-candle",
       sequence: latest.closeTime,
+      brokerId: this.options.brokerId,
     });
     const claim = await this.options.repository.claimOrder({
       runId: run.id,

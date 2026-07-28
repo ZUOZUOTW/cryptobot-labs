@@ -40,6 +40,11 @@ const clock = {
   assertPrivateRequestWindow: vi.fn(),
 };
 const credentials = new WeexCredentials("api-key", "secret", "passphrase");
+const brokerId = "WEEX111162";
+const brokerOrderId = (seed: string | number): string => {
+  const suffix = String(seed).replace(/[^A-Za-z0-9_-]/gu, "_").padEnd(22, "_").slice(0, 22);
+  return `b-${brokerId}-${suffix}`;
+};
 const rules: InstrumentRules = {
   market: "spot", symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT",
   tickSize: "0.1", stepSize: "0.001", minimumQuantity: "0.001",
@@ -47,7 +52,7 @@ const rules: InstrumentRules = {
 const rulesProvider: InstrumentRulesProvider = async () => ({ rules, verifiedAt: 1_700_000_000_000 });
 const request: ExchangeSubmitRequest = {
   target: { market: "spot", mode: "live" },
-  clientOrderId: "cbl-1",
+  clientOrderId: brokerOrderId("base"),
   intent: {
     symbol: "BTCUSDT", side: "buy", quantity: "0.001", price: "30000.1",
     expectedSlippageBps: "1", reduceOnly: false,
@@ -57,7 +62,7 @@ const request: ExchangeSubmitRequest = {
 describe("WeexPrivateClient", () => {
   it("rejects local paper targets before any WEEX request", async () => {
     const transport = new ScriptedTransport([]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
 
     await expect(client.verifyAccount({ market: "spot", mode: "paper" })).rejects.toThrow(/paper|local/i);
     await expect(client.submitOrder({
@@ -67,15 +72,39 @@ describe("WeexPrivateClient", () => {
     expect(transport.requests).toHaveLength(0);
   });
 
+  it("rejects missing, malformed, or mismatched broker attribution before dispatch", async () => {
+    const transport = new ScriptedTransport([]);
+    const unconfigured = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+
+    await expect(unconfigured.submitOrder(request)).rejects.toThrow(/broker attribution/i);
+    expect(() => new WeexPrivateClient({
+      brokerId: "invalid",
+      transport,
+      credentials,
+      clock,
+      rulesProvider,
+    })).toThrow(/broker id/i);
+
+    const configured = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
+    await expect(configured.submitOrder({
+      ...request,
+      clientOrderId: "b-WEEX999999-mismatched____________",
+    })).rejects.toThrow(/broker client order id/i);
+    expect(transport.requests).toHaveLength(0);
+  });
+
   it("signs and transmits the exact canonical spot body", async () => {
-    const transport = new ScriptedTransport([verifiedSpotAccount, ok({ orderId: "42", clientOrderId: "cbl-1" })]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const transport = new ScriptedTransport([
+      verifiedSpotAccount,
+      ok({ orderId: "42", clientOrderId: brokerOrderId("base") }),
+    ]);
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder(request)).resolves.toEqual({ status: "acknowledged", exchangeOrderId: "42" });
     expect(transport.requests[1]).toMatchObject({
       method: "POST",
       url: "https://api-spot.weex.com/api/v3/order",
-      body: '{"newClientOrderId":"cbl-1","price":"30000.1","quantity":"0.001","side":"BUY","symbol":"BTCUSDT","timeInForce":"GTC","type":"LIMIT"}',
+      body: `{"newClientOrderId":"${brokerOrderId("base")}","price":"30000.1","quantity":"0.001","side":"BUY","symbol":"BTCUSDT","timeInForce":"GTC","type":"LIMIT"}`,
     });
     expect(transport.requests[1]?.headers).toMatchObject({
       "ACCESS-KEY": "api-key", "ACCESS-PASSPHRASE": "passphrase",
@@ -90,7 +119,7 @@ describe("WeexPrivateClient", () => {
       new WeexApiError("timeout after send", { category: "network", retryable: true }),
       ok({ orderId: "late", clientOrderId: "cbl-1" }),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder(request)).resolves.toMatchObject({ status: "unknown" });
     expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
@@ -98,20 +127,21 @@ describe("WeexPrivateClient", () => {
 
   it("uses the documented futures demo route and derives positionSide", async () => {
     const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
-    const transport = new ScriptedTransport([ok({ orderId: "43", clientOrderId: "cbl-2" })]);
-    const client = new WeexPrivateClient({
+    const clientOrderId = brokerOrderId("demo-short");
+    const transport = new ScriptedTransport([ok({ orderId: "43", clientOrderId })]);
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
     });
     await client.submitOrder({
       ...request,
       target: { market: "futures", mode: "futures-demo" },
-      clientOrderId: "cbl-2",
+      clientOrderId,
       intent: { ...request.intent, side: "sell" },
     });
     expect(transport.requests[0]?.url).toBe("https://api-contract.weex.com/capi/v3/sim/order");
     expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
-      newClientOrderId:"cbl-2",positionSide:"SHORT",quantity:"0.001",side:"SELL",symbol:"BTCUSDT",type:"MARKET",
+      newClientOrderId:clientOrderId,positionSide:"SHORT",quantity:"0.001",side:"SELL",symbol:"BTCUSDT",type:"MARKET",
     });
   });
 
@@ -121,7 +151,7 @@ describe("WeexPrivateClient", () => {
       new WeexApiError("busy", { category: "server", retryable: true }),
       ok({ canTrade: true, canWithdraw: false, balances: [] }),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider, scheduler });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider, scheduler });
     await expect(client.verifyAccount({ market: "spot", mode: "live" })).resolves.toMatchObject({
       market: "spot", mode: "live", withdrawalPermission: "absent",
     });
@@ -131,7 +161,7 @@ describe("WeexPrivateClient", () => {
 
   it("never sends an undocumented demo cancellation request", async () => {
     const transport = new ScriptedTransport([]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.cancelOrder({
       target: { market: "futures", mode: "futures-demo" }, symbol: "BTCUSDT", clientOrderId: "cbl-1",
     })).resolves.toEqual({ status: "rejected", reason: "unsupported-demo-cancel" });
@@ -148,7 +178,7 @@ describe("WeexPrivateClient", () => {
       }),
       ok([trade({ orderId: "42", qty: "0.0005", commission: "0.01" })]),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     await client.submitOrder(request);
     await expect(client.findOrderByClientOrderId({
@@ -167,7 +197,7 @@ describe("WeexPrivateClient", () => {
       ok([{ orderId: 9, clientOrderId: "target", symbol: "BTCUSDT", side: "SELL", origQty: "1", executedQty: "1", status: "FILLED" }]),
       ok([trade({ orderId: "9", qty: "1", commission: "0.2", realizedPnl: "10" })]),
     ]);
-    const client = new WeexPrivateClient({
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
     });
@@ -184,7 +214,7 @@ describe("WeexPrivateClient", () => {
   it("paginates futures searches explicitly and stops each route on a short page", async () => {
     const fullPage = Array.from({ length: 100 }, (_, index) => ({ clientOrderId: `other-${index}` }));
     const transport = new ScriptedTransport([ok(fullPage), ok([]), ok([])]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
       target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "missing",
     })).resolves.toBeNull();
@@ -198,35 +228,37 @@ describe("WeexPrivateClient", () => {
   it("fails closed when an exact futures client id appears more than once", async () => {
     const duplicate = { orderId: "8", clientOrderId: "duplicate", symbol: "BTCUSDT", side: "BUY", origQty: "1", status: "NEW" };
     const transport = new ScriptedTransport([ok([duplicate]), ok([{ ...duplicate, orderId: "9" }])]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
       target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "duplicate",
     })).rejects.toMatchObject({ category: "schema" });
   });
 
   it("accepts a risk-approved spot exit while omitting unsupported reduceOnly", async () => {
-    const transport = new ScriptedTransport([verifiedSpotAccount, ok({ orderId: "44", clientOrderId: "spot-exit" })]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const clientOrderId = brokerOrderId("spot-exit");
+    const transport = new ScriptedTransport([verifiedSpotAccount, ok({ orderId: "44", clientOrderId })]);
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder({
       ...request,
-      clientOrderId: "spot-exit",
+      clientOrderId,
       intent: { ...request.intent, side: "sell", reduceOnly: true },
     })).resolves.toMatchObject({ status: "acknowledged" });
     expect(JSON.parse(transport.requests[1]?.body ?? "{}")).toEqual({
-      newClientOrderId: "spot-exit", price: "30000.1", quantity: "0.001",
+      newClientOrderId: clientOrderId, price: "30000.1", quantity: "0.001",
       side: "SELL", symbol: "BTCUSDT", timeInForce: "GTC", type: "LIMIT",
     });
   });
 
   it("verifies live futures balance and hedge-mode account config before submitting", async () => {
     const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
+    const clientOrderId = brokerOrderId("future-1");
     const transport = new ScriptedTransport([
       ok([{ asset: "USDT", balance: "100", availableBalance: "90", frozen: "10", unrealizePnl: "-1" }]),
       ok({ canTrade: true, canDeposit: true, canWithdraw: true, dualSidePosition: true, updateTime: 1_700_000_000_000 }),
-      ok({ orderId: "45", clientOrderId: "future-1" }),
+      ok({ orderId: "45", clientOrderId }),
     ]);
-    const client = new WeexPrivateClient({
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
     });
@@ -234,7 +266,7 @@ describe("WeexPrivateClient", () => {
       canTrade: true, withdrawalPermission: "absent", positionMode: "hedge", balanceAssetCount: 1,
     });
     await expect(client.submitOrder({
-      ...request, target: { market: "futures", mode: "live" }, clientOrderId: "future-1",
+      ...request, target: { market: "futures", mode: "live" }, clientOrderId,
     })).resolves.toMatchObject({ status: "acknowledged" });
     expect(transport.requests.map(({ url }) => url)).toEqual([
       "https://api-contract.weex.com/capi/v3/account/balance",
@@ -247,7 +279,7 @@ describe("WeexPrivateClient", () => {
     const transport=new ScriptedTransport([
       ok({canTrade:true,canWithdraw:false,balances:[]}),
       ok({canTrade:true,canWithdraw:false,balances:[{asset:"BTC",free:"0.004",locked:"0.001"},{asset:"USDT",free:"1200.00000000",locked:"0"}]})]);
-    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    const client=new WeexPrivateClient({ brokerId,transport,credentials,clock,rulesProvider});
     await client.verifyAccount({market:"spot",mode:"live"});
     await expect(client.getAccountSnapshot({market:"spot",mode:"live"})).resolves.toEqual({
       target:{market:"spot",mode:"live"},observedAt:1_700_000_000_000,positions:[],balances:[
@@ -264,7 +296,7 @@ describe("WeexPrivateClient", () => {
       ok([{ id: "5", asset: "USDT", symbol: "BTCUSDT", side: "LONG", leverage: "3", size: "0.01",
         openValue: "50", unrealizePnl: "2", updatedTime: 1_700_000_000_000 }]),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.getAccountIdentity()).resolves.toEqual({
       uid: "123456789",
       observedAt: 1_700_000_000_000,
@@ -286,7 +318,7 @@ describe("WeexPrivateClient", () => {
       trade({ id: "2", orderId: "12", qty: "0.1", commission: "0.2", realizedPnl: "-3", time: 1_700_000_000_100 }),
       trade({ id: "1", orderId: "11", qty: "0.1", commission: "0.1", realizedPnl: "5", time: 1_700_000_000_000 }),
     ])]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.getFuturesTradeHistory({
       startTime: 1_700_000_000_000,
       endTime: 1_700_086_400_000,
@@ -310,7 +342,7 @@ describe("WeexPrivateClient", () => {
   it("keeps normal account withdrawal status separate and revokes the spot gate when trading is disabled",async()=>{
     const transport=new ScriptedTransport([ok({canTrade:true,canWithdraw:true,balances:[]}),
       ok({canTrade:false,canWithdraw:true,balances:[]})]);
-    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    const client=new WeexPrivateClient({ brokerId,transport,credentials,clock,rulesProvider});
     await client.verifyAccount({market:"spot",mode:"live"});
     await expect(client.getAccountSnapshot({market:"spot",mode:"live"})).rejects.toMatchObject({category:"validation"});
     await expect(client.getAccountSnapshot({market:"spot",mode:"live"})).rejects.toMatchObject({category:"validation"});
@@ -324,7 +356,7 @@ describe("WeexPrivateClient", () => {
       openValue:"1801.067",unrealizePnl:"-85.569",createdTime:1_699_999_900_000,updatedTime:1_700_000_000_000},
     {id:"2",asset:"USDT",symbol:"ETHUSDT",side:"SHORT",leverage:"5",size:"0",openValue:"0",unrealizePnl:"0",updatedTime:"1700000000000"}];
     const transport=new ScriptedTransport([ok(balance),ok(configResponse),ok(balance),ok(positions)]);
-    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    const client=new WeexPrivateClient({ brokerId,transport,credentials,clock,rulesProvider});
     await client.verifyAccount({market:"futures",mode:"live"});
     await expect(client.getAccountSnapshot({market:"futures",mode:"live"})).resolves.toMatchObject({
       target:{market:"futures",mode:"live"},observedAt:1_700_000_000_000,
@@ -343,7 +375,7 @@ describe("WeexPrivateClient", () => {
     const positions=[{id:"689987235755328154",asset:"SUSDT",symbol:"BTCSUSDT",side:"SHORT",leverage:"5",size:"0.01",
       openValue:"650",unrealizePnl:"3.25",createdTime:"1699999900000",updatedTime:1_700_000_000_000}];
     const transport=new ScriptedTransport([ok(balance),ok(positions)]);
-    const client=new WeexPrivateClient({transport,credentials,clock,rulesProvider});
+    const client=new WeexPrivateClient({ brokerId,transport,credentials,clock,rulesProvider});
     await expect(client.getAccountSnapshot({market:"futures",mode:"futures-demo"})).resolves.toMatchObject({
       target:{market:"futures",mode:"futures-demo"},observedAt:1_700_000_000_000,
       balances:[{asset:"SUSDT",total:"5000",available:"4900",frozen:"100",unrealizedPnl:"-12.5"}],
@@ -362,13 +394,13 @@ describe("WeexPrivateClient", () => {
       ok([{ asset: "USDT", balance: "100", availableBalance: "90", frozen: "10", unrealizePnl: "0" }]),
       ok({ canTrade: true, canDeposit: true, canWithdraw: false, dualSidePosition: false, updateTime: 1_700_000_000_000 }),
     ]);
-    const client = new WeexPrivateClient({
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
     });
     await expect(client.verifyAccount({ market: "futures", mode: "live" })).resolves.toMatchObject({ positionMode: "one-way" });
     await expect(client.submitOrder({
-      ...request, target: { market: "futures", mode: "live" }, clientOrderId: "future-1",
+      ...request, target: { market: "futures", mode: "live" }, clientOrderId: brokerOrderId("future-one-way"),
     })).rejects.toMatchObject({ category: "validation" });
     expect(transport.requests).toHaveLength(2);
   });
@@ -378,7 +410,7 @@ describe("WeexPrivateClient", () => {
       orderId: "91", clientOrderId: "direct-1", symbol: "BTCUSDT", side: "BUY",
       origQty: "1", executedQty: "0", status: "NEW",
     })]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
       target: { market: "futures", mode: "live" }, symbol: "BTCUSDT",
       clientOrderId: "direct-1", exchangeOrderId: "91",
@@ -391,7 +423,7 @@ describe("WeexPrivateClient", () => {
       ok({ orderId: "51", origClientOrderId: "cancel-spot", symbol: "BTCUSDT", status: "CANCELED" }),
       ok({ orderId: "52", clientOrderId: "cancel-future" }),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.cancelOrder({
       target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "cancel-spot",
     })).resolves.toEqual({ status: "cancelled" });
@@ -406,7 +438,7 @@ describe("WeexPrivateClient", () => {
 
   it("uses one signed live DELETE and maps malformed cancellation acknowledgement to unknown", async () => {
     const transport = new ScriptedTransport([ok({ unexpected: true })]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.cancelOrder({
       target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "cbl-1",
     })).resolves.toEqual({ status: "unknown", reason: "ambiguous-cancel-outcome" });
@@ -419,7 +451,7 @@ describe("WeexPrivateClient", () => {
       new WeexApiError("bad key", { category: "authentication", retryable: false }),
       ok({ canTrade: true, canWithdraw: false, balances: [] }),
     ]);
-    const authClient = new WeexPrivateClient({ transport: authTransport, credentials, clock, rulesProvider });
+    const authClient = new WeexPrivateClient({ brokerId, transport: authTransport, credentials, clock, rulesProvider });
     await expect(authClient.verifyAccount({ market: "spot", mode: "live" }))
       .rejects.toMatchObject({ category: "authentication" });
     expect(authTransport.requests).toHaveLength(1);
@@ -433,7 +465,7 @@ describe("WeexPrivateClient", () => {
         if (privateChecks > 1) throw new WeexApiError("stale", { category: "clock", retryable: false });
       },
     };
-    const preflightClient = new WeexPrivateClient({
+    const preflightClient = new WeexPrivateClient({ brokerId,
       transport: preflightTransport, credentials, clock: preflightClock, rulesProvider,
     });
     await preflightClient.verifyAccount({ market: "spot", mode: "live" });
@@ -446,7 +478,7 @@ describe("WeexPrivateClient", () => {
       verifiedSpotAccount,
       ok({ canTrade: true, canWithdraw: false, balances: [{}] }),
     ]);
-    const client = new WeexPrivateClient({
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules, verifiedAt: 1_699_999_000_000 }),
     });
@@ -460,7 +492,7 @@ describe("WeexPrivateClient", () => {
     const transport = new ScriptedTransport([
       ok([{ asset: "USDT", balance: "10", availableBalance: "9", frozen: "1", unrealizePnl: "-0.5" }]),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.verifyAccount({ market: "futures", mode: "futures-demo" })).resolves.toMatchObject({
       canTrade: "unknown", withdrawalPermission: "unknown", positionMode: "unknown",
     });
@@ -470,7 +502,7 @@ describe("WeexPrivateClient", () => {
   it("enforces the official futures client id length before transport", async () => {
     const futuresRules: InstrumentRules = { ...rules, market: "futures", maximumLeverage: "100" };
     const transport = new ScriptedTransport([]);
-    const client = new WeexPrivateClient({
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
     });
@@ -483,7 +515,7 @@ describe("WeexPrivateClient", () => {
   it("hard-stops a full zero-based futures search after pages 0 through 9", async () => {
     const fullPage = Array.from({ length: 100 }, (_, index) => ({ clientOrderId: `other-${index}` }));
     const transport = new ScriptedTransport(Array.from({ length: 10 }, () => ok(fullPage)));
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
       target: { market: "futures", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "missing",
     })).rejects.toMatchObject({ category: "schema" });
@@ -499,7 +531,7 @@ describe("WeexPrivateClient", () => {
       ok({ canTrade: true, canDeposit: true, canWithdraw: false, dualSidePosition: true, updateTime: 1_700_000_000_000 }),
       new WeexApiError("revoked", { category: "authentication", retryable: false }),
     ]);
-    const client = new WeexPrivateClient({
+    const client = new WeexPrivateClient({ brokerId,
       transport, credentials, clock,
       rulesProvider: async () => ({ rules: futuresRules, verifiedAt: 1_700_000_000_000 }),
     });
@@ -507,7 +539,7 @@ describe("WeexPrivateClient", () => {
     await expect(client.verifyAccount({ market: "futures", mode: "live" })).rejects.toMatchObject({ category: "authentication" });
     const countBeforeSubmit = transport.requests.length;
     await expect(client.submitOrder({
-      ...request, target: { market: "futures", mode: "live" }, clientOrderId: "future-after-failure",
+      ...request, target: { market: "futures", mode: "live" }, clientOrderId: brokerOrderId("future-after-failure"),
     })).rejects.toMatchObject({ category: "validation" });
     expect(transport.requests).toHaveLength(countBeforeSubmit);
   });
@@ -516,7 +548,7 @@ describe("WeexPrivateClient", () => {
     const malformedBalance = new ScriptedTransport([
       ok([{ asset: "USDT", balance: "10", availableBalance: "9", unrealizePnl: "0" }]),
     ]);
-    const malformedClient = new WeexPrivateClient({ transport: malformedBalance, credentials, clock, rulesProvider });
+    const malformedClient = new WeexPrivateClient({ brokerId, transport: malformedBalance, credentials, clock, rulesProvider });
     await expect(malformedClient.verifyAccount({ market: "futures", mode: "futures-demo" }))
       .rejects.toMatchObject({ category: "schema" });
 
@@ -524,7 +556,7 @@ describe("WeexPrivateClient", () => {
       ok({ orderId: "arbitrary", status: "CANCELED", symbol: "BTCUSDT" }),
       ok({ success: true }),
     ]);
-    const cancelClient = new WeexPrivateClient({ transport: cancelTransport, credentials, clock, rulesProvider });
+    const cancelClient = new WeexPrivateClient({ brokerId, transport: cancelTransport, credentials, clock, rulesProvider });
     await expect(cancelClient.cancelOrder({
       target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "client-cancel",
     })).resolves.toMatchObject({ status: "unknown" });
@@ -536,7 +568,7 @@ describe("WeexPrivateClient", () => {
 
   it("requires a fresh safe spot account gate and revokes it before failed re-verification", async () => {
     const unverifiedTransport = new ScriptedTransport([]);
-    const unverified = new WeexPrivateClient({ transport: unverifiedTransport, credentials, clock, rulesProvider });
+    const unverified = new WeexPrivateClient({ brokerId, transport: unverifiedTransport, credentials, clock, rulesProvider });
     await expect(unverified.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
     expect(unverifiedTransport.requests).toHaveLength(0);
 
@@ -545,7 +577,7 @@ describe("WeexPrivateClient", () => {
       { canTrade: false, canWithdraw: true, balances: [] },
     ]) {
       const unsafeTransport = new ScriptedTransport([ok(account)]);
-      const unsafe = new WeexPrivateClient({ transport: unsafeTransport, credentials, clock, rulesProvider });
+      const unsafe = new WeexPrivateClient({ brokerId, transport: unsafeTransport, credentials, clock, rulesProvider });
       await unsafe.verifyAccount({ market: "spot", mode: "live" });
       await expect(unsafe.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
       expect(unsafeTransport.requests).toHaveLength(1);
@@ -553,7 +585,7 @@ describe("WeexPrivateClient", () => {
 
     let now = 1_700_000_000_000;
     const staleTransport = new ScriptedTransport([verifiedSpotAccount]);
-    const stale = new WeexPrivateClient({ transport: staleTransport, credentials, clock, rulesProvider, now: () => now });
+    const stale = new WeexPrivateClient({ brokerId, transport: staleTransport, credentials, clock, rulesProvider, now: () => now });
     await stale.verifyAccount({ market: "spot", mode: "live" });
     now += 5 * 60_000 + 1;
     await expect(stale.submitOrder(request)).rejects.toMatchObject({ category: "validation" });
@@ -563,7 +595,7 @@ describe("WeexPrivateClient", () => {
       verifiedSpotAccount,
       new WeexApiError("revoked", { category: "authentication", retryable: false }),
     ]);
-    const revoked = new WeexPrivateClient({ transport: revokedTransport, credentials, clock, rulesProvider });
+    const revoked = new WeexPrivateClient({ brokerId, transport: revokedTransport, credentials, clock, rulesProvider });
     await revoked.verifyAccount({ market: "spot", mode: "live" });
     await expect(revoked.verifyAccount({ market: "spot", mode: "live" })).rejects.toMatchObject({ category: "authentication" });
     const beforeSubmit = revokedTransport.requests.length;
@@ -578,7 +610,7 @@ describe("WeexPrivateClient", () => {
     const rulesStarted = new Promise<void>((resolve) => { markRulesStarted = resolve; });
     const deferredRules = new Promise<{ rules: InstrumentRules; verifiedAt: number }>((resolve) => { releaseRules = resolve; });
     const ttlTransport = new ScriptedTransport([verifiedSpotAccount]);
-    const ttlClient = new WeexPrivateClient({
+    const ttlClient = new WeexPrivateClient({ brokerId,
       transport: ttlTransport, credentials, clock, now: () => now,
       rulesProvider: async () => { markRulesStarted(); return await deferredRules; },
     });
@@ -598,7 +630,7 @@ describe("WeexPrivateClient", () => {
       verifiedSpotAccount,
       new WeexApiError("revoked", { category: "authentication", retryable: false }),
     ]);
-    const concurrentClient = new WeexPrivateClient({
+    const concurrentClient = new WeexPrivateClient({ brokerId,
       transport: concurrentTransport, credentials, clock,
       rulesProvider: async () => { markConcurrentStarted(); return await concurrentRules; },
     });
@@ -616,13 +648,13 @@ describe("WeexPrivateClient", () => {
     let release!: (response: HttpResponse) => void;
     const pending = new Promise<HttpResponse>((resolve) => { release = resolve; });
     const transport = new ScriptedTransport([verifiedSpotAccount, () => pending]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     const first = client.submitOrder(request);
     const identical = client.submitOrder(request);
     const collision = client.submitOrder({ ...request, intent: { ...request.intent, quantity: "0.002" } });
     await expect(collision).rejects.toMatchObject({ category: "validation" });
-    release(ok({ orderId: "77", clientOrderId: "cbl-1" }));
+    release(ok({ orderId: "77", clientOrderId: request.clientOrderId }));
     await expect(Promise.all([first, identical])).resolves.toEqual([
       { status: "acknowledged", exchangeOrderId: "77" },
       { status: "acknowledged", exchangeOrderId: "77" },
@@ -639,7 +671,7 @@ describe("WeexPrivateClient", () => {
       verifiedSpotAccount,
       new WeexApiError("timeout", { category: "network", retryable: true }),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     await expect(client.submitOrder(request)).resolves.toMatchObject({ status: "unknown" });
     await expect(client.submitOrder(request)).resolves.toMatchObject({ status: "unknown" });
@@ -654,7 +686,7 @@ describe("WeexPrivateClient", () => {
       { status: 400, headers: {}, body: { code: -1045, message: "invalid order" } } satisfies HttpResponse,
     ]) {
       const transport = new ScriptedTransport([verifiedSpotAccount, rejectedResponse]);
-      const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+      const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
       await client.verifyAccount({ market: "spot", mode: "live" });
       const first = await client.submitOrder(request);
       expect(first).toMatchObject({ status: "rejected" });
@@ -668,7 +700,7 @@ describe("WeexPrivateClient", () => {
   it("releases bounded claims only after authoritative terminal lookup", async () => {
     const steps: Array<HttpResponse | Error | (() => Promise<HttpResponse>)> = [verifiedSpotAccount];
     for (let index = 0; index < 1_025; index += 1) {
-      const clientOrderId = `cycle-${index}`;
+      const clientOrderId = brokerOrderId(`cycle-${index}`);
       steps.push(
         ok({ orderId: String(index + 1), clientOrderId }),
         ok({
@@ -679,10 +711,10 @@ describe("WeexPrivateClient", () => {
       );
     }
     const transport = new ScriptedTransport(steps);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     for (let index = 0; index < 1_025; index += 1) {
-      const clientOrderId = `cycle-${index}`;
+      const clientOrderId = brokerOrderId(`cycle-${index}`);
       await expect(client.submitOrder({ ...request, clientOrderId })).resolves.toMatchObject({ status: "acknowledged" });
       await expect(client.findOrderByClientOrderId({
         target: request.target, symbol: "BTCUSDT", clientOrderId,
@@ -694,15 +726,15 @@ describe("WeexPrivateClient", () => {
   it("keeps 1024 unresolved claims bounded and fails closed before a 1025th POST", async () => {
     const steps: Array<HttpResponse | Error> = [verifiedSpotAccount];
     for (let index = 0; index < 1_024; index += 1) {
-      steps.push(ok({ orderId: String(index + 1), clientOrderId: `open-${index}` }));
+      steps.push(ok({ orderId: String(index + 1), clientOrderId: brokerOrderId(`open-${index}`) }));
     }
     const transport = new ScriptedTransport(steps);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await client.verifyAccount({ market: "spot", mode: "live" });
     for (let index = 0; index < 1_024; index += 1) {
-      await client.submitOrder({ ...request, clientOrderId: `open-${index}` });
+      await client.submitOrder({ ...request, clientOrderId: brokerOrderId(`open-${index}`) });
     }
-    await expect(client.submitOrder({ ...request, clientOrderId: "open-overflow" }))
+    await expect(client.submitOrder({ ...request, clientOrderId: brokerOrderId("open-overflow") }))
       .rejects.toMatchObject({ category: "validation" });
     expect(transport.requests.filter(({ method }) => method === "POST")).toHaveLength(1_024);
   });
@@ -715,7 +747,7 @@ describe("WeexPrivateClient", () => {
       ok({ orderId: "83", clientOrderId: "pending-full", symbol: "BTCUSDT", side: "BUY", origQty: "1", executedQty: "1", status: "PENDING" }),
       ok([trade({ orderId: "83", qty: "1", commission: "0.02" })]),
     ]);
-    const client = new WeexPrivateClient({ transport, credentials, clock, rulesProvider });
+    const client = new WeexPrivateClient({ brokerId, transport, credentials, clock, rulesProvider });
     await expect(client.findOrderByClientOrderId({
       target: { market: "spot", mode: "live" }, symbol: "BTCUSDT", clientOrderId: "pending-1",
     })).resolves.toMatchObject({ status: "NEW", cumulativeFilledQuantity: "0" });

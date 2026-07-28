@@ -10,10 +10,14 @@ export function validateReleaseEnvironment(
   platform: ReleasePlatform,
   environment: Readonly<Record<string, string | undefined>>,
 ): void {
-  const missing = [...REQUIRED[platform], "CBL_CONTROL_PLANE_ORIGIN"].filter((name) => !environment[name]?.trim());
+  const missing = [...REQUIRED[platform], "CBL_CONTROL_PLANE_ORIGIN", "CBL_WEEX_BROKER_ID"]
+    .filter((name) => !environment[name]?.trim());
   if (missing.length > 0) throw new Error(`${platform === "darwin" ? "APPLE" : "WINDOWS"} signing inputs are missing: ${missing.join(", ")}`);
   if (environment.AGENT_RELEASE_CHANNEL !== "public") throw new Error("Public release channel is not enabled");
   const origin = new URL(environment.CBL_CONTROL_PLANE_ORIGIN!);
   if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/"
     || origin.search || origin.hash) throw new Error("CBL_CONTROL_PLANE_ORIGIN must be an HTTPS origin");
+  if (!/^WEEX\d{6}$/u.test(environment.CBL_WEEX_BROKER_ID!)) {
+    throw new Error("CBL_WEEX_BROKER_ID must be a valid WEEX broker id");
+  }
 }

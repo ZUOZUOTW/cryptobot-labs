@@ -9,6 +9,7 @@ const env = {
   EXPECTED_EGRESS_IP: "203.0.113.10",
   SUPABASE_DATABASE_URL: "postgresql://user:password@example.com/postgres?sslmode=require",
   PUBLIC_ORIGIN: "https://cryptobot-labs.netlify.app",
+  WEEX_BROKER_ID: "WEEX111162",
   WEEX_CLIENT_ID: "client-id",
   WEEX_CLIENT_SECRET: "client-secret",
   WEEX_OAUTH_REDIRECT_URI: "https://api.example.com/oauth/weex/callback",
@@ -19,7 +20,8 @@ const env = {
 describe("cloud executor production gates", () => {
   it("accepts a complete fail-closed configuration", () => {
     expect(loadExecutorConfig(env)).toMatchObject({ shardId: env.EXECUTOR_SHARD_ID, liveTradingEnabled: false,
-      healthPort: 8080, accountConcurrency: 4, strategyConcurrency: 8, tickIntervalMs: 2_000 });
+      weexBrokerId: "WEEX111162", healthPort: 8080, accountConcurrency: 4,
+      strategyConcurrency: 8, tickIntervalMs: 2_000 });
   });
 
   it("bounds worker concurrency and scheduler cadence", () => {
@@ -45,6 +47,15 @@ describe("cloud executor production gates", () => {
     expect(() => loadExecutorConfig({ ...env, AWS_KMS_KEY_ID: "alias/not-a-production-arn" })).toThrow(/KMS/);
     expect(() => loadExecutorConfig({ ...env, SUPABASE_DATABASE_URL: "postgres://u:p@example.com/db" })).toThrow(/TLS/);
     expect(() => loadExecutorConfig({ ...env, WEEX_OAUTH_REDIRECT_URI: "https://api.example.com/callback" })).toThrow(/path/);
+  });
+
+  it("requires the assigned WEEX broker id even while live trading is disabled", () => {
+    const withoutBroker = Object.fromEntries(
+      Object.entries(env).filter(([key]) => key !== "WEEX_BROKER_ID"),
+    );
+    expect(() => loadExecutorConfig(withoutBroker)).toThrow(/WEEX_BROKER_ID/);
+    expect(() => loadExecutorConfig({ ...env, WEEX_BROKER_ID: "weex111162" })).toThrow(/WEEX_BROKER_ID/);
+    expect(() => loadExecutorConfig({ ...env, WEEX_BROKER_ID: "WEEX1111620" })).toThrow(/WEEX_BROKER_ID/);
   });
 
   it("refuses readiness when the observed outbound address differs", async () => {

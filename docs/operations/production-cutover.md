@@ -26,6 +26,7 @@
 - Netlify production deploy `6a56457e179fbb0a75a7b50c` includes the Executor origin, secret-scoped handoff configuration, production Auth bindings, and the Supabase opaque refresh-token compatibility fix. The Next.js production build, TypeScript validation, 45 page routes, Functions, and Edge Function packaging passed; external smoke tests return HTTP 200 for the homepage, Auth, Connections, Executor health, and Executor readiness. The apex resolves to `www`; demo mode is disabled while all Live gates remain fail-closed.
 - Supabase Auth now uses the production Site URL `https://www.cryptobotlabs.app` and the exact redirect allow-list entry `https://www.cryptobotlabs.app/auth/callback`; no wildcard production redirect is enabled.
 - The Google OAuth web client is configured with the exact production origin and Supabase callback, its secret is stored in Supabase Auth, and the Google provider is enabled. The external OAuth app is published as `In production` rather than limited to test users. A production-browser smoke test completed Google account selection, PKCE callback, authenticated `/connections` rendering, Supabase session creation, same-origin sign-out, remote revoke attempt, and deterministic local cookie clearing on 2026-07-14.
+- WEEX registered Broker ID `WEEX111162` for CryptoBot Labs (Broker UID `5459424221`). New Spot, Futures, and Futures Demo submissions fail closed unless their `newClientOrderId` uses the 35-character `b-WEEX111162-<22-character deterministic suffix>` format. Legacy `cb_` IDs remain queryable and cancellable for safe rollout reconciliation.
 
 ## External gates still required
 
@@ -39,6 +40,7 @@
 3. KMS GenerateDataKey/Decrypt, wrong-context rejection, rotation, scheduled deletion, backup and recovery tests.
 4. Fixed egress IP observation from the executor and WEEX allow-list confirmation.
 5. Executor lease/fencing, restart recovery, order reconciliation, API timeout, unknown-order and emergency-stop tests.
-6. Load and failover tests with `LIVE_TRADING_ENABLED=false`.
-7. Authorized account Paper soak, then operator-approved minimum-size spot live order; futures live remains disabled until separately approved.
-8. Audit evidence records the approver, exact strategy/risk hashes, timestamps, order/fill reconciliation, and successful credential revocation.
+6. Confirm every minimum-size Spot, Futures Demo, and separately approved Futures test order appears in WEEX Broker reporting under `WEEX111162`; stop the rollout if attribution is absent.
+7. Load and failover tests with `LIVE_TRADING_ENABLED=false`.
+8. Authorized account Paper soak, then operator-approved minimum-size spot live order; futures live remains disabled until separately approved.
+9. Audit evidence records the approver, exact strategy/risk hashes, timestamps, Broker-attributed order ID, order/fill reconciliation, and successful credential revocation.

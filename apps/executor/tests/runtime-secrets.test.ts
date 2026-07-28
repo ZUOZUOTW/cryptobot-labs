@@ -9,11 +9,19 @@ describe("AWS Secrets Manager runtime configuration", () => {
     const send = vi.fn(async (command: unknown) => {
       expect(command).toBeInstanceOf(GetSecretValueCommand);
       expect((command as GetSecretValueCommand).input).toEqual({ SecretId: "runtime-secret", VersionStage: "AWSCURRENT" });
-      return { SecretString: JSON.stringify({ PUBLIC_ORIGIN: "https://www.example.test", LIVE_TRADING_ENABLED: "false" }) };
+      return { SecretString: JSON.stringify({
+        PUBLIC_ORIGIN: "https://www.example.test",
+        LIVE_TRADING_ENABLED: "false",
+        WEEX_BROKER_ID: "WEEX111162",
+      }) };
     });
     const result = await loadRuntimeEnvironment({ AWS_REGION: "ap-northeast-1", EXECUTOR_SECRET_ID: "runtime-secret" },
       () => ({ send, destroy }) as unknown as SecretsManagerClient);
-    expect(result).toMatchObject({ AWS_REGION: "ap-northeast-1", PUBLIC_ORIGIN: "https://www.example.test" });
+    expect(result).toMatchObject({
+      AWS_REGION: "ap-northeast-1",
+      PUBLIC_ORIGIN: "https://www.example.test",
+      WEEX_BROKER_ID: "WEEX111162",
+    });
     expect(destroy).toHaveBeenCalledOnce();
   });
 
