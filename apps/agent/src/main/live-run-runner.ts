@@ -9,6 +9,7 @@ import {
   type ExchangeFillSnapshot,
   reconcileOrder,
   type InstrumentRules,
+  isWeexBrokerId,
   type OrderRepository,
   type VisualBotConfig,
 } from "@cryptobot-labs/trading-core";
@@ -23,6 +24,7 @@ import type { ClockFreshnessGuard, MarketStreamState } from "./market-stream";
 import { RunManager, type RunAuditEvent, type RunEvaluationRequest, type RunEvaluationResult } from "./run-manager";
 
 export interface LiveRunRunnerOptions {
+  readonly brokerId: string;
   readonly repository: OrderRepository;
   readonly client: WeexExecutionClient;
   readonly market: Pick<MarketStreamState, "requireFresh">;
@@ -65,6 +67,7 @@ export class LiveRunRunner {
     const supportedMode = mode === "live" || (mode === "futures-demo" && bundle.strategy.market === "futures");
     if (!supportedMode || bundle.strategy.config === null || bundle.risk === null
       || !bundle.risk.allowedSymbols.includes(bundle.strategy.symbol)) throw new Error("Live runner requires a complete live deployment");
+    if (!isWeexBrokerId(this.#options.brokerId)) throw new Error("Live runner requires a valid WEEX broker id");
     const now = this.#timestamp();
     const target = mode === "futures-demo"
       ? { market: "futures" as const, mode }
@@ -147,12 +150,12 @@ export class LiveRunRunner {
 
   #createSession(bundle: DeploymentBundle): LiveSession {
     const config = { ...(bundle.strategy.config as VisualBotConfig), source: undefined };
-    const live = createLiveRuntime({ config, source: bundle.strategy.source,
+    const live = createLiveRuntime({ brokerId: this.#options.brokerId, config, source: bundle.strategy.source,
       ...(bundle.strategy.source === null ? {} : { worker: this.#options.createStrategyWorker?.() ?? new StrategyWorker() }),
       repository: this.#options.repository, client: this.#options.client, audit: this.#options.runtimeAudit });
     const closer = new ExecutionCoordinator({ normalizer: new SignalIntentNormalizer(), riskEvaluator: evaluateOrderRisk,
       repository: this.#options.repository, exchange: live.exchange, circuitBreaker: live.circuitBreaker,
-      failureClassifier: () => "unknown" });
+      brokerId: this.#options.brokerId, failureClassifier: () => "unknown" });
     const reconciliation = { reconcileBeforeSubmit: (input: { deploymentId: string; symbol: string }) =>
       this.reconcileActiveOrders(input.deploymentId, input.symbol) };
     const manager = new RunManager({ runtime: live.runtime, market: this.#options.market, clock: this.#options.clock,

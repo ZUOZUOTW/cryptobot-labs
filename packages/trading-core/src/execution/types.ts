@@ -74,6 +74,7 @@ export interface ExecutionCoordinatorDependencies {
   readonly exchange: ExchangeExecutionPort;
   readonly circuitBreaker: CircuitBreakerPort;
   readonly failureClassifier: (failure: unknown) => CircuitBreakerFailureCategory;
+  readonly brokerId?: string;
 }
 
 export interface CancelOpenOrdersResult {

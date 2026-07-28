@@ -11,6 +11,8 @@ import type {
 import {
   isExecutionTarget,
   isValidInstrumentRules,
+  isWeexBrokerClientOrderId,
+  isWeexBrokerId,
 } from "@cryptobot-labs/trading-core";
 
 import type { WeexClock } from "./clock";
@@ -150,6 +152,7 @@ export interface WeexPrivateClientOptions {
   readonly transport: HttpTransport;
   readonly credentials: WeexCredentials;
   readonly clock: WeexClock | PrivateClock;
+  readonly brokerId?: string;
   readonly rulesProvider?: InstrumentRulesProvider;
   readonly scheduler?: (delayMs: number) => Promise<void>;
   readonly now?: () => number;
@@ -487,6 +490,7 @@ export class WeexPrivateClient {
   readonly #transport: HttpTransport;
   readonly #credentials: WeexCredentials;
   readonly #clock: PrivateClock;
+  readonly #brokerId?: string;
   readonly #rulesProvider?: InstrumentRulesProvider;
   readonly #scheduler: (delayMs: number) => Promise<void>;
   readonly #now: () => number;
@@ -512,6 +516,9 @@ export class WeexPrivateClient {
         typeof options.clock?.now !== "function" || typeof options.clock?.assertPrivateRequestWindow !== "function") {
       throw validation("Invalid WEEX private client options");
     }
+    if (options.brokerId !== undefined && !isWeexBrokerId(options.brokerId)) {
+      throw validation("Invalid WEEX broker id");
+    }
     const attempts = options.maximumGetAttempts ?? MAX_GET_ATTEMPTS;
     if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > MAX_GET_ATTEMPTS) {
       throw validation("Invalid maximum GET attempts");
@@ -519,6 +526,7 @@ export class WeexPrivateClient {
     this.#transport = options.transport;
     this.#credentials = options.credentials;
     this.#clock = options.clock;
+    this.#brokerId = options.brokerId;
     this.#rulesProvider = options.rulesProvider;
     this.#scheduler = options.scheduler ?? sleep;
     this.#now = options.now ?? (() => this.#clock.now());
@@ -615,9 +623,11 @@ export class WeexPrivateClient {
     readonly authorization: AuthorizationSnapshot | undefined;
   }> {
     assertTarget(request?.target);
-    if (!(request.target.market === "futures"
-      ? isFuturesClientOrderId(request.clientOrderId)
-      : isBoundedIdentifier(request.clientOrderId))) throw validation("Invalid client order id");
+    if (!isWeexBrokerId(this.#brokerId)) throw validation("WEEX broker attribution is required");
+    if (!isWeexBrokerClientOrderId(request.clientOrderId, this.#brokerId) ||
+        !(request.target.market === "futures"
+          ? isFuturesClientOrderId(request.clientOrderId)
+          : isBoundedIdentifier(request.clientOrderId))) throw validation("Invalid broker client order id");
     const intent = request.intent;
     if (!intent || !isPrivateSymbol(intent.symbol) || (intent.side !== "buy" && intent.side !== "sell") ||
         !isCanonicalPositiveDecimal(intent.quantity) || !isCanonicalPositiveDecimal(intent.price) ||

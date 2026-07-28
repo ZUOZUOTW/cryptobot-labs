@@ -14,6 +14,7 @@ import { StrategyWorker } from "../runtime/strategy-worker";
 import { VisualExecutionRuntime } from "../runtime/visual-execution-runtime";
 
 export interface LiveRuntimeOptions {
+  readonly brokerId: string;
   readonly config: VisualBotConfig;
   readonly source?: string | null;
   readonly worker?: StrategyWorker;
@@ -27,7 +28,8 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
   const exchange = new WeexExecutionAdapter(options.client);
   const circuitBreaker = new CircuitBreaker({ failureThreshold: 3, windowMs: 60_000, cooldownMs: 30_000 });
   const coordinator = new ExecutionCoordinator({ normalizer: new SignalIntentNormalizer(), riskEvaluator: evaluateOrderRisk,
-    repository: options.repository, exchange, circuitBreaker, failureClassifier: () => "unknown" });
+    repository: options.repository, exchange, circuitBreaker, brokerId: options.brokerId,
+    failureClassifier: () => "unknown" });
   const runtime = options.source === undefined || options.source === null
     ? new VisualExecutionRuntime({ evaluator: createVisualStrategyEvaluator(options.config), coordinator, audit: options.audit })
     : new ExecutionRuntime({

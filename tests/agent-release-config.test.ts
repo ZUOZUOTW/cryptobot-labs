@@ -11,19 +11,23 @@ describe("Agent release gate", () => {
 
   it("requires an explicit public channel even when secrets are present", () => {
     expect(() => validateReleaseEnvironment("darwin", { APPLE_ID: "a", APPLE_APP_SPECIFIC_PASSWORD: "b",
-      APPLE_TEAM_ID: "c", APPLE_SIGNING_IDENTITY: "d", CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/" })).toThrow(/channel/);
+      APPLE_TEAM_ID: "c", APPLE_SIGNING_IDENTITY: "d", CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/",
+      CBL_WEEX_BROKER_ID: "WEEX111162" })).toThrow(/channel/);
   });
 
   it("accepts only complete platform-specific signing environments", () => {
     expect(() => validateReleaseEnvironment("darwin", { AGENT_RELEASE_CHANNEL: "public", APPLE_ID: "a",
       APPLE_APP_SPECIFIC_PASSWORD: "b", APPLE_TEAM_ID: "c", APPLE_SIGNING_IDENTITY: "d",
-      CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/" })).not.toThrow();
+      CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/", CBL_WEEX_BROKER_ID: "WEEX111162" })).not.toThrow();
     expect(() => validateReleaseEnvironment("win32", { AGENT_RELEASE_CHANNEL: "public",
       WINDOWS_CERTIFICATE_FILE: "agent-signing.pfx", WINDOWS_CERTIFICATE_PASSWORD: "b",
-      CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/" })).not.toThrow();
+      CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/", CBL_WEEX_BROKER_ID: "WEEX111162" })).not.toThrow();
     expect(() => validateReleaseEnvironment("win32", { AGENT_RELEASE_CHANNEL: "public",
       WINDOWS_CERTIFICATE_FILE: "agent-signing.pfx", WINDOWS_CERTIFICATE_PASSWORD: "b",
-      CBL_CONTROL_PLANE_ORIGIN: "http://labs.example/" })).toThrow(/HTTPS/);
+      CBL_CONTROL_PLANE_ORIGIN: "http://labs.example/", CBL_WEEX_BROKER_ID: "WEEX111162" })).toThrow(/HTTPS/);
+    expect(() => validateReleaseEnvironment("win32", { AGENT_RELEASE_CHANNEL: "public",
+      WINDOWS_CERTIFICATE_FILE: "agent-signing.pfx", WINDOWS_CERTIFICATE_PASSWORD: "b",
+      CBL_CONTROL_PLANE_ORIGIN: "https://labs.example/", CBL_WEEX_BROKER_ID: "WEEX1111620" })).toThrow(/broker id/);
   });
 
   it("configures hardened fuses and never embeds signing secrets", async () => {

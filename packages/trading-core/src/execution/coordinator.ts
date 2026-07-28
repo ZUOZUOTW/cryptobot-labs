@@ -4,6 +4,7 @@ import {
   deriveClientOrderId,
   executionTargetFor,
   isExecutionTarget,
+  isWeexBrokerId,
   parseTrackedOrder,
   sameExecutionTarget,
   transitionOrder,
@@ -295,12 +296,17 @@ export class ExecutionCoordinator {
           intent.symbol !== context.instrumentRules.symbol) {
         throw new TypeError("normalized intent does not match execution symbol context");
       }
+      const brokerId = executionTarget.mode === "paper" ? undefined : this.#dependencies.brokerId;
+      if (executionTarget.mode !== "paper" && !isWeexBrokerId(brokerId)) {
+        throw new TypeError("WEEX broker attribution is required for private exchange orders");
+      }
 
       const clientOrderId = await deriveClientOrderId({
         deploymentId: context.deploymentId,
         configurationVersion: context.configurationVersion,
         signalId: signal.id,
         sequence: context.signalSequence,
+        ...(brokerId === undefined ? {} : { brokerId }),
       });
       if (this.#stopped) return { status: "blocked", reason: "emergency-stop" };
 

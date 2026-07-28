@@ -83,6 +83,7 @@ export class ManualWeexConnectionService {
     kms: CredentialEnvelopeKms;
     handoffSecret: string;
     shardId: string;
+    brokerId: string;
     liveTradingEnabled: boolean;
     now?: () => number;
   }) {}
@@ -115,7 +116,8 @@ export class ManualWeexConnectionService {
       if (!Number.isSafeInteger(serverTime) || receivedAt < sentAt) throw new Error("WEEX clock verification failed");
       const clock = new WeexClock(this.options.now ?? Date.now);
       clock.recordServerTime(serverTime, sentAt, receivedAt);
-      const client = new WeexPrivateClient({ transport, credentials, clock, now: () => Math.floor(clock.now()),
+      const client = new WeexPrivateClient({ transport, credentials, clock, brokerId: this.options.brokerId,
+        now: () => Math.floor(clock.now()),
         maximumGetAttempts: 1 });
       if (!this.options.liveTradingEnabled) throw new Error("WEEX live trading is unavailable");
       const [spot, futures] = await Promise.allSettled([

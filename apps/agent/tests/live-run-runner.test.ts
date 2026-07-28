@@ -16,6 +16,7 @@ import { createVaultWeexExecutionClient } from "../src/main/vault-weex-execution
 import { StrategyWorker, type StrategySandboxLike } from "../src/runtime/strategy-worker";
 
 const NOW=7_200_000;
+const BROKER_ID="WEEX111162";
 class MemoryRepository implements OrderRepository {
   readonly orders=new Map<string,TrackedOrder>();
   async getByClientOrderId(id:string){return this.orders.get(id)??null;}
@@ -61,11 +62,13 @@ function setup(transport:Transport){
   const clock=new ClockFreshnessGuard();clock.record({synchronizedAt:NOW,driftMs:0});
   const connection=new ConnectionRegistry();connection.record({verifiedAt:NOW,apiKeySuffix:"1234",canTrade:true,withdrawalPermission:"absent",
     permissions:{read:true,spot:true,futures:true}});
-  const client=createVaultWeexExecutionClient({vault,transport,now:()=>NOW,rulesProvider:async()=>({rules,verifiedAt:NOW})});
+  const client=createVaultWeexExecutionClient({brokerId:BROKER_ID,vault,transport,now:()=>NOW,
+    rulesProvider:async()=>({rules,verifiedAt:NOW})});
   const sandbox={evaluate:vi.fn(async()=>({signal:{id:"signal-live",action:"buy" as const,reason:"sandbox-buy",allocationRate:0.1,createdAt:NOW},
     scriptHash:"c".repeat(64),durationMs:1})),dispose:vi.fn(async()=>undefined)} satisfies StrategySandboxLike;
   const onReconciledOrder=vi.fn();
-  const runner=new LiveRunRunner({repository,client,market,clock,connection,instruments:{requireFresh:()=>rules},runtimeAudit:vi.fn(),runAudit:vi.fn(),
+  const runner=new LiveRunRunner({brokerId:BROKER_ID,repository,client,market,clock,connection,
+    instruments:{requireFresh:()=>rules},runtimeAudit:vi.fn(),runAudit:vi.fn(),
     onReconciledOrder,
     createStrategyWorker:()=>new StrategyWorker(async()=>sandbox,1_000),now:()=>NOW});
   const request=buildLiveEvaluationRequest({bundle,market:marketSnapshot,quote,account:evidence,signalSequence:1});
@@ -84,6 +87,7 @@ describe("live run runner",()=>{
     const reconciled=await runner.evaluate(request);
     expect(reconciled).toMatchObject({status:"proposed",outcome:{status:"idempotent",order:{status:"filled"}}});
     expect(transport.requests.filter(({method})=>method==="POST")).toHaveLength(1);
+    expect([...repository.orders.keys()][0]).toMatch(/^b-WEEX111162-[A-Za-z0-9_-]{22}$/u);
     expect([...repository.orders.values()][0]).toMatchObject({status:"filled",exchangeOrderId:"42"});
     expect(onReconciledOrder).toHaveBeenCalledWith(expect.objectContaining({status:"filled"}),expect.objectContaining({fills:[
       expect.objectContaining({exchangeFillId:"1",quantity:"0.102",fee:"0.01",feeCurrency:"USDT",filledAt:NOW})]}));
@@ -132,11 +136,12 @@ describe("live run runner",()=>{
     const balances=[{asset:"SUSDT",balance:"1000",availableBalance:"1000",frozen:"0",unrealizePnl:"0"}];
     const transport=new Transport([probe(),ok(balances),(request)=>ok({orderId:"demo-42",
       clientOrderId:JSON.parse(request.body??"{}").newClientOrderId})]);
-    const client=createVaultWeexExecutionClient({vault,transport,now:()=>NOW,
+    const client=createVaultWeexExecutionClient({brokerId:BROKER_ID,vault,transport,now:()=>NOW,
       rulesProvider:async()=>({rules:demoRules,verifiedAt:NOW})});
     const sandbox={evaluate:vi.fn(async()=>({signal:{id:"signal-demo",action:"buy" as const,reason:"sandbox-buy",
       allocationRate:0.1,createdAt:NOW},scriptHash:"c".repeat(64),durationMs:1})),dispose:vi.fn(async()=>undefined)} satisfies StrategySandboxLike;
-    const runner=new LiveRunRunner({repository,client,market,clock,connection,instruments:{requireFresh:()=>demoRules},
+    const runner=new LiveRunRunner({brokerId:BROKER_ID,repository,client,market,clock,connection,
+      instruments:{requireFresh:()=>demoRules},
       runtimeAudit:vi.fn(),runAudit:vi.fn(),createStrategyWorker:()=>new StrategyWorker(async()=>sandbox,1_000),now:()=>NOW});
     const request=buildLiveEvaluationRequest({bundle:demoBundle,market:{...marketSnapshot,rules:demoRules},quote:demoQuote,
       account:demoEvidence,signalSequence:1});

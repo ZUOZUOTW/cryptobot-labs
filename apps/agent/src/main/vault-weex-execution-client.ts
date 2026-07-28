@@ -6,6 +6,7 @@ import type {
   ExecutionTarget,
   SubmitOutcome,
 } from "@cryptobot-labs/trading-core";
+import { isWeexBrokerId } from "@cryptobot-labs/trading-core";
 import {
   WeexClock,
   WeexCredentials,
@@ -22,6 +23,7 @@ const CLOCK_PROBE_URL = "https://api-spot.weex.com/api/v3/market/ticker/price?sy
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 export interface VaultWeexExecutionClientOptions {
+  readonly brokerId: string;
   readonly vault: Pick<CredentialVault, "withCredentials">;
   readonly rulesProvider: InstrumentRulesProvider;
   readonly transport?: HttpTransport;
@@ -46,6 +48,7 @@ function safe(summary: VerifiedAccountSummary, target: ExecutionTarget): void {
 
 /** Keeps every private client and plaintext credential inside one Vault callback. */
 export function createVaultWeexExecutionClient(options: VaultWeexExecutionClientOptions) {
+  if (!isWeexBrokerId(options.brokerId)) throw new Error("A valid WEEX broker id is required");
   const transport = options.transport ?? createFetchTransport({ timeoutMs: 10_000 });
   const now = options.now ?? Date.now;
   const withClient = async <Result>(target: ExecutionTarget,
@@ -64,7 +67,7 @@ export function createVaultWeexExecutionClient(options: VaultWeexExecutionClient
     if (!Number.isSafeInteger(serverTime) || serverTime < 0) throw new Error("WEEX server time evidence is unavailable");
     const clock = new WeexClock(now); clock.recordServerTime(serverTime, sentAt, receivedAt);
     return options.vault.withCredentials(async (stored) => {
-      const client = new WeexPrivateClient({ transport,
+      const client = new WeexPrivateClient({ brokerId: options.brokerId, transport,
         credentials: new WeexCredentials(stored.apiKey, stored.secretKey, stored.passphrase), clock,
         rulesProvider: options.rulesProvider, now: () => Math.floor(clock.now()), maximumGetAttempts: 1 });
       safe(await client.verifyAccount(target), target);
