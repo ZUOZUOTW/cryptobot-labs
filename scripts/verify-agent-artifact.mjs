@@ -21,7 +21,8 @@ async function files(directory) {
   return result;
 }
 
-const artifacts = (await files(root)).filter((path) => /\.(?:zip|exe)$/i.test(path)).sort();
+const rootFiles = await files(root);
+const artifacts = rootFiles.filter((path) => /\.(?:zip|exe)$/i.test(path)).sort();
 if (artifacts.length < 1) throw new Error("No installable Agent artifact was found");
 
 async function verifyMacArchives(requireStaple) {
@@ -55,11 +56,29 @@ if (process.platform === "darwin") {
   }
 } else throw new Error("Public artifact verification must run on its target platform");
 
-const releaseFiles = (await files(root)).filter((path) => /\.(?:zip|exe|nupkg)$/i.test(path)
-  || basename(path) === "RELEASES").sort();
+const sbomPaths = rootFiles.filter((path) =>
+  /^agent-sbom-(?:macos-arm64|macos-x64|windows-x64)\.cdx\.json$/.test(basename(path)));
+if (sbomPaths.length !== 1) throw new Error("Exactly one platform-specific Agent SBOM is required");
+const [sbomPath] = sbomPaths;
+const releaseFiles = rootFiles.filter((path) => /\.(?:zip|exe|nupkg)$/i.test(path)
+  || basename(path) === "RELEASES" || path === sbomPath).sort();
 const checksums = (await Promise.all(releaseFiles.map(async (path) =>
   `${createHash("sha256").update(await readFile(path)).digest("hex")}  ${basename(path)}`))).sort().join("\n") + "\n";
 const expected = await readFile(join(root, "SHA256SUMS"), "utf8");
 if (checksums !== expected) throw new Error("SHA256SUMS does not match release artifacts");
-await stat(join(root, "agent-sbom.cdx.json"));
+const sbom = JSON.parse(await readFile(sbomPath, "utf8"));
+const agentPackage = JSON.parse(await readFile(new URL("../apps/agent/package.json", import.meta.url), "utf8"));
+const licensedComponents = Array.isArray(sbom.components)
+  ? sbom.components.filter((component) =>
+      Array.isArray(component.licenses) && component.licenses.length > 0)
+  : [];
+if (sbom.bomFormat !== "CycloneDX" || sbom.specVersion !== "1.6"
+    || sbom.metadata?.component?.group !== "@cryptobot-labs"
+    || sbom.metadata?.component?.name !== "agent"
+    || sbom.metadata?.component?.version !== agentPackage.version
+    || !Array.isArray(sbom.components) || sbom.components.length < 1
+    || licensedComponents.length < Math.ceil(sbom.components.length * 0.9)
+    || !Array.isArray(sbom.dependencies) || sbom.dependencies.length < 1) {
+  throw new Error("Agent SBOM is missing required CycloneDX release metadata");
+}
 process.stdout.write(`Verified ${artifacts.length} signed public artifact(s).\n`);

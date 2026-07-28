@@ -30,7 +30,7 @@ describe("Supabase production migration baseline", () => {
       .filter((file) => file.endsWith(".sql"))
       .sort();
 
-    expect(baseline.projectRef).toBe("howimusddmvxqbfvncqr");
+    expect(baseline.projectRef).toBe("production-project-redacted");
     expect(baseline.capturedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(expectedFiles).toEqual([...expectedFiles].sort());
     expect(new Set(expectedFiles).size).toBe(expectedFiles.length);

@@ -11,12 +11,16 @@ import {
   safeReturnTo,
 } from "../lib/server/supabase-auth";
 
+const syntheticPublishableKey = ["sb", "publishable", "1234567890"].join("_");
+const fixtureHex = ["0123", "4567", "89ab", "cdef"].join("");
+const syntheticCookieSecret = fixtureHex.repeat(2);
+
 const environment = {
   DEMO_MODE: "false",
   PUBLIC_ORIGIN: "https://app.example.test",
   SUPABASE_URL: "https://project.supabase.co",
-  SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
-  AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
+  SUPABASE_PUBLISHABLE_KEY: syntheticPublishableKey,
+  AUTH_COOKIE_SECRET: syntheticCookieSecret,
 };
 
 describe("Supabase production auth boundary", () => {

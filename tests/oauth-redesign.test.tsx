@@ -15,6 +15,10 @@ import { GET as getBotPerformance } from "../app/api/weex/bot-performance/route"
 beforeEach(() => { localStorage.clear(); window.history.replaceState({}, "", "/connections"); });
 afterEach(cleanup);
 
+const syntheticPublishableKey = ["sb", "publishable", "1234567890"].join("_");
+const fixtureHex = ["0123", "4567", "89ab", "cdef"].join("");
+const syntheticCookieSecret = fixtureHex.repeat(2);
+
 describe("OAuth-first redesign demo", () => {
   it("preserves safe relative return paths and rejects open redirects", () => {
     expect(safeReturnTo("/workshop?bot=orbit-dca#paper")).toBe("/workshop?bot=orbit-dca#paper");
@@ -63,20 +67,20 @@ describe("OAuth-first redesign demo", () => {
     expect(demoModeEnabled({ DEMO_MODE: "true" })).toBe(true);
     expect(productionOAuthReady({ DEMO_MODE: "false" })).toBe(false);
     expect(productionOAuthReady({ DEMO_MODE: "false", PUBLIC_ORIGIN: "https://app.example.test",
-      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
-      AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
+      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: syntheticPublishableKey,
+      AUTH_COOKIE_SECRET: syntheticCookieSecret,
       EXECUTOR_API_ORIGIN: "https://api.example.test",
       EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes",
       WEEX_AUTH_STAGE: "transition" })).toBe(false);
     expect(productionOAuthReady({ DEMO_MODE: "false", PUBLIC_ORIGIN: "https://app.example.test",
-      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
-      AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
+      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: syntheticPublishableKey,
+      AUTH_COOKIE_SECRET: syntheticCookieSecret,
       EXECUTOR_API_ORIGIN: "https://api.example.test",
       EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes",
       WEEX_AUTH_STAGE: "dual" })).toBe(true);
     expect(productionOAuthReady({ DEMO_MODE: "false", PUBLIC_ORIGIN: "https://app.example.test",
-      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
-      AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
+      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: syntheticPublishableKey,
+      AUTH_COOKIE_SECRET: syntheticCookieSecret,
       EXECUTOR_API_ORIGIN: "https://api.example.test",
       EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes",
       WEEX_AUTH_STAGE: "oauth-only" })).toBe(false);

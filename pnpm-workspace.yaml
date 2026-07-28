@@ -17,3 +17,10 @@ allowBuilds:
 
 overrides:
   "@electron/node-gyp": "10.2.0-electron.2"
+  "next>postcss": "8.5.24"
+  "next>sharp": "0.35.3"
+
+# Security-patched PostCSS is newer than the dependency quarantine window.
+# Keep this exact exception until it ages out; never widen it to a package range.
+minimumReleaseAgeExclude:
+  - postcss@8.5.24

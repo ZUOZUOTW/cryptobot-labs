@@ -6,7 +6,7 @@ Google Cloud OAuth client:
 
 - Application type: Web application
 - Authorized JavaScript origin: `https://www.cryptobotlabs.app`
-- Authorized redirect URI: `https://howimusddmvxqbfvncqr.supabase.co/auth/v1/callback`
+- Authorized redirect URI: `https://<project-ref>.supabase.co/auth/v1/callback`
 - Scopes: `openid`, `email`, `profile`
 
 Supabase Auth:

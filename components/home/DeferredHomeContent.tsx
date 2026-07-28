@@ -14,10 +14,8 @@ const HomePerformanceSections = lazy(() => import("../HomePerformanceSections").
 
 function useNearViewport({
   rootMargin,
-  respectReducedMotion = false,
 }: {
   rootMargin: string;
-  respectReducedMotion?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [shouldLoad, setShouldLoad] = useState(false);
@@ -25,7 +23,6 @@ function useNearViewport({
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
-    if (respectReducedMotion && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     if (typeof window.IntersectionObserver !== "function") {
       const timer = window.setTimeout(() => setShouldLoad(true), 0);
       return () => window.clearTimeout(timer);
@@ -38,7 +35,7 @@ function useNearViewport({
     }, { rootMargin });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [respectReducedMotion, rootMargin]);
+  }, [rootMargin]);
 
   return { ref, shouldLoad };
 }
@@ -50,7 +47,6 @@ function PlayerFallback() {
 export function DeferredStrategyAssemblyPlayer() {
   const { ref, shouldLoad } = useNearViewport({
     rootMargin: "240px 0px",
-    respectReducedMotion: true,
   });
   return (
     <div
@@ -71,7 +67,6 @@ export function DeferredStrategyAssemblyPlayer() {
 export function DeferredStrategyCodePlayer() {
   const { ref, shouldLoad } = useNearViewport({
     rootMargin: "240px 0px",
-    respectReducedMotion: true,
   });
   return (
     <div

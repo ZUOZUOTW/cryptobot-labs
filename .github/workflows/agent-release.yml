@@ -2,7 +2,10 @@ name: Signed Agent Release
 on:
   push:
     tags: ["agent-v*"]
-permissions: { contents: write }
+
+permissions:
+  contents: read
+
 jobs:
   release:
     strategy:
@@ -15,6 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       AGENT_RELEASE_CHANNEL: public
+      AGENT_TARGET_LABEL: ${{ matrix.label }}
       CBL_CONTROL_PLANE_ORIGIN: ${{ vars.CBL_CONTROL_PLANE_ORIGIN }}
       CBL_WEEX_BROKER_ID: ${{ vars.CBL_WEEX_BROKER_ID }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -24,10 +28,10 @@ jobs:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with: { version: 11.9.0 }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22.13.0, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - if: runner.os == 'Windows'
@@ -42,10 +46,10 @@ jobs:
         run: Remove-Item agent-signing.pfx -Force
       - shell: bash
         run: |
-          find apps/agent/out/make -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' \) -exec shasum -a 256 {} \; | sed 's#  .*/#  #' | sort > apps/agent/out/make/SHA256SUMS
-          pnpm dlx @cyclonedx/cyclonedx-npm@2.0.0 --output-file apps/agent/out/make/agent-sbom.cdx.json --omit dev
+          pnpm sbom --sbom-format cyclonedx --sbom-spec-version 1.6 --sbom-type application --sbom-supplier "CryptoBot Labs" --filter @cryptobot-labs/agent --out "apps/agent/out/make/agent-sbom-${AGENT_TARGET_LABEL}.cdx.json"
+          find apps/agent/out/make -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' -o -name 'agent-sbom-*.cdx.json' \) -exec shasum -a 256 {} \; | sed 's#  .*/#  #' | sort > apps/agent/out/make/SHA256SUMS
       - run: node scripts/verify-agent-artifact.mjs --public apps/agent/out/make
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "signed-agent-${{ matrix.label }}"
           path: |
@@ -53,21 +57,19 @@ jobs:
             apps/agent/out/make/**/*.exe
             apps/agent/out/make/**/*.nupkg
             apps/agent/out/make/**/RELEASES
+            apps/agent/out/make/**/agent-sbom-*.cdx.json
   publish:
     needs: release
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22.13.0 }
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { pattern: signed-agent-*, path: release, merge-multiple: true }
       - shell: bash
         run: |
-          find release -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' \) -exec sha256sum {} \; | sed 's#  .*/#  #' | sort > release/SHA256SUMS
-          pnpm dlx @cyclonedx/cyclonedx-npm@2.0.0 --output-file release/agent-sbom.cdx.json --omit dev
+          find release -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' -o -name 'agent-sbom-*.cdx.json' \) -exec sha256sum {} \; | sed 's#  .*/#  #' | sort > release/SHA256SUMS
       - env: { GH_TOKEN: "${{ github.token }}" }
         shell: bash
         run: |

@@ -63,4 +63,14 @@ describe("mobile-first PWA shell", () => {
     expect(workshop).toContain('aria-current={mobileStep === step.id ? "step" : undefined}');
     expect(workshopStyles).toContain('.workshop-step-panel:not([data-mobile-active="true"]) { display: none; }');
   });
+
+  it("keeps fixed-ratio strategy players within the mobile grid track", async () => {
+    const globalStyles = await readFile(projectFile("app/globals.css"), "utf8");
+
+    expect(globalStyles).toContain(`.strategy-assembly-player,
+  .strategy-code-player {
+    width: 100%;
+    min-height: 0;
+  }`);
+  });
 });

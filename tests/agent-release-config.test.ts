@@ -42,8 +42,18 @@ describe("Agent release gate", () => {
   });
 
   it("verifies the final macOS bundle signature even for unsigned internal-test archives",async()=>{
-    const verifier=await readFile("scripts/verify-agent-artifact.mjs","utf8");
+    const [verifier, workflow] = await Promise.all([
+      readFile("scripts/verify-agent-artifact.mjs","utf8"),
+      readFile(".github/workflows/agent-release.yml", "utf8"),
+    ]);
     expect(verifier).toContain("await verifyMacArchives(false)");
     expect(verifier).toContain('["--verify", "--deep", "--strict"');
+    expect(verifier).toContain('sbom.bomFormat !== "CycloneDX"');
+    expect(verifier).toContain('sbom.specVersion !== "1.6"');
+    expect(verifier).toContain("path === sbomPath");
+    expect(verifier).toContain("licensedComponents.length");
+    expect(workflow).toContain('agent-sbom-${AGENT_TARGET_LABEL}.cdx.json');
+    expect(workflow).toContain("agent-sbom-*.cdx.json");
+    expect(workflow).not.toContain("--lockfile-only");
   });
 });

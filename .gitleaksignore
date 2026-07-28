@@ -1,0 +1,18 @@
+# Reviewed synthetic fixtures from repository history. Each entry is pinned to
+# one commit, file, detector, and line; do not replace these with broad path
+# exclusions that could hide a future real credential.
+4ad6cb02caa3a4a4f40e645194e69db5abc31a5f:tests/oauth-redesign.test.tsx:generic-api-key:72
+4ad6cb02caa3a4a4f40e645194e69db5abc31a5f:tests/oauth-redesign.test.tsx:generic-api-key:73
+4ad6cb02caa3a4a4f40e645194e69db5abc31a5f:tests/oauth-redesign.test.tsx:generic-api-key:78
+83c228ec1287660053a411ac03aa41cbdabbe5f8:tests/oauth-redesign.test.tsx:generic-api-key:72
+4ad6cb02caa3a4a4f40e645194e69db5abc31a5f:tests/oauth-redesign.test.tsx:generic-api-key:79
+83c228ec1287660053a411ac03aa41cbdabbe5f8:tests/oauth-redesign.test.tsx:generic-api-key:73
+83c228ec1287660053a411ac03aa41cbdabbe5f8:tests/oauth-redesign.test.tsx:generic-api-key:78
+83c228ec1287660053a411ac03aa41cbdabbe5f8:tests/oauth-redesign.test.tsx:generic-api-key:79
+1a19be7c8539c9063b096d919994e788665082a2:tests/oauth-redesign.test.tsx:generic-api-key:68
+1a19be7c8539c9063b096d919994e788665082a2:tests/oauth-redesign.test.tsx:generic-api-key:69
+1a19be7c8539c9063b096d919994e788665082a2:tests/supabase-auth.test.ts:generic-api-key:18
+1a19be7c8539c9063b096d919994e788665082a2:tests/supabase-auth.test.ts:generic-api-key:19
+cca7fd9ddcd820d55f666e05f16f09899d9c85c5:packages/weex-client/tests/oauth-handoff.test.ts:generic-api-key:9
+cca7fd9ddcd820d55f666e05f16f09899d9c85c5:apps/executor/tests/oauth-service.test.ts:generic-api-key:10
+8fb792a9c212cda3bda581310ca575770f1aea96:apps/agent/tests/trade-audit.test.ts:generic-api-key:64

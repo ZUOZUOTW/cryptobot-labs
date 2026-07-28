@@ -1819,7 +1819,10 @@ a {
   .split-feature { grid-template-columns: 1fr; }
   .split-feature--reverse > :first-child { order: initial; }
   .strategy-assembly-player,
-  .strategy-code-player { min-height: 17rem; }
+  .strategy-code-player {
+    width: 100%;
+    min-height: 0;
+  }
   .step-grid { grid-template-columns: 1fr; }
   .step-card { min-height: auto; }
   .step-card h3 { margin-top: 2rem; }

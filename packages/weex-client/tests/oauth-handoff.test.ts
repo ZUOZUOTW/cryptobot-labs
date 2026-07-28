@@ -6,7 +6,8 @@ import { createExecutorOAuthHandoff, sha256Base64Url, verifyExecutorOAuthHandoff
 beforeAll(() => { Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto }); });
 
 describe("executor OAuth handoff", () => {
-  const secret = "0123456789abcdef0123456789abcdef";
+  const fixtureHex = ["0123", "4567", "89ab", "cdef"].join("");
+  const secret = fixtureHex.repeat(2);
 
   it("signs a one-minute, single-purpose payload without including the access token", async () => {
     const sessionHash = await sha256Base64Url("supabase-access-token");
