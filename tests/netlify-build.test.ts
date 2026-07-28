@@ -2,13 +2,15 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("Netlify production build", () => {
-  it("clears stale Next.js output before compiling production assets", async () => {
+  it("clears stale Next.js output, compiles production assets, and validates the Edge bundle", async () => {
     const [config, cleaner] = await Promise.all([
       readFile("netlify.toml", "utf8"),
       readFile("scripts/clean-next-build.mjs", "utf8"),
     ]);
 
-    expect(config).toContain('command = "node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack"');
+    expect(config).toContain(
+      'command = "node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack && node scripts/check-next-edge-bundle.mjs"',
+    );
     expect(config).toContain('SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL"');
     expect(config).not.toContain('SECRETS_SCAN_ENABLED = "false"');
     expect(cleaner).toContain('resolve(projectRoot, ".next")');
