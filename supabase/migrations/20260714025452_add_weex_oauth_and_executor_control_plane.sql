@@ -31,28 +31,12 @@ create table public.weex_connections (
     masked_api_key_suffix is null or length(masked_api_key_suffix) between 4 and 12
   ),
   constraint weex_connections_permissions_object check (jsonb_typeof(permissions_json) = 'object'),
-  unique (id, user_id),
-  unique (user_id, provider)
+  unique (id, user_id)
 );
 
 create index weex_connections_user_status_idx on public.weex_connections(user_id, status);
 create index weex_connections_executor_status_idx on public.weex_connections(executor_shard_id, status)
   where executor_shard_id is not null;
-
-create table private.weex_oauth_handoffs (
-  nonce_hash text primary key,
-  user_id text not null references public.users(id) on delete cascade,
-  action text not null check (action = 'connect'),
-  expires_at bigint not null,
-  consumed_at bigint not null,
-  created_at bigint not null,
-  constraint weex_oauth_handoffs_nonce_hash check (nonce_hash ~ '^[A-Za-z0-9_-]{43}$'),
-  constraint weex_oauth_handoffs_expiry check (expires_at > created_at and expires_at <= created_at + 120000),
-  constraint weex_oauth_handoffs_consumption check (consumed_at >= created_at and consumed_at < expires_at)
-);
-
-create index weex_oauth_handoffs_expiry_idx on private.weex_oauth_handoffs(expires_at);
-create index weex_oauth_handoffs_user_idx on private.weex_oauth_handoffs(user_id);
 
 create table private.weex_oauth_states (
   id text primary key,
@@ -91,7 +75,6 @@ create table private.weex_oauth_states (
 create index weex_oauth_states_expiry_idx on private.weex_oauth_states(expires_at)
   where status = 'init';
 create index weex_oauth_states_connection_idx on private.weex_oauth_states(connection_id, created_at desc);
-create index weex_oauth_states_connection_user_idx on private.weex_oauth_states(connection_id, user_id);
 
 create table private.weex_credential_blobs (
   connection_id text primary key,
@@ -126,22 +109,12 @@ create table private.executor_leases (
 );
 
 create index executor_leases_shard_expiry_idx on private.executor_leases(executor_shard_id, expires_at);
-create index executor_leases_connection_idx on private.executor_leases(connection_id);
-create index weex_credential_blobs_connection_user_idx on private.weex_credential_blobs(connection_id, user_id);
 
 alter table public.executor_shards enable row level security;
 alter table public.weex_connections enable row level security;
-alter table private.weex_oauth_handoffs enable row level security;
-alter table private.weex_oauth_states enable row level security;
-alter table private.weex_credential_blobs enable row level security;
-alter table private.executor_leases enable row level security;
 
 create policy deny_data_api on public.executor_shards for all to anon, authenticated using (false) with check (false);
 create policy deny_data_api on public.weex_connections for all to anon, authenticated using (false) with check (false);
-create policy deny_data_api on private.weex_oauth_handoffs for all to anon, authenticated using (false) with check (false);
-create policy deny_data_api on private.weex_oauth_states for all to anon, authenticated using (false) with check (false);
-create policy deny_data_api on private.weex_credential_blobs for all to anon, authenticated using (false) with check (false);
-create policy deny_data_api on private.executor_leases for all to anon, authenticated using (false) with check (false);
 
 revoke all on table public.executor_shards, public.weex_connections from anon, authenticated;
 revoke all on schema private from public, anon, authenticated;
@@ -166,7 +139,6 @@ revoke all on function private.consume_weex_oauth_state(text, bigint) from publi
 grant execute on function private.consume_weex_oauth_state(text, bigint) to service_role;
 
 comment on table public.weex_connections is 'Safe WEEX connection projection; never stores API secrets or OAuth tokens.';
-comment on table private.weex_oauth_handoffs is 'Hashes of short-lived, single-use Netlify to executor OAuth handoffs.';
 comment on table private.weex_oauth_states is 'Single-use OAuth state and encrypted PKCE verifier. Direct backend database access only.';
 comment on table private.weex_credential_blobs is 'KMS envelope-encrypted WEEX credentials. Plaintext is forbidden.';
 comment on table private.executor_leases is 'Fenced leases preventing concurrent cloud executors from controlling one deployment.';

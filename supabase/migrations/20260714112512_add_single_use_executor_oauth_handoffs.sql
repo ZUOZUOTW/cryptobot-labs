@@ -1,3 +1,4 @@
+
 create table if not exists private.weex_oauth_handoffs (
   nonce_hash text primary key,
   user_id text not null references public.users(id) on delete cascade,

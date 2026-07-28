@@ -33,11 +33,8 @@ create table public.cloud_strategy_runs (
   constraint cloud_runs_risk_object check (jsonb_typeof(risk_json) = 'object'),
   constraint cloud_runs_signal_object check (last_signal_json is null or jsonb_typeof(last_signal_json) = 'object')
 );
-
 create index cloud_runs_user_created_idx on public.cloud_strategy_runs(user_id, created_at desc);
-create index cloud_runs_executor_state_idx on public.cloud_strategy_runs(executor_shard_id, state, updated_at)
-  where state = 'running';
-
+create index cloud_runs_executor_state_idx on public.cloud_strategy_runs(executor_shard_id, state, updated_at) where state = 'running';
 create table private.cloud_order_intents (
   run_id text not null references public.cloud_strategy_runs(id) on delete cascade,
   candle_close_at bigint not null,
@@ -55,26 +52,16 @@ create table private.cloud_order_intents (
   constraint cloud_order_signal_object check (jsonb_typeof(signal_json) = 'object'),
   constraint cloud_order_intent_object check (intent_json is null or jsonb_typeof(intent_json) = 'object')
 );
-
 create index cloud_orders_run_created_idx on private.cloud_order_intents(run_id, created_at desc);
-
 alter table public.cloud_strategy_runs enable row level security;
 alter table private.cloud_order_intents enable row level security;
-create policy deny_data_api on public.cloud_strategy_runs
-  for all to anon, authenticated using (false) with check (false);
-create policy deny_data_api on private.cloud_order_intents
-  for all to anon, authenticated using (false) with check (false);
+create policy deny_data_api on public.cloud_strategy_runs for all to anon, authenticated using (false) with check (false);
+create policy deny_data_api on private.cloud_order_intents for all to anon, authenticated using (false) with check (false);
 revoke all on table public.cloud_strategy_runs from anon, authenticated;
 revoke all on table private.cloud_order_intents from public, anon, authenticated;
-
 grant select, insert, update on table public.cloud_strategy_runs to cryptobot_executor;
 grant select, insert, update on table private.cloud_order_intents to cryptobot_executor;
-create policy executor_runtime on public.cloud_strategy_runs
-  for all to cryptobot_executor using (true) with check (true);
-create policy executor_runtime on private.cloud_order_intents
-  for all to cryptobot_executor using (true) with check (true);
-
-comment on table public.cloud_strategy_runs is
-  'Website-managed strategies continuously executed by the fixed-egress AWS executor.';
-comment on table private.cloud_order_intents is
-  'Durable per-candle idempotency and exchange submission evidence for cloud strategy runs.';
+create policy executor_runtime on public.cloud_strategy_runs for all to cryptobot_executor using (true) with check (true);
+create policy executor_runtime on private.cloud_order_intents for all to cryptobot_executor using (true) with check (true);
+comment on table public.cloud_strategy_runs is 'Website-managed strategies continuously executed by the fixed-egress AWS executor.';
+comment on table private.cloud_order_intents is 'Durable per-candle idempotency and exchange submission evidence for cloud strategy runs.';
