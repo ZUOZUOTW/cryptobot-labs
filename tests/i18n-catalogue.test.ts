@@ -114,7 +114,7 @@ describe("generated translation catalogues", () => {
   it("localizes all user-facing English JSX copy except brands and technical identifiers", () => {
     const intentionallyUniversal = new Set([
       "AI", "API Key", "BTC", "CryptoBot", "CryptoBot Labs", "Facebook", "Labs", "LINE",
-      "OAuth", "SBOM", "Telegram", "USDT", "UTC", "WEEX", "X", "imported-strategy.js",
+      "OAuth", "SBOM", "Telegram", "USDT", "UTC", "v", "WEEX", "WEEX / USDT", "X", "imported-strategy.js",
     ]);
     const missing = englishUiTextStrings()
       .filter((source) => !intentionallyUniversal.has(source))
