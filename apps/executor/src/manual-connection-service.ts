@@ -25,6 +25,14 @@ export type ManualConnectionFailureReason =
   | "hedge_mode_required"
   | "verification_failed";
 
+export interface ManualConnectionFailureLog {
+  reason: ManualConnectionFailureReason;
+  source: "provider" | "policy" | "internal";
+  category?: WeexApiError["category"];
+  code?: string;
+  status?: number;
+}
+
 class ManualConnectionPolicyError extends Error {
   constructor(readonly reason: ManualConnectionFailureReason, message: string) {
     super(message);
@@ -45,6 +53,23 @@ export function manualConnectionFailureReason(error: unknown): ManualConnectionF
   if (error.category === "network" || error.category === "server") return "weex_unavailable";
   if (error.category === "schema") return "invalid_weex_response";
   return "verification_failed";
+}
+
+export function manualConnectionFailureLog(error: unknown): ManualConnectionFailureLog {
+  const reason = manualConnectionFailureReason(error);
+  if (error instanceof ManualConnectionPolicyError) return { reason, source: "policy" };
+  if (!(error instanceof WeexApiError)) return { reason, source: "internal" };
+  const code = typeof error.code === "string" && /^-?[A-Za-z0-9_]{1,32}$/.test(error.code)
+    ? error.code : undefined;
+  const status = Number.isSafeInteger(error.status) && (error.status ?? 0) >= 100 && (error.status ?? 0) <= 599
+    ? error.status : undefined;
+  return {
+    reason,
+    source: "provider",
+    category: error.category,
+    ...(code === undefined ? {} : { code }),
+    ...(status === undefined ? {} : { status }),
+  };
 }
 
 const id = (): string => {

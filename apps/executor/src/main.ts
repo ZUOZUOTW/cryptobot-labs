@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 
 import {
-  WeexApiError,
   WeexOAuthClient,
   WeexOAuthClientCredentials,
   type WeexOAuthTransport,
@@ -10,11 +9,12 @@ import { AwsKmsCredentialEnvelope } from "./aws-kms";
 import { assertFixedEgressIp, loadExecutorConfig } from "./config";
 import { PostgresOAuthRepository } from "./oauth-repository";
 import { ExecutorOAuthService } from "./oauth-service";
-import { ManualWeexConnectionService, manualConnectionFailureReason } from "./manual-connection-service";
+import { ManualWeexConnectionService, manualConnectionFailureLog } from "./manual-connection-service";
 import { loadRuntimeEnvironment } from "./runtime-secrets";
 import { CloudRuntimeRepository } from "./cloud-repository";
 import { CloudStrategyRuntime } from "./cloud-runtime";
 import { executorRuntimeMetadata } from "./runtime-metadata";
+import { publicHealthProbe, publicReadinessProbe } from "./public-probes";
 
 const runtimeMetadata = executorRuntimeMetadata(process.env, Date.now());
 const runtimeEnvironment = await loadRuntimeEnvironment(process.env);
@@ -93,15 +93,13 @@ const validPublicCallback = (request: import("node:http").IncomingMessage): bool
 const handleRequest = async (request: import("node:http").IncomingMessage,
   response: import("node:http").ServerResponse): Promise<void> => {
   if (request.method === "GET" && request.url === "/healthz") {
-    json(response, 200, { status: "ok", ...runtimeMetadata });
+    json(response, 200, publicHealthProbe());
     return;
   }
   if (request.method === "GET" && request.url === "/readyz") {
     const ready = readiness.kms && readiness.fixedEgress && readiness.database && readiness.cloudRuntime
       && readiness.credentialEnvelopeAdapter;
-    json(response, ready ? 200 : 503, { status: ready ? "ready" : "not-ready", ...runtimeMetadata,
-      checks: readiness, oauthEnabled: oauth.enabled, liveTradingEnabled: config.liveTradingEnabled,
-      runtime: cloudRuntime.snapshot() });
+    json(response, ready ? 200 : 503, publicReadinessProbe(ready));
     return;
   }
   if (request.method === "POST" && request.url === "/oauth/weex/start") {
@@ -135,26 +133,14 @@ const handleRequest = async (request: import("node:http").IncomingMessage,
       });
       json(response, 200, result);
     } catch (error) {
-      const reason = manualConnectionFailureReason(error);
+      const failure = manualConnectionFailureLog(error);
       console.warn(JSON.stringify({
         event: "manual_weex_connection_failed",
-        reason,
-        error: error instanceof WeexApiError
-          ? {
-              name: error.name,
-              category: error.category,
-              code: error.code ?? null,
-              status: error.status ?? null,
-              message: error.message,
-            }
-          : {
-              name: error instanceof Error ? error.name : typeof error,
-              message: error instanceof Error ? error.message : "non_error_failure",
-            },
+        ...failure,
       }));
       json(response, 400, {
         error: "connection_verification_failed",
-        reason,
+        reason: failure.reason,
       });
     }
     return;
@@ -189,6 +175,13 @@ const server = createServer((request, response) => {
 });
 
 server.listen(config.healthPort, "127.0.0.1");
+console.info(JSON.stringify({
+  event: "executor_runtime_started",
+  ...runtimeMetadata,
+  checks: readiness,
+  oauthEnabled: oauth.enabled,
+  liveTradingEnabled: config.liveTradingEnabled,
+}));
 
 const shutdown = (): void => {
   cloudRuntime.stop();

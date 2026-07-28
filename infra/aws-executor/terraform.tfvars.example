@@ -4,3 +4,5 @@ api_hostname       = "api.cryptobotlabs.app"
 cloudflare_zone_id = "cc6164848f351ee301c0efebc3533520"
 manage_cloudflare_dns = false
 enable_public_https   = false
+# cloudflare_ipv4_cidrs defaults to the complete list at
+# https://www.cloudflare.com/ips-v4. Review that source before each apply.
