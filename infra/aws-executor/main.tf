@@ -117,14 +117,14 @@ resource "aws_security_group" "executor" {
   }
 }
 
-resource "aws_vpc_security_group_ingress_rule" "https" {
-  count             = var.enable_public_https ? 1 : 0
+resource "aws_vpc_security_group_ingress_rule" "https_cloudflare" {
+  for_each          = var.enable_public_https ? var.cloudflare_ipv4_cidrs : toset([])
   security_group_id = aws_security_group.executor.id
-  description       = "Public HTTPS after the executor TLS endpoint is installed"
+  description       = "HTTPS from Cloudflare proxy ${each.value}"
   from_port         = 443
   to_port           = 443
   ip_protocol       = "tcp"
-  cidr_ipv4         = "0.0.0.0/0"
+  cidr_ipv4         = each.value
 }
 
 resource "aws_instance" "executor" {
@@ -162,7 +162,7 @@ resource "cloudflare_dns_record" "api" {
   name    = var.api_hostname
   type    = "A"
   content = aws_eip.executor.public_ip
-  ttl     = 60
-  proxied = false
-  comment = "CryptoBot Labs fixed-IP production executor"
+  ttl     = 1
+  proxied = true
+  comment = "Cloudflare-proxied CryptoBot Labs fixed-IP production executor"
 }

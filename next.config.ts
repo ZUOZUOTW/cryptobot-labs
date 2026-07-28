@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
+import { browserSecurityHeaders } from "./lib/security-headers";
 
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  async headers() {
+    return [{
+      source: "/:path*",
+      headers: browserSecurityHeaders.map((header) => ({ ...header })),
+    }];
+  },
   /* Keep QuickJS' embedded WASM binary out of webpack's generated template strings. */
   serverExternalPackages: [
     "@jitl/quickjs-singlefile-cjs-release-sync",
