@@ -8,7 +8,7 @@ over feature speed.
 
 1. Create an issue for a large product or protocol change so the boundary is
    agreed before implementation.
-2. Use Node.js `>=22.13.0` and install dependencies with `pnpm install`.
+2. Use Node.js `>=22.23.1` and install dependencies with `pnpm install`.
 3. Keep credentials synthetic. Never paste a real API key, token, database URL,
    private order record, or production infrastructure identifier into source,
    tests, issues, screenshots, or logs.

@@ -16,7 +16,7 @@ request path.
 
 ## Prerequisites
 
-- Node.js `>=22.13.0`
+- Node.js `>=22.23.1`
 - pnpm `11.9.0` (the repository and CI pin this exact version)
 
 ## Quick Start
