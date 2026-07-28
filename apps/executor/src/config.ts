@@ -1,4 +1,9 @@
 import { isWeexBrokerId } from "@cryptobot-labs/trading-core";
+import {
+  parseWeexAuthStage,
+  weexAuthCapabilities,
+  type WeexAuthStage,
+} from "@cryptobot-labs/weex-client";
 
 const SHARD = /^exec_[A-Za-z0-9_-]{16,64}$/;
 const AWS_REGION = /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/;
@@ -19,6 +24,8 @@ export interface ExecutorConfig {
   readonly weexBrokerId: string;
   readonly weexOAuthRedirectUri: string;
   readonly handoffSecret: string;
+  readonly authStage: WeexAuthStage;
+  readonly manualConnectionsEnabled: boolean;
   readonly oauthEnabled: boolean;
   readonly liveTradingEnabled: boolean;
   readonly accountConcurrency: number;
@@ -92,7 +99,10 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   }
   if (weexClientId !== null) required({ WEEX_CLIENT_ID: weexClientId }, "WEEX_CLIENT_ID", 256);
   if (weexClientSecret !== null) required({ WEEX_CLIENT_SECRET: weexClientSecret }, "WEEX_CLIENT_SECRET", 512);
-  const oauthEnabled = weexClientId !== null && weexClientSecret !== null;
+  const authStage = parseWeexAuthStage(env.WEEX_AUTH_STAGE);
+  const capabilities = weexAuthCapabilities(authStage);
+  const manualConnectionsEnabled = capabilities.manualApiConnection;
+  const oauthEnabled = capabilities.oauthConnection && weexClientId !== null && weexClientSecret !== null;
   const accountConcurrency = boundedInteger(env.EXECUTOR_ACCOUNT_CONCURRENCY, 4, 1, 16,
     "EXECUTOR_ACCOUNT_CONCURRENCY");
   const strategyConcurrency = boundedInteger(env.EXECUTOR_STRATEGY_CONCURRENCY, 8, 1, 32,
@@ -100,7 +110,8 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   const tickIntervalMs = boundedInteger(env.EXECUTOR_TICK_INTERVAL_MS, 2_000, 500, 60_000,
     "EXECUTOR_TICK_INTERVAL_MS");
   return Object.freeze({ shardId, awsRegion, kmsKeyId, expectedEgressIp, healthPort, publicOrigin, databaseUrl,
-    weexClientId, weexClientSecret, weexBrokerId, weexOAuthRedirectUri, handoffSecret, oauthEnabled, liveTradingEnabled,
+    weexClientId, weexClientSecret, weexBrokerId, weexOAuthRedirectUri, handoffSecret, authStage,
+    manualConnectionsEnabled, oauthEnabled, liveTradingEnabled,
     accountConcurrency, strategyConcurrency, tickIntervalMs });
 }
 

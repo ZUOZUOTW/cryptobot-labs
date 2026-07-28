@@ -104,6 +104,7 @@ export class ManualWeexConnectionService {
       candidateId: id(),
       userId: handoff.userId,
       shardId: this.options.shardId,
+      credentialSource: "manual",
       now,
     });
     try {
@@ -170,6 +171,7 @@ export class ManualWeexConnectionService {
       return { connectionId, maskedApiKeySuffix: suffix, liveReady };
     } catch (error) {
       await this.options.repository.failConnection({ connectionId, userId: handoff.userId,
+        credentialSource: "manual",
         now: (this.options.now ?? Date.now)() }).catch(() => undefined);
       throw error;
     }

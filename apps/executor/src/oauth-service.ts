@@ -68,7 +68,7 @@ export class ExecutorOAuthService {
     await this.options.repository.reserveHandoff({ handoff, nonceHash, now });
 
     const connectionId = await this.options.repository.prepareConnection({ candidateId: id("conn"),
-      userId: handoff.userId, shardId: this.options.shardId, now });
+      userId: handoff.userId, shardId: this.options.shardId, credentialSource: "oauth", now });
     const stateId = id("woauth");
     const transaction = await createWeexOAuthTransaction();
     const context = Object.freeze({ purpose: "weex_oauth_pkce", oauth_state_id: stateId,

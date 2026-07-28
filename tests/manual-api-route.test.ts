@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   upsertIdentity: vi.fn(),
@@ -51,6 +51,7 @@ const request = (body: unknown, site = "same-origin") => {
 
 describe("manual WEEX credential relay", () => {
   beforeEach(() => {
+    vi.stubEnv("WEEX_AUTH_STAGE", "transition");
     vi.restoreAllMocks();
     mocks.upsertIdentity.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUser.mockReset().mockResolvedValue({
@@ -61,6 +62,7 @@ describe("manual WEEX credential relay", () => {
     mocks.createHandoff.mockReset().mockResolvedValue("signed-handoff");
     mocks.hash.mockReset().mockResolvedValue("session-hash");
   });
+  afterEach(() => { vi.unstubAllEnvs(); });
 
   it("rejects cross-site credential submissions before reading or forwarding the body", async () => {
     const executorFetch = vi.spyOn(globalThis, "fetch");
@@ -96,6 +98,7 @@ describe("manual WEEX credential relay", () => {
     expect(JSON.parse(text)).toEqual({
       connection: {
         status: "active",
+        credentialSource: "manual",
         maskedApiKeySuffix: "A1B2",
         futuresDemoReady: true,
         liveReady: true,
@@ -115,6 +118,22 @@ describe("manual WEEX credential relay", () => {
         redirect: "error",
       }),
     );
+  });
+
+  it("fails closed before authentication or body forwarding after the manual transition is disabled", async () => {
+    vi.stubEnv("WEEX_AUTH_STAGE", "oauth-only");
+    const executorFetch = vi.spyOn(globalThis, "fetch");
+
+    const response = await POST(request({
+      apiKey: "api-key",
+      secretKey: "secret-key",
+      passphrase: "passphrase",
+    }));
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "manual_connection_unavailable" });
+    expect(mocks.getCurrentUser).not.toHaveBeenCalled();
+    expect(executorFetch).not.toHaveBeenCalled();
   });
 
   it("preserves the Executor's safe hedge-mode remediation reason", async () => {

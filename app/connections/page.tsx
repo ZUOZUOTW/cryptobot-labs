@@ -2,9 +2,11 @@ import Link from "next/link";
 import { ManualApiConnectionFlow } from "../../components/connections/ManualApiConnectionFlow";
 import { OAuthConnectionFlow } from "../../components/connections/OAuthConnectionFlow";
 import { demoModeEnabled, productionOAuthReady } from "../../lib/server/demo-mode";
+import { manualWeexConnectionEnabled } from "../../lib/server/weex-auth-stage";
 
 export default function ConnectionsPage() {
   const demoMode = demoModeEnabled();
+  const manualReady = demoMode || manualWeexConnectionEnabled();
   const oauthReady = demoMode || productionOAuthReady();
   return (
     <div className="connections-page site-container">
@@ -16,14 +18,14 @@ export default function ConnectionsPage() {
         <p className="connection-safety" role="note"><strong>重要：</strong>API Secret 與 Passphrase 只經由同源加密連線轉送一次，抵達雲端 Executor 後立即由 AWS KMS 加密；平台只使用 Readonly／Spot／Futures，完全不實作提領功能。</p>
       </header>
 
-      <section className="connections-primary" aria-labelledby="manual-api-title">
+      {manualReady && <section className="connections-primary" aria-labelledby="manual-api-title">
         <div className="section-heading">
           <p className="eyebrow">AVAILABLE NOW / MANUAL API</p>
           <h2 id="manual-api-title">使用自己的 WEEX API 啟動策略</h2>
           <p>不需下載或安裝本機代理。綁定完成並通過歷史回測後，可從組裝車間明確確認風險，再建立由 AWS Executor 24/7 執行的 WEEX 自動策略。</p>
         </div>
         <ManualApiConnectionFlow />
-      </section>
+      </section>}
 
       <section className="connections-secondary" aria-labelledby="oauth-option-title">
         <details className="oauth-disclosure glass-panel">
@@ -41,6 +43,11 @@ export default function ConnectionsPage() {
           </div>
         </details>
       </section>
+      {!manualReady && !oauthReady && <section className="connection-auth-gate glass-panel" role="status">
+        <p className="eyebrow">SAFE ROLLOUT HOLD</p>
+        <h2>WEEX OAuth 登入切換尚未完成</h2>
+        <p>舊登入與手動 API 已停用，但新的 WEEX 身分登入尚未通過正式上線條件；所有新增授權保持關閉。</p>
+      </section>}
     </div>
   );
 }

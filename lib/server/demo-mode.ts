@@ -1,4 +1,5 @@
 import { productionAuthReady } from "./supabase-auth";
+import { webWeexOAuthEnabled } from "./weex-auth-stage";
 
 type DeploymentEnvironment = Record<string, string | undefined>;
 
@@ -7,6 +8,7 @@ export function demoModeEnabled(environment: DeploymentEnvironment = process.env
 }
 
 export function productionOAuthReady(environment: DeploymentEnvironment = process.env): boolean {
+  if (!webWeexOAuthEnabled(environment)) return false;
   if (!productionAuthReady(environment)) return false;
   const secret = environment.EXECUTOR_HANDOFF_SECRET;
   if (typeof secret !== "string" || secret.length < 32 || secret.length > 512) return false;

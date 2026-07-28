@@ -66,7 +66,20 @@ describe("OAuth-first redesign demo", () => {
       SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
       AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
       EXECUTOR_API_ORIGIN: "https://api.example.test",
-      EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes" })).toBe(true);
+      EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes",
+      WEEX_AUTH_STAGE: "transition" })).toBe(false);
+    expect(productionOAuthReady({ DEMO_MODE: "false", PUBLIC_ORIGIN: "https://app.example.test",
+      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
+      AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
+      EXECUTOR_API_ORIGIN: "https://api.example.test",
+      EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes",
+      WEEX_AUTH_STAGE: "dual" })).toBe(true);
+    expect(productionOAuthReady({ DEMO_MODE: "false", PUBLIC_ORIGIN: "https://app.example.test",
+      SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890",
+      AUTH_COOKIE_SECRET: "0123456789abcdef0123456789abcdef",
+      EXECUTOR_API_ORIGIN: "https://api.example.test",
+      EXECUTOR_HANDOFF_SECRET: "a-secure-handoff-secret-with-at-least-32-bytes",
+      WEEX_AUTH_STAGE: "oauth-only" })).toBe(false);
     expect(productionLiveReady()).toBe(false);
   });
 

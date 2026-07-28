@@ -6,6 +6,7 @@ import { usePlatformAuth } from "../PlatformAuthProvider";
 
 interface ConnectionState {
   status: string;
+  credentialSource?: "manual" | "oauth";
   maskedApiKeySuffix?: string | null;
   withdrawalAccessAbsent?: boolean;
 }
@@ -109,11 +110,13 @@ export function ManualApiConnectionFlow() {
     </div></div>
     {checking && <p className="control-feedback" role="status">正在確認已綁定的 WEEX API…</p>}
     {active && !editing && <div className="connection-active-summary" role="status">
-      <div><strong>已綁定 API ••••{connection.maskedApiKeySuffix}</strong>
+      <div><strong>{connection.credentialSource === "oauth"
+        ? "已透過 WEEX OAuth 連線"
+        : `已綁定手動 API ••••${connection.maskedApiKeySuffix ?? ""}`}</strong>
         <p>憑證已由 AWS KMS 安全保存，真倉雲端執行可用；回到此頁不需要重新輸入。</p></div>
       <button className="button button--ghost button--small" onClick={() => {
         setEditing(true); setMessage(""); setState("idle");
-      }} type="button">更換已綁定的 API</button>
+      }} type="button">{connection.credentialSource === "oauth" ? "改用手動 API" : "更換手動 API"}</button>
     </div>}
     {statusError && !active && message && <div className="control-feedback" role="alert">
       <p>{message}</p>

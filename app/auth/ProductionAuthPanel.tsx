@@ -13,11 +13,12 @@ const MESSAGES: Record<string, string> = {
   unavailable: "正式登入尚未完成環境設定。",
 };
 
-export function ProductionAuthPanel({ returnTo, sent, error, ready }: {
+export function ProductionAuthPanel({ returnTo, sent, error, ready, legacyEnabled }: {
   returnTo: string;
   sent?: string;
   error?: string;
   ready: boolean;
+  legacyEnabled: boolean;
 }) {
   const destination = safeReturnTo(returnTo, "/bots");
   return (
@@ -26,10 +27,12 @@ export function ProductionAuthPanel({ returnTo, sent, error, ready }: {
       <section className={styles.card} aria-labelledby="auth-title">
         <div className={styles.cardIntro}>
           <p className={styles.kicker}>WELCOME BACK</p>
-          <h1 id="auth-title">登入後繼續剛才的策略</h1>
-          <p>使用 Google 或 Email Magic Link 建立會員工作區。登入只會保存策略與操作紀錄，不會連接 WEEX。</p>
+          <h1 id="auth-title">{legacyEnabled ? "登入後繼續剛才的策略" : "WEEX OAuth 登入切換中"}</h1>
+          <p>{legacyEnabled
+            ? "使用 Google 或 Email Magic Link 建立會員工作區。登入只會保存策略與操作紀錄，不會連接 WEEX。"
+            : "舊登入已關閉；新的 WEEX 身分登入在正式核准與安全驗證完成前保持停用。"}</p>
         </div>
-        {ready ? <>
+        {ready && legacyEnabled ? <>
           <Link className={styles.googleButton} href={`/auth/google?return_to=${encodeURIComponent(destination)}`}>
             <FcGoogle aria-hidden="true" />
             <span>使用 Google 繼續</span>
@@ -44,7 +47,9 @@ export function ProductionAuthPanel({ returnTo, sent, error, ready }: {
             </div>
             <button className={styles.emailButton} type="submit"><HiOutlineEnvelope aria-hidden="true" />寄送安全登入連結</button>
           </form>
-        </> : <p className={styles.feedback} role="alert">正式登入尚未完成環境設定，所有會員寫入與交易功能已安全停用。</p>}
+        </> : <p className={styles.feedback} role="alert">{legacyEnabled
+          ? "正式登入尚未完成環境設定，所有會員寫入與交易功能已安全停用。"
+          : "WEEX OAuth 身分登入尚未完成上線條件，所有新登入與授權已安全停用。"}</p>}
         {sent === "1" && <p className={styles.feedback} role="status">登入信已送出。請在 10 分鐘內使用同一瀏覽器開啟連結。</p>}
         {error && <p className={`${styles.feedback} ${styles.feedbackError}`} role="alert">{MESSAGES[error] ?? "登入未完成，請重新嘗試。"}</p>}
         <div className={styles.securityNote}>

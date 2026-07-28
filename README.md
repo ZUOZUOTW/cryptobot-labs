@@ -37,7 +37,7 @@ pnpm run build
 
 ## Formal member authentication
 
-The formal site uses Supabase Auth with Google OAuth and Email Magic Link. Auth transactions use PKCE plus a
+During WEEX review, the formal site uses Supabase Auth with Google OAuth and Email Magic Link. Auth transactions use PKCE plus a
 10-minute signed HttpOnly state cookie. Access and refresh tokens remain in `Secure`, `HttpOnly`, `SameSite=Lax`
 cookies, and server API identity is accepted only after the Supabase Auth `/user` endpoint validates the access token.
 Copy `.env.example` into the deployment secret manager and set `DEMO_MODE=false`; missing or malformed values fail
@@ -45,6 +45,12 @@ closed. Only the Supabase publishable key may be used for this flow—never expo
 
 Before enabling Google, add the site's exact `/auth/callback` URL to the Supabase redirect allow-list and configure
 the Google provider in Supabase. Live trading remains hard-disabled independently of successful member login.
+
+`WEEX_AUTH_STAGE` controls the reviewed rollout as one atomic state: `transition` keeps the current login and
+manual API connection while WEEX OAuth is disabled; `dual` adds approved WEEX OAuth without removing the fallback;
+`oauth-only` removes the legacy login and manual credential endpoint. Production must remain `transition` until the
+WEEX application is approved. The web layer additionally keeps `oauth-only` fail-closed until a stable WEEX
+user-identity callback is implemented.
 
 ## Desktop Agent releases
 

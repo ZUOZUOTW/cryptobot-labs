@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { demoModeEnabled } from "../../../lib/server/demo-mode";
 import { requireSameOrigin } from "../../../lib/server/origin";
+import { legacyPlatformLoginEnabled } from "../../../lib/server/weex-auth-stage";
 import {
   callbackUrl,
   createAuthTransaction,
@@ -18,7 +19,9 @@ const redirectToAuth = (request: Request, params: Record<string, string>): NextR
 };
 
 export async function POST(request: Request): Promise<Response> {
-  if (demoModeEnabled()) return redirectToAuth(request, { error: "unavailable" });
+  if (demoModeEnabled() || !legacyPlatformLoginEnabled()) {
+    return redirectToAuth(request, { error: "unavailable" });
+  }
   try {
     const config = getSupabaseAuthConfig();
     requireSameOrigin(request, { publicOrigin: config.origin });
