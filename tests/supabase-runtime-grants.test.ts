@@ -3,6 +3,43 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Supabase server runtime grants", () => {
+  it("removes Netlify BYPASSRLS, private-schema access, and broad mutation grants", async () => {
+    const migration = await readFile(resolve(
+      "supabase/migrations/20260728050917_harden_netlify_role_and_audit_events.sql",
+    ), "utf8");
+
+    expect(migration).toMatch(/alter role cryptobot_netlify[\s\S]*\bnobypassrls\b/i);
+    expect(migration).toMatch(
+      /pg_roles[\s\S]*rolname = 'cryptobot_netlify'[\s\S]*rolsuper or rolreplication/i,
+    );
+    expect(migration).toMatch(/revoke all on schema private from cryptobot_netlify/i);
+    expect(migration).toMatch(/revoke all on all tables in schema private from cryptobot_netlify/i);
+    expect(migration).toMatch(/revoke all on all tables in schema public from cryptobot_netlify/i);
+    expect(migration).toMatch(/create policy netlify_server_runtime[\s\S]*to cryptobot_netlify/i);
+    expect(migration).toMatch(
+      /grant delete on table\s+public\.device_nonces,\s+public\.position_snapshots\s+to cryptobot_netlify/i,
+    );
+    expect(migration).not.toMatch(
+      /grant delete on table[\s\S]*public\.(users|orders|fills|audit_events)[\s\S]*to cryptobot_netlify/i,
+    );
+  });
+
+  it("makes the production audit ledger append-only for every application role", async () => {
+    const migration = await readFile(resolve(
+      "supabase/migrations/20260728050917_harden_netlify_role_and_audit_events.sql",
+    ), "utf8");
+
+    expect(migration).toMatch(/create or replace function private\.reject_audit_event_mutation\(\)/i);
+    expect(migration).toMatch(/raise exception[\s\S]*audit_events are append-only/i);
+    expect(migration).toMatch(/revoke update,\s*delete,\s*truncate on table public\.audit_events/i);
+    expect(migration).toMatch(
+      /before update or delete on public\.audit_events[\s\S]*reject_audit_event_mutation\(\)/i,
+    );
+    expect(migration).toMatch(
+      /before truncate on public\.audit_events[\s\S]*reject_audit_event_mutation\(\)/i,
+    );
+  });
+
   it("lets the Netlify control plane read WEEX connection state and manage cloud runs only", async () => {
     const migration = await readFile(resolve(
       "supabase/migrations/20260724054500_grant_netlify_cloud_control_plane.sql",
