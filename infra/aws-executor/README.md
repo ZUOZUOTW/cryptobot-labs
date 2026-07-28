@@ -28,6 +28,8 @@ Applied production base (2026-07-14):
 
 The security group permits outbound HTTPS plus TCP 5432 for the Supabase IPv4 Session Pooler. The database runtime role and TLS-required connection string remain the authorization boundary; no inbound database traffic is opened.
 
+The SSM data source intentionally follows the latest Amazon Linux 2023 image for visibility, but routine plans ignore AMI drift and the executor has `prevent_destroy`. An AMI upgrade therefore requires a reviewed maintenance change that explicitly adjusts the lifecycle guard and replaces the instance during a planned window; it cannot silently replace production during an unrelated apply.
+
 The executor uses the official pinned AWS KMS and Secrets Manager SDKs. It refuses readiness unless KMS, fixed egress, database schema, and the credential-envelope adapter validate. Missing WEEX OAuth credentials keep `/oauth/weex/start` disabled with HTTP 503. Public probes do not expose feature flags, revisions, worker state, cache state, counts, or rate-limit data; those diagnostics remain in the private system journal.
 
 Before every infrastructure apply, compare `cloudflare_ipv4_cidrs` with Cloudflare's official `https://www.cloudflare.com/ips-v4` list. Cloudflare publishes additions before using them. A mismatch can either expose the origin or block a subset of Cloudflare edge traffic.

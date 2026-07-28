@@ -40,9 +40,9 @@ resource "aws_iam_role" "executor" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -145,6 +145,14 @@ resource "aws_instance" "executor" {
     encrypted   = true
     volume_type = "gp3"
     volume_size = 20
+  }
+
+  lifecycle {
+    # The SSM parameter points at a moving "latest" AMI. Production AMI
+    # replacements require a reviewed maintenance change and must never occur
+    # as a side effect of a routine Terraform apply.
+    prevent_destroy = true
+    ignore_changes  = [ami]
   }
 
   tags = { Name = "cryptobot-labs-production-executor" }

@@ -29,4 +29,15 @@ describe("AWS executor edge isolation", () => {
     expect(record).toContain("proxied = true");
     expect(record).not.toContain("proxied = false");
   });
+
+  it("cannot replace the production executor during a routine apply", async () => {
+    const main = await readFile("infra/aws-executor/main.tf", "utf8");
+    const executor = main.match(
+      /resource "aws_instance" "executor" \{[\s\S]*?lifecycle \{[\s\S]*?ignore_changes\s+= \[ami\][\s\S]*?\n\s*\}/,
+    )?.[0];
+
+    expect(executor).toBeDefined();
+    expect(executor).toContain("prevent_destroy = true");
+    expect(executor).toContain("ignore_changes  = [ami]");
+  });
 });
