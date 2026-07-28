@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./auth-stage": "./src/auth-stage.ts"
   },
   "scripts": {
     "test": "vitest run tests",

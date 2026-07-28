@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/clean-next-build.mjs && next build --webpack",
+    "build": "node scripts/clean-next-build.mjs && next build --webpack && node scripts/check-next-edge-bundle.mjs",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
