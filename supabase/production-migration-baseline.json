@@ -1,0 +1,111 @@
+{
+  "projectRef": "howimusddmvxqbfvncqr",
+  "capturedAt": "2026-07-28",
+  "migrations": [
+    {
+      "version": "20260713032333",
+      "name": "create_cryptobot_control_plane",
+      "normalizedSha256": "433066d6be6ad1e6ca75e68ee7239447f912b505bd3c8e98977d18f38960e78c"
+    },
+    {
+      "version": "20260713032640",
+      "name": "remove_unused_sql_bridge",
+      "normalizedSha256": "f26cbcabfedc2c07b8196d3cf541a3a66834880f306f7c254a9dd085ff3454c0"
+    },
+    {
+      "version": "20260713083424",
+      "name": "add_cryptobot_netlify_runtime_role",
+      "normalizedSha256": "56685f6ef07201383a8da69a2131f8cc524c053e372714ea623b1749426793ef"
+    },
+    {
+      "version": "20260714023409",
+      "name": "lock_down_control_plane_data_api",
+      "normalizedSha256": "41eedd9e1e70be380cad9238d8fa5382ba6d3c7187b55d00a6d116bf3ab7257f"
+    },
+    {
+      "version": "20260714025452",
+      "name": "add_weex_oauth_and_executor_control_plane",
+      "normalizedSha256": "3df581e9ad9f23769bc76f0ea531dd34c51cc9a4b91c0cc3da0d688fc6bc5eb0"
+    },
+    {
+      "version": "20260714025556",
+      "name": "harden_private_executor_tables",
+      "normalizedSha256": "048c4d0d1d447e27d2011374befd16b986fe6c895beade89f83e092976640336"
+    },
+    {
+      "version": "20260714030423",
+      "name": "add_private_deny_policies",
+      "normalizedSha256": "d0838873e74659043578cb94f2f0f41dd1c735351fa5a12d079ed0a87cf57948"
+    },
+    {
+      "version": "20260714112512",
+      "name": "add_single_use_executor_oauth_handoffs",
+      "normalizedSha256": "2340e76e578f26d91877ac2be5218519ffdd0d060052a67e1730bfe558c71d75"
+    },
+    {
+      "version": "20260714113211",
+      "name": "add_cryptobot_executor_runtime_role",
+      "normalizedSha256": "7c8a6818a265f311d9f0084eeae827cbe5e752ba023212a1cb5b35d55640238d"
+    },
+    {
+      "version": "20260723154144",
+      "name": "add_cloud_strategy_runtime",
+      "normalizedSha256": "3d94a5bc4fb9013b46b12285cd4026ba9cc5de548fda5fda8f1f30cb5c79c1ed"
+    },
+    {
+      "version": "20260724012821",
+      "name": "add_cloud_run_account_performance",
+      "normalizedSha256": "e0c3814c24fcf8dc5e574455602d195cbe314535bf79ec7752f17922e192e25e"
+    },
+    {
+      "version": "20260724052700",
+      "name": "grant_netlify_cloud_control_plane",
+      "normalizedSha256": "cf54ad1b6abf4938c07094b754d4b5eb542bdab08b60c7bb2bd3141df6e39484"
+    },
+    {
+      "version": "20260724074817",
+      "name": "sync_weex_account_dashboard",
+      "normalizedSha256": "4a45757546cacd032bea383defa132a817a06b7cbe00fac75dcd0a5e6636f40d"
+    },
+    {
+      "version": "20260724074924",
+      "name": "index_weex_account_foreign_keys",
+      "normalizedSha256": "cb8dbc3ba6fe056b7b86d28e15f6d612583c69560db3660b82f08fc717ade7d1"
+    },
+    {
+      "version": "20260724075015",
+      "name": "index_cloud_run_foreign_keys",
+      "normalizedSha256": "fa3bc3b547aeb77f94695b2d62751d93f942357bc53ab9c7745a65db8e156643"
+    },
+    {
+      "version": "20260725073109",
+      "name": "add_cloud_run_daily_equity",
+      "normalizedSha256": "3ab9f95fa716b51f83501f203b519cfd907ee45b29754aa9e1d5fc976bdf86f1"
+    },
+    {
+      "version": "20260725131638",
+      "name": "add_strategy_publications",
+      "normalizedSha256": "64bde62974fe855fa8b61beb6f70ecd369237b8a52c836b616426cd62b166990"
+    },
+    {
+      "version": "20260725131814",
+      "name": "index_strategy_publication_foreign_keys",
+      "normalizedSha256": "7335fe4de54dcc04cd2fe51ef275fca2b927c1258520839b03ca5a5bc03a87f5"
+    },
+    {
+      "version": "20260726132244",
+      "name": "bound_netlify_serverless_connections",
+      "normalizedSha256": "7731d8ea7de2523cfc98d48185eb17f78ecb433920c3aefcf45cd4f14edbc2f3"
+    },
+    {
+      "version": "20260727051432",
+      "name": "make_strategy_referral_optional",
+      "normalizedSha256": "60cfeeaf25fb179d530f3aa455a67a31f5ea4f5929d25e8c1dfbb944e8937a1b"
+    },
+    {
+      "version": "20260728052936",
+      "name": "harden_netlify_role_and_audit_events",
+      "normalizedSha256": "5b89a309939eaf9c0dbff3de729b956ca0528b53bf94d2b9308ea8a11acd3e8e"
+    }
+  ]
+}

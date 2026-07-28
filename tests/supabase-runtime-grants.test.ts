@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 describe("Supabase server runtime grants", () => {
   it("removes Netlify BYPASSRLS, private-schema access, and broad mutation grants", async () => {
     const migration = await readFile(resolve(
-      "supabase/migrations/20260728050917_harden_netlify_role_and_audit_events.sql",
+      "supabase/migrations/20260728052936_harden_netlify_role_and_audit_events.sql",
     ), "utf8");
 
     expect(migration).toMatch(/alter role cryptobot_netlify[\s\S]*\bnobypassrls\b/i);
@@ -26,7 +26,7 @@ describe("Supabase server runtime grants", () => {
 
   it("makes the production audit ledger append-only for every application role", async () => {
     const migration = await readFile(resolve(
-      "supabase/migrations/20260728050917_harden_netlify_role_and_audit_events.sql",
+      "supabase/migrations/20260728052936_harden_netlify_role_and_audit_events.sql",
     ), "utf8");
 
     expect(migration).toMatch(/create or replace function private\.reject_audit_event_mutation\(\)/i);
@@ -42,7 +42,7 @@ describe("Supabase server runtime grants", () => {
 
   it("lets the Netlify control plane read WEEX connection state and manage cloud runs only", async () => {
     const migration = await readFile(resolve(
-      "supabase/migrations/20260724054500_grant_netlify_cloud_control_plane.sql",
+      "supabase/migrations/20260724052700_grant_netlify_cloud_control_plane.sql",
     ), "utf8");
 
     expect(migration).toMatch(
