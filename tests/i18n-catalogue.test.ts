@@ -1,6 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { extname, join, resolve, sep } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import ar from "@/lib/i18n/generated/ar.json";
@@ -17,11 +16,36 @@ const chinesePattern = /[\u3400-\u9fff]/u;
 const placeholderPattern = /__\d+__/gu;
 const invariantPattern = /\d+(?:[.,／/%×-]\d+)*%?|WEEX|CryptoBot Labs|API Key|JSON|JavaScript|OAuth|QR Code|USDT|RSI|MACD|ATR|EMA|SMA|CCI|MFI|OBV|ROC|VWAP|ADX|SAR/gu;
 
+function projectFiles(
+  directories: readonly string[],
+  extensions: ReadonlySet<string>,
+  exclude: (normalizedPath: string) => boolean = () => false,
+): string[] {
+  const files: string[] = [];
+
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(resolve(root, directory), { withFileTypes: true })) {
+      const relativePath = join(directory, entry.name);
+      const normalizedPath = relativePath.split(sep).join("/");
+
+      if (entry.isDirectory()) {
+        visit(relativePath);
+      } else if (extensions.has(extname(entry.name)) && !exclude(normalizedPath)) {
+        files.push(normalizedPath);
+      }
+    }
+  };
+
+  directories.forEach(visit);
+  return files.sort();
+}
+
 function sourceStrings(): string[] {
-  const files = execFileSync("rg", [
-    "--files", "app", "components", "data", "lib", "packages/trading-core/src", "packages/weex-client/src",
-    "-g", "*.ts", "-g", "*.tsx", "-g", "!lib/i18n/**", "-g", "!**/*.d.ts",
-  ], { cwd: root, encoding: "utf8" }).trim().split("\n").filter(Boolean);
+  const files = projectFiles(
+    ["app", "components", "data", "lib", "packages/trading-core/src", "packages/weex-client/src"],
+    new Set([".ts", ".tsx"]),
+    (file) => file.startsWith("lib/i18n/") || file.endsWith(".d.ts"),
+  );
   const found = new Set<string>();
 
   for (const file of files) {
@@ -55,8 +79,7 @@ function sourceStrings(): string[] {
 }
 
 function englishEyebrowStrings(): string[] {
-  const files = execFileSync("rg", ["--files", "app", "components", "-g", "*.tsx"], { cwd: root, encoding: "utf8" })
-    .trim().split("\n").filter(Boolean);
+  const files = projectFiles(["app", "components"], new Set([".tsx"]));
   const found = new Set<string>();
 
   for (const file of files) {
@@ -83,8 +106,7 @@ function englishEyebrowStrings(): string[] {
 }
 
 function englishUiTextStrings(): string[] {
-  const files = execFileSync("rg", ["--files", "app", "components", "-g", "*.tsx"], { cwd: root, encoding: "utf8" })
-    .trim().split("\n").filter(Boolean);
+  const files = projectFiles(["app", "components"], new Set([".tsx"]));
   const found = new Set<string>();
 
   for (const file of files) {

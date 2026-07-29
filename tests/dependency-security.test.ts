@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("production dependency security pins", () => {
@@ -68,5 +68,26 @@ describe("production dependency security pins", () => {
     expect(checker).toContain("reviewedProductionLicenses");
     expect(checker).toContain('"@remotion/player"');
     expect(workflow).toContain("pnpm licenses:check");
+  });
+
+  it("keeps CI-only test requirements portable and explicit", async () => {
+    const testFiles = (await readdir("tests"))
+      .filter((file) => /\.test\.tsx?$/u.test(file));
+    const testSources = await Promise.all(testFiles.map(async (file) => ({
+      file,
+      source: await readFile(`tests/${file}`, "utf8"),
+    })));
+    const sqliteTests = testSources.filter(({ source }) => (
+      /^\s*import\b[^\n]*from "node:sqlite";/mu.test(source)
+    ));
+
+    expect(sqliteTests.length).toBeGreaterThanOrEqual(15);
+    for (const { file, source } of sqliteTests) {
+      expect(source, file).toMatch(/^\/\/ @vitest-environment node\n/u);
+    }
+
+    const i18nTest = await readFile("tests/i18n-catalogue.test.ts", "utf8");
+    expect(i18nTest).not.toContain('execFileSync("rg"');
+    expect(i18nTest).not.toContain('from "node:child_process"');
   });
 });
