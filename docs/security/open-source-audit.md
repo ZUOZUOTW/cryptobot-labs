@@ -55,10 +55,17 @@ Public `.env` and Terraform examples use RFC-reserved or example values.
 
 - Pull requests run the full test, lint, production build, and Gitleaks history
   scan.
-- The publication branch upgraded Next.js to `16.2.12` and applies narrowly
-  scoped `next>sharp=0.35.3` and `next>postcss=8.5.24` overrides. A pnpm
-  production audit reports no known vulnerabilities, and CI fails on future
-  high/critical production advisories.
+- The publication branch upgraded Next.js to `16.2.12`, Electron to `43.2.0`,
+  Electron Forge to `7.11.2`, React to `19.2.8`, and applies reviewed
+  transitive security overrides. A complete pnpm audit covers production,
+  desktop-runtime, development, and build dependencies; CI fails on future
+  high/critical advisories. The registry range for
+  `GHSA-mh99-v99m-4gvg` does not yet recognize the CommonJS-compatible
+  `brace-expansion@2.1.3` backport; this single advisory is ignored only after
+  converging all legacy consumers on that reviewed patched source, with
+  lockfile regression tests preventing older versions from returning.
+- Registry-signature verification passed for all 964 packages in the
+  remediation lockfile.
 - GitHub private vulnerability reporting and secret scanning should be enabled
   before or at publication.
 - Branch protection must require the publication checks and prevent force

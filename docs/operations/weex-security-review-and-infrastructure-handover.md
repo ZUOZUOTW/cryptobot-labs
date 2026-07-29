@@ -20,11 +20,19 @@ Status date: 2026-07-29 (Asia/Taipei)
 
 ## Today: immutable security-review submission
 
-The review snapshot is the already-tested public `main` commit:
+The original tested public `main` baseline was:
 
 ```text
 fcdf5d7281c342f91d49fbf83526e776cd9b4654
 ```
+
+A complete dependency audit performed after that freeze found high/critical
+desktop-runtime and build-chain advisories that the former production-only
+audit did not cover. Do not submit the baseline archive as the final review
+snapshot. The final delivery commit is the security-remediation branch head
+after all required CI and Agent packaging checks pass. Record that exact full
+SHA in the external delivery evidence; do not hard-code a prospective commit
+SHA in this document because doing so would change the commit being identified.
 
 Repository:
 
@@ -70,7 +78,7 @@ also includes:
 - `docs/operations/production-cutover.md`;
 - `.env.example`, with placeholders only;
 - `pnpm-lock.yaml`, workspace manifests, and the dependency-license checker;
-- successful PR and `main` CI evidence for tests, lint, build, production
+- successful PR and `main` CI evidence for tests, lint, build, complete
   dependency audit, license policy, and complete-history Gitleaks scanning;
 - the production deployment commit reference, without private deploy IDs or
   provider credentials.

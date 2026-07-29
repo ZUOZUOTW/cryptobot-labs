@@ -35,6 +35,7 @@ describe("Agent release gate", () => {
     expect(config).toContain("EnableEmbeddedAsarIntegrityValidation");
     expect(config).toContain("OnlyLoadAppFromAsar");
     expect(config).toContain("EnableNodeOptionsEnvironmentVariable");
+    expect(config).toContain("[FuseV1Options.WasmTrapHandlers]: true");
     expect(config).toContain('execFileSync("codesign"');
     expect(config).toContain('"--sign", "-"');
     expect(config).toContain("packagedMacApps(result.outputPaths)");
