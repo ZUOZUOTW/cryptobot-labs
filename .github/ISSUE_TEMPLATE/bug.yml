@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem using synthetic data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, tokens, session cookies, database URLs, private
+        order history, personal information, or production resource IDs.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or release
+      description: Exact commit SHA, tag, or Agent version.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Web control plane
+        - AWS Executor
+        - Desktop Agent
+        - WEEX client
+        - Trading core
+        - Infrastructure or deployment
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+      description: Minimal steps and synthetic inputs only.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I removed credentials, private account data, and production resource identifiers.
+          required: true
+        - label: This report does not require a real-money order to reproduce.
+          required: true

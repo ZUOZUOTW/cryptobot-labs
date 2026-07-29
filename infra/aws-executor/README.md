@@ -6,18 +6,14 @@ The first production bootstrap uses the currently authenticated AWS console sess
 
 CloudShell's persistent home volume is intentionally small, so Terraform provider binaries are kept in `/tmp/cryptobot-labs-terraform-data`; Terraform state itself remains in the protected S3 backend.
 
-Applied production base (2026-07-14):
+The public stack deliberately contains no concrete production account ID, instance ID, state bucket,
+reserved egress IP, Cloudflare zone ID, Supabase project host, or deploy ID. Those values stay in private
+deployment evidence. The checked-in examples use reserved placeholders and require the operator to supply
+the target account explicitly.
 
-- AWS account / region: `148905583129` / `ap-northeast-1`
-- Executor: `i-089afdd187c2cd0d8` (`t3.small`, Amazon Linux 2023, SSM Online)
-- Fixed egress IP: `35.73.141.178`
-- KMS alias: `alias/cryptobot-labs-production-weex` (annual rotation enabled)
-- Runtime secret container: `cryptobot-labs/production/executor-runtime` (`AWSCURRENT` is populated outside Terraform; it must include `WEEX_BROKER_ID=WEEX111162`; WEEX OAuth and live trading remain disabled)
-- Terraform state: `s3://cryptobot-labs-terraform-state-148905583129/production/aws-executor.tfstate`
-- Public API before the security-edge rollout: `https://api.cryptobotlabs.app` (Cloudflare DNS-only A record, Caddy/Let’s Encrypt TLS)
-- Supabase Session Pooler: `aws-1-ap-northeast-2.pooler.supabase.com:5432` (TLS required; runtime role `cryptobot_executor`)
-
-1. In AWS CloudShell run `bootstrap/bootstrap-cloudshell.sh`, then review `production-plan.txt`.
+1. In AWS CloudShell export `CBL_AWS_ACCOUNT_ID` with the 12-digit target account. Optionally set
+   `CBL_AWS_REGION` and `CBL_TERRAFORM_STATE_BUCKET`, then run `bootstrap/bootstrap-cloudshell.sh` and
+   review `production-plan.txt`.
 2. Run `bootstrap/apply-cloudshell.sh` only after the plan contains the expected additions and no deletes.
 3. Run `bootstrap/verify-cloudshell.sh`; the instance must be running, IMDSv2 required, KMS rotation enabled, and the security group must have no ingress during the base phase.
 4. Put runtime values directly into the created Secrets Manager secret. `WEEX_BROKER_ID` is required runtime metadata, while API keys, OAuth client credentials, database credentials, and handoff secrets remain secrets. Never put secret values in `.tfvars`, Terraform resources, user-data, or source control.

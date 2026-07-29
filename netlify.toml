@@ -3,7 +3,7 @@
   publish = ".next"
 
 [build.environment]
-  NODE_VERSION = "22.13.0"
+  NODE_VERSION = "22.23.1"
   DEMO_MODE = "false"
   WEEX_AUTH_STAGE = "transition"
   SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL"

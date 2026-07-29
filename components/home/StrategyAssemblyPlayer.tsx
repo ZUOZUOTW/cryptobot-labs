@@ -1,16 +1,13 @@
 "use client";
 
-import { Player, type PlayerRef } from "@remotion/player";
-import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useI18n } from "@/components/I18nProvider";
 import type { Locale } from "@/lib/i18n/locales";
 import {
-  AbsoluteFill,
-  Easing,
-  interpolate,
-  Sequence,
-  useCurrentFrame,
-} from "remotion";
+  easeOutCubic,
+  interpolatePoints,
+  NativeAnimationStage,
+  useLoopingFrame,
+} from "./NativeAnimationStage";
 
 const moduleDefinitions = [
   { code: "SIGNAL", name: "RSI 反彈", accent: "#55e7ff", start: 12 },
@@ -26,6 +23,7 @@ type StrategyModule = {
 };
 
 type StrategyAssemblyCompositionProps = {
+  frame: number;
   locale: Locale;
   eyebrow: string;
   title: string;
@@ -36,19 +34,23 @@ type StrategyAssemblyCompositionProps = {
   readyText: string;
 };
 
-const clamp = {
-  extrapolateLeft: "clamp",
-  extrapolateRight: "clamp",
-} as const;
-
 function ModuleCard({
-  code,
-  name,
   accent,
+  code,
+  frame,
   index,
   locale,
-}: StrategyModule & { index: number; locale: Locale }) {
-  const frame = useCurrentFrame();
+  name,
+  start,
+}: StrategyModule & { frame: number; index: number; locale: Locale }) {
+  const localFrame = frame - start;
+  const progress = localFrame < 0
+    ? 0
+    : interpolatePoints(localFrame, [0, 14], [0, 1], easeOutCubic);
+  const glow = localFrame < 0
+    ? 8
+    : interpolatePoints(localFrame, [0, 16, 30], [8, 30, 18]);
+  const horizontalStart = index === 1 ? 0 : index === 0 ? -70 : 70;
   const isRussian = locale === "ru";
   const isJapanese = locale === "ja";
 
@@ -65,22 +67,9 @@ function ModuleCard({
         border: `1px solid ${accent}88`,
         borderRadius: 18,
         background: `linear-gradient(145deg, ${accent}22, rgba(4, 12, 28, 0.94) 56%)`,
-        boxShadow: `0 0 ${interpolate(frame, [0, 16, 30], [8, 30, 18], clamp)}px ${accent}33`,
-        opacity: interpolate(frame, [0, 10], [0, 1], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }),
-        translate: `${interpolate(frame, [0, 14], [index === 1 ? 0 : index === 0 ? -70 : 70, 0], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        })}px ${interpolate(frame, [0, 14], [-34, 0], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        })}px`,
-        scale: interpolate(frame, [0, 14], [0.82, 1], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }),
+        boxShadow: `0 0 ${glow}px ${accent}33`,
+        opacity: localFrame < 0 ? 0 : interpolatePoints(localFrame, [0, 10], [0, 1], easeOutCubic),
+        transform: `translate(${horizontalStart * (1 - progress)}px, ${-34 * (1 - progress)}px) scale(${0.82 + (0.18 * progress)})`,
       }}
     >
       <div
@@ -94,14 +83,7 @@ function ModuleCard({
           opacity: 0.16,
         }}
       />
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <span
           style={{
             color: accent,
@@ -153,10 +135,9 @@ function ModuleCard({
       >
         <div
           style={{
-            width: `${interpolate(frame, [7, 25], [0, 100], {
-              ...clamp,
-              easing: Easing.bezier(0.16, 1, 0.3, 1),
-            })}%`,
+            width: `${localFrame < 0
+              ? 0
+              : interpolatePoints(localFrame, [7, 25], [0, 100], easeOutCubic)}%`,
             height: "100%",
             borderRadius: 99,
             background: accent,
@@ -168,15 +149,29 @@ function ModuleCard({
   );
 }
 
-function AssemblyBus({ label, modules }: { label: string; modules: StrategyModule[] }) {
-  const frame = useCurrentFrame();
-  const beam = interpolate(frame, [0, 34], [0, 100], {
-    ...clamp,
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
-  });
+function AssemblyBus({
+  frame,
+  label,
+  modules,
+}: {
+  frame: number;
+  label: string;
+  modules: StrategyModule[];
+}) {
+  const localFrame = frame - 72;
+  const beam = localFrame < 0
+    ? 0
+    : interpolatePoints(localFrame, [0, 34], [0, 100], easeOutCubic);
 
   return (
-    <div style={{ position: "relative", height: 60, margin: "2px 8% 0" }}>
+    <div
+      style={{
+        position: "relative",
+        height: 60,
+        margin: "2px 8% 0",
+        opacity: localFrame < 0 ? 0 : 1,
+      }}
+    >
       <div
         style={{
           position: "absolute",
@@ -202,7 +197,7 @@ function AssemblyBus({ label, modules }: { label: string; modules: StrategyModul
             borderRadius: 99,
             background: "#071122",
             boxShadow: beam >= position ? `0 0 20px ${modules[index].accent}` : "none",
-            translate: "-50% 0",
+            transform: "translateX(-50%)",
           }}
         />
       ))}
@@ -216,8 +211,8 @@ function AssemblyBus({ label, modules }: { label: string; modules: StrategyModul
           fontSize: 12,
           fontWeight: 700,
           letterSpacing: "0.16em",
-          opacity: interpolate(frame, [15, 28], [0, 1], clamp),
-          translate: "-50% 0",
+          opacity: localFrame < 0 ? 0 : interpolatePoints(localFrame, [15, 28], [0, 1]),
+          transform: "translateX(-50%)",
           whiteSpace: "nowrap",
         }}
       >
@@ -227,9 +222,23 @@ function AssemblyBus({ label, modules }: { label: string; modules: StrategyModul
   );
 }
 
-function ReadyState({ label, text, locale }: { label: string; text: string; locale: Locale }) {
-  const frame = useCurrentFrame();
-  const pulse = interpolate(frame % 32, [0, 16, 31], [0.9, 1.06, 0.9], clamp);
+function ReadyState({
+  frame,
+  label,
+  locale,
+  text,
+}: {
+  frame: number;
+  label: string;
+  locale: Locale;
+  text: string;
+}) {
+  const localFrame = frame - 112;
+  const entrance = localFrame < 0
+    ? 0
+    : interpolatePoints(localFrame, [0, 14], [0, 1], easeOutCubic);
+  const pulseFrame = Math.max(0, localFrame) % 32;
+  const pulse = interpolatePoints(pulseFrame, [0, 16, 31], [0.9, 1.06, 0.9]);
 
   return (
     <div
@@ -245,14 +254,8 @@ function ReadyState({ label, text, locale }: { label: string; text: string; loca
         borderRadius: 18,
         background: "linear-gradient(90deg, rgba(85,231,255,0.1), rgba(101,242,189,0.14))",
         boxShadow: "0 0 38px rgba(101,242,189,0.18)",
-        opacity: interpolate(frame, [0, 14], [0, 1], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }),
-        scale: interpolate(frame, [0, 14], [0.88, 1], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }),
+        opacity: localFrame < 0 ? 0 : entrance,
+        transform: `scale(${0.88 + (0.12 * entrance)})`,
       }}
     >
       <div
@@ -268,7 +271,7 @@ function ReadyState({ label, text, locale }: { label: string; text: string; loca
           fontSize: 25,
           fontWeight: 900,
           boxShadow: "0 0 24px rgba(101,242,189,0.7)",
-          scale: pulse,
+          transform: `scale(${pulse})`,
         }}
       >
         ✓
@@ -306,22 +309,24 @@ function ReadyState({ label, text, locale }: { label: string; text: string; loca
 }
 
 export function StrategyAssemblyComposition({
-  locale,
-  eyebrow,
-  title,
-  liveBuild,
-  modules,
   assemblyBus,
+  eyebrow,
+  frame,
+  liveBuild,
+  locale,
+  modules,
   readyLabel,
   readyText,
+  title,
 }: StrategyAssemblyCompositionProps) {
-  const frame = useCurrentFrame();
-  const scanX = interpolate(frame % 90, [0, 89], [-15, 115], clamp);
+  const scanX = interpolatePoints(frame % 90, [0, 89], [-15, 115]);
 
   return (
-    <AbsoluteFill
+    <div
       data-i18n-ignore
       style={{
+        position: "absolute",
+        inset: 0,
         overflow: "hidden",
         background:
           "radial-gradient(circle at 50% 48%, rgba(139,99,255,0.2), transparent 48%), linear-gradient(145deg, #071529, #040a16 68%)",
@@ -360,7 +365,15 @@ export function StrategyAssemblyComposition({
           padding: "32px 40px 28px",
         }}
       >
-        <div style={{ display: "flex", minHeight: 75, alignItems: "flex-start", justifyContent: "space-between", gap: 18 }}>
+        <div
+          style={{
+            display: "flex",
+            minHeight: 75,
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 18,
+          }}
+        >
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
               style={{
@@ -421,26 +434,23 @@ export function StrategyAssemblyComposition({
           }}
         >
           {modules.map((module, index) => (
-            <Sequence key={module.code} from={module.start} layout="none">
-              <ModuleCard {...module} index={index} locale={locale} />
-            </Sequence>
+            <ModuleCard key={module.code} {...module} frame={frame} index={index} locale={locale} />
           ))}
         </div>
 
-        <Sequence from={72} layout="none">
-          <AssemblyBus label={assemblyBus} modules={modules} />
-        </Sequence>
-        <Sequence from={112} layout="none">
-          <ReadyState label={readyLabel} text={readyText} locale={locale} />
-        </Sequence>
+        <AssemblyBus frame={frame} label={assemblyBus} modules={modules} />
+        <ReadyState frame={frame} label={readyLabel} text={readyText} locale={locale} />
       </div>
-    </AbsoluteFill>
+    </div>
   );
 }
 
 export function StrategyAssemblyPlayer({ embedded = false }: { embedded?: boolean }) {
-  const playerRef = useRef<PlayerRef>(null);
-  const mounted = useSyncExternalStore(() => () => undefined, () => true, () => false);
+  const frame = useLoopingFrame({
+    durationInFrames: 180,
+    fps: 30,
+    reducedMotionFrame: 179,
+  });
   const { locale, t } = useI18n();
   const translatedModules = moduleDefinitions.map((module) => ({
     ...module,
@@ -448,43 +458,25 @@ export function StrategyAssemblyPlayer({ embedded = false }: { embedded?: boolea
     name: t(module.name),
   }));
 
-  useEffect(() => {
-    if (mounted) playerRef.current?.play();
-  }, [mounted]);
-
   return (
     <div
       aria-label={embedded ? undefined : t("策略模組依序加入並完成組裝的動畫")}
       className={embedded ? "deferred-player__content" : "strategy-assembly-player glass-panel"}
       role={embedded ? undefined : "img"}
     >
-      {mounted ? (
-        <Player
-          ref={playerRef}
-          component={StrategyAssemblyComposition}
-          inputProps={{
-            locale,
-            eyebrow: t("VISUAL STRATEGY ASSEMBLY"),
-            title: t("選擇模組，建立你的交易流程"),
-            liveBuild: t("LIVE BUILD"),
-            modules: translatedModules,
-            assemblyBus: t("ASSEMBLY BUS / 03 MODULES"),
-            readyLabel: t("STRATEGY READY"),
-            readyText: t("自動化策略組裝完成"),
-          }}
-          durationInFrames={180}
-          fps={30}
-          compositionWidth={840}
-          compositionHeight={500}
-          autoPlay
-          loop
-          initiallyMuted
-          acknowledgeRemotionLicense
-          controls={false}
-          clickToPlay={false}
-          style={{ width: "100%", height: "100%" }}
+      <NativeAnimationStage>
+        <StrategyAssemblyComposition
+          assemblyBus={t("ASSEMBLY BUS / 03 MODULES")}
+          eyebrow={t("VISUAL STRATEGY ASSEMBLY")}
+          frame={frame}
+          liveBuild={t("LIVE BUILD")}
+          locale={locale}
+          modules={translatedModules}
+          readyLabel={t("STRATEGY READY")}
+          readyText={t("自動化策略組裝完成")}
+          title={t("選擇模組，建立你的交易流程")}
         />
-      ) : <span className="player-loading" aria-hidden="true" />}
+      </NativeAnimationStage>
     </div>
   );
 }

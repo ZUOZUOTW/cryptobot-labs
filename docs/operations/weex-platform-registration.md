@@ -6,11 +6,11 @@ Prepared production values:
 
 - Platform name: `CryptoBot Labs`
 - Broker ID: `WEEX111162`
-- Broker UID: `5459424221` (operations metadata only; never place it in an order ID)
+- Broker UID: maintained in the private WEEX operations record; never place it in an order ID
 - Privacy policy: `https://www.cryptobotlabs.app/privacy`
 - Terms of service: `https://www.cryptobotlabs.app/terms`
 - Callback URL: `https://api.cryptobotlabs.app/oauth/weex/callback`
-- Outgoing IP: `35.73.141.178` (observed from the executor and reserved by Elastic IP)
+- Outgoing IP: the reserved executor egress IP from private deployment evidence
 
 All new Spot, Futures, and Futures Demo submissions must send a unique `newClientOrderId` in the form
 `b-WEEX111162-<random_string>`. CryptoBot Labs uses a deterministic, URL-safe 22-character hash suffix,

@@ -3,6 +3,10 @@ on:
   pull_request:
     paths: ["apps/agent/**", "packages/trading-core/**", "packages/weex-client/**", "pnpm-lock.yaml"]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   internal-package:
     strategy:
@@ -14,17 +18,17 @@ jobs:
           - { os: windows-2022, label: windows-x64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22.13.0, cache: pnpm }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with: { version: 11.9.0 }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22.23.1, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @cryptobot-labs/agent test
       - run: pnpm --filter @cryptobot-labs/agent typecheck
       - run: pnpm --filter @cryptobot-labs/agent make
       - run: node scripts/verify-agent-artifact.mjs --internal-test apps/agent/out
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "internal-test-unsigned-${{ matrix.label }}"
           path: apps/agent/out/make/**

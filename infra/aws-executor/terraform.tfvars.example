@@ -1,7 +1,7 @@
-aws_region         = "ap-northeast-1"
-instance_type      = "t3.small"
-api_hostname       = "api.cryptobotlabs.app"
-cloudflare_zone_id = "cc6164848f351ee301c0efebc3533520"
+aws_region            = "ap-northeast-1"
+instance_type         = "t3.small"
+api_hostname          = "api.example.com"
+cloudflare_zone_id    = "00000000000000000000000000000000"
 manage_cloudflare_dns = false
 enable_public_https   = false
 # cloudflare_ipv4_cidrs defaults to the complete list at

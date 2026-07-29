@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly EXPECTED_ACCOUNT_ID="148905583129"
-readonly AWS_REGION="ap-northeast-1"
+readonly EXPECTED_ACCOUNT_ID="${CBL_AWS_ACCOUNT_ID:?Set CBL_AWS_ACCOUNT_ID to the 12-digit target AWS account ID}"
+readonly AWS_REGION="${CBL_AWS_REGION:-ap-northeast-1}"
 readonly ROLE_ARN="arn:aws:iam::${EXPECTED_ACCOUNT_ID}:role/CryptoBotLabsProvisioner"
 readonly TF_DATA_DIR="/tmp/cryptobot-labs-terraform-data"
 export TF_DATA_DIR
+
+if [[ ! "${EXPECTED_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
+  echo "CBL_AWS_ACCOUNT_ID must be exactly 12 digits." >&2
+  exit 1
+fi
 
 actual_account_id="$(aws sts get-caller-identity --query Account --output text)"
 if [[ "${actual_account_id}" != "${EXPECTED_ACCOUNT_ID}" ]]; then

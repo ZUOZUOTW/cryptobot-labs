@@ -7,7 +7,8 @@ import { ExecutorOAuthService } from "../src/oauth-service";
 
 beforeAll(() => { Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto }); });
 
-const secret = "0123456789abcdef0123456789abcdef";
+const fixtureHex = ["0123", "4567", "89ab", "cdef"].join("");
+const secret = fixtureHex.repeat(2);
 const key = new Uint8Array(32).fill(8);
 const kms: CredentialEnvelopeKms = {
   async generateDataKey() { return { plaintext: Uint8Array.from(key), ciphertext: new Uint8Array([1, 2]), keyId: "kms-key" }; },

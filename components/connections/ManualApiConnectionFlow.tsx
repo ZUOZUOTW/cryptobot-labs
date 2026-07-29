@@ -11,9 +11,13 @@ interface ConnectionState {
   withdrawalAccessAbsent?: boolean;
 }
 
+const executorEgressIp = process.env.NEXT_PUBLIC_EXECUTOR_EGRESS_IP?.trim();
+
 const failureMessages: Record<string, string> = {
   invalid_credentials: "WEEX 無法核對這組 API Key、Secret Key 或 Passphrase。請重新複製三項資料；Passphrase 無法找回時需建立新 API。",
-  ip_not_allowed: "WEEX 拒絕目前來源 IP。請確認白名單包含 35.73.141.178，儲存後等待設定生效再試。",
+  ip_not_allowed: executorEgressIp
+    ? `WEEX 拒絕目前來源 IP。請確認白名單包含 ${executorEgressIp}，儲存後等待設定生效再試。`
+    : "WEEX 拒絕目前來源 IP。部署者尚未公開固定出口 IP，請先向營運方確認再更新白名單。",
   permission_denied: "這組 API 尚未開啟 Readonly、Spot 或 Futures 真倉交易權限，或新權限仍在生效中。請檢查設定並稍後再試。",
   clock_error: "WEEX 拒絕請求時間。雲端時間校正暫時異常，請稍後重試。",
   rate_limited: "WEEX 暫時限制請求頻率，請稍後再試。",
@@ -106,7 +110,7 @@ export function ManualApiConnectionFlow() {
   return <section className="connection-stage glass-panel" aria-labelledby="manual-api-form-title">
     <div className="connection-stage__heading"><span className="connection-step">01</span><div>
       <p className="eyebrow">CLOUD CREDENTIAL VAULT</p><h2 id="manual-api-form-title">直接輸入 WEEX API</h2>
-      <p>不需安裝任何程式。固定出口 IP 為 <strong>35.73.141.178</strong>；建立 API 時請加入白名單，只啟用 Readonly 與需要的 Spot／Futures 權限。</p>
+      <p>不需安裝任何程式。固定出口 IP 為 <strong>{executorEgressIp ?? "尚未由部署者設定"}</strong>；建立 API 時請加入白名單，只啟用 Readonly 與需要的 Spot／Futures 權限。</p>
     </div></div>
     {checking && <p className="control-feedback" role="status">正在確認已綁定的 WEEX API…</p>}
     {active && !editing && <div className="connection-active-summary" role="status">

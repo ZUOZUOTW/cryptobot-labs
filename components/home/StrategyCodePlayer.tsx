@@ -1,19 +1,11 @@
 "use client";
 
-import { Player, type PlayerRef } from "@remotion/player";
-import { useEffect, useRef, useSyncExternalStore } from "react";
 import {
-  AbsoluteFill,
-  Easing,
-  interpolate,
-  Sequence,
-  useCurrentFrame,
-} from "remotion";
-
-const clamp = {
-  extrapolateLeft: "clamp",
-  extrapolateRight: "clamp",
-} as const;
+  easeOutCubic,
+  interpolatePoints,
+  NativeAnimationStage,
+  useLoopingFrame,
+} from "./NativeAnimationStage";
 
 const codeLines = [
   { text: 'import { strategy, rsi } from "@cryptobot/lab";', color: "#8cecff", start: 12 },
@@ -23,16 +15,22 @@ const codeLines = [
 ] as const;
 
 function TypedLine({
-  text,
   color,
+  frame,
   line,
+  start,
+  text,
 }: {
-  text: string;
   color: string;
+  frame: number;
   line: number;
+  start: number;
+  text: string;
 }) {
-  const frame = useCurrentFrame();
-  const characters = Math.floor(interpolate(frame, [0, 22], [0, text.length], clamp));
+  const localFrame = frame - start;
+  const characters = localFrame < 0
+    ? 0
+    : Math.floor(interpolatePoints(localFrame, [0, 22], [0, text.length]));
   const visibleText = text.slice(0, characters);
 
   return (
@@ -43,7 +41,7 @@ function TypedLine({
         gap: 16,
         minHeight: 38,
         alignItems: "center",
-        opacity: interpolate(frame, [0, 4], [0, 1], clamp),
+        opacity: localFrame < 0 ? 0 : interpolatePoints(localFrame, [0, 4], [0, 1]),
       }}
     >
       <span
@@ -71,13 +69,13 @@ function TypedLine({
         {visibleText}
         <span
           style={{
-            display: characters < text.length ? "inline-block" : "none",
+            display: characters > 0 && characters < text.length ? "inline-block" : "none",
             width: 8,
             height: 23,
             marginLeft: 3,
             verticalAlign: "middle",
             background: "#f3f7ff",
-            opacity: interpolate(frame % 16, [0, 7, 8, 15], [1, 1, 0, 0], clamp),
+            opacity: interpolatePoints(localFrame % 16, [0, 7, 8, 15], [1, 1, 0, 0]),
           }}
         />
       </span>
@@ -85,8 +83,14 @@ function TypedLine({
   );
 }
 
-function ValidationResult() {
-  const frame = useCurrentFrame();
+function ValidationResult({ frame }: { frame: number }) {
+  const localFrame = frame - 138;
+  const opacity = localFrame < 0
+    ? 0
+    : interpolatePoints(localFrame, [0, 13], [0, 1], easeOutCubic);
+  const offset = localFrame < 0
+    ? 18
+    : interpolatePoints(localFrame, [0, 13], [18, 0], easeOutCubic);
 
   return (
     <div
@@ -101,14 +105,8 @@ function ValidationResult() {
         borderRadius: 14,
         background: "linear-gradient(90deg, rgba(101,242,189,0.13), rgba(76,221,255,0.06))",
         boxShadow: "0 0 30px rgba(101,242,189,0.12)",
-        opacity: interpolate(frame, [0, 13], [0, 1], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }),
-        translate: `0 ${interpolate(frame, [0, 13], [18, 0], {
-          ...clamp,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        })}px`,
+        opacity,
+        transform: `translateY(${offset}px)`,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -170,14 +168,15 @@ function ValidationResult() {
   );
 }
 
-export function StrategyCodeComposition() {
-  const frame = useCurrentFrame();
-  const scanTop = interpolate(frame, [110, 139], [18, 86], clamp);
-  const scanOpacity = interpolate(frame, [106, 112, 136, 142], [0, 1, 1, 0], clamp);
+export function StrategyCodeComposition({ frame }: { frame: number }) {
+  const scanTop = interpolatePoints(frame, [110, 139], [18, 86]);
+  const scanOpacity = interpolatePoints(frame, [106, 112, 136, 142], [0, 1, 1, 0]);
 
   return (
-    <AbsoluteFill
+    <div
       style={{
+        position: "absolute",
+        inset: 0,
         overflow: "hidden",
         background:
           "radial-gradient(circle at 20% 15%, rgba(139,99,255,0.17), transparent 42%), linear-gradient(145deg, #071326, #040914 72%)",
@@ -255,9 +254,7 @@ export function StrategyCodeComposition() {
         <div style={{ position: "relative", padding: "30px 30px 0" }}>
           <div style={{ display: "grid", gap: 4 }}>
             {codeLines.map((line, index) => (
-              <Sequence key={line.text} from={line.start} layout="none">
-                <TypedLine text={line.text} color={line.color} line={index + 1} />
-              </Sequence>
+              <TypedLine key={line.text} {...line} frame={frame} line={index + 1} />
             ))}
           </div>
 
@@ -276,21 +273,18 @@ export function StrategyCodeComposition() {
           />
         </div>
 
-        <Sequence from={138} layout="none">
-          <ValidationResult />
-        </Sequence>
+        <ValidationResult frame={frame} />
       </div>
-    </AbsoluteFill>
+    </div>
   );
 }
 
 export function StrategyCodePlayer({ embedded = false }: { embedded?: boolean }) {
-  const playerRef = useRef<PlayerRef>(null);
-  const mounted = useSyncExternalStore(() => () => undefined, () => true, () => false);
-
-  useEffect(() => {
-    if (mounted) playerRef.current?.play();
-  }, [mounted]);
+  const frame = useLoopingFrame({
+    durationInFrames: 190,
+    fps: 30,
+    reducedMotionFrame: 189,
+  });
 
   return (
     <div
@@ -298,23 +292,9 @@ export function StrategyCodePlayer({ embedded = false }: { embedded?: boolean })
       className={embedded ? "deferred-player__content" : "strategy-code-player glass-panel"}
       role={embedded ? undefined : "img"}
     >
-      {mounted ? (
-        <Player
-          ref={playerRef}
-          component={StrategyCodeComposition}
-          durationInFrames={190}
-          fps={30}
-          compositionWidth={840}
-          compositionHeight={500}
-          autoPlay
-          loop
-          initiallyMuted
-          acknowledgeRemotionLicense
-          controls={false}
-          clickToPlay={false}
-          style={{ width: "100%", height: "100%" }}
-        />
-      ) : <span className="player-loading" aria-hidden="true" />}
+      <NativeAnimationStage>
+        <StrategyCodeComposition frame={frame} />
+      </NativeAnimationStage>
     </div>
   );
 }

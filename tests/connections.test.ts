@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { readFileSync,readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync,type StatementSync } from "node:sqlite";

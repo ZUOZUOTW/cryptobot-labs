@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly EXPECTED_ACCOUNT_ID="148905583129"
-readonly AWS_REGION="ap-northeast-1"
+readonly EXPECTED_ACCOUNT_ID="${CBL_AWS_ACCOUNT_ID:?Set CBL_AWS_ACCOUNT_ID to the 12-digit target AWS account ID}"
+readonly AWS_REGION="${CBL_AWS_REGION:-ap-northeast-1}"
 readonly ROLE_NAME="CryptoBotLabsProvisioner"
 readonly ROLE_ARN="arn:aws:iam::${EXPECTED_ACCOUNT_ID}:role/${ROLE_NAME}"
-readonly STATE_BUCKET="cryptobot-labs-terraform-state-${EXPECTED_ACCOUNT_ID}"
+readonly STATE_BUCKET="${CBL_TERRAFORM_STATE_BUCKET:-cryptobot-labs-terraform-state-${EXPECTED_ACCOUNT_ID}}"
 readonly TF_DATA_DIR="/tmp/cryptobot-labs-terraform-data"
 export TF_DATA_DIR
+
+if [[ ! "${EXPECTED_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
+  echo "CBL_AWS_ACCOUNT_ID must be exactly 12 digits." >&2
+  exit 1
+fi
 
 actual_account_id="$(aws sts get-caller-identity --query Account --output text)"
 if [[ "${actual_account_id}" != "${EXPECTED_ACCOUNT_ID}" ]]; then
@@ -15,11 +20,26 @@ if [[ "${actual_account_id}" != "${EXPECTED_ACCOUNT_ID}" ]]; then
   exit 1
 fi
 
+trust_document="$(mktemp)"
+iam_policy_document="$(mktemp)"
+cleanup_documents() {
+  rm -f -- "${trust_document}" "${iam_policy_document}"
+}
+trap cleanup_documents EXIT
+
+jq --arg account_id "${EXPECTED_ACCOUNT_ID}" \
+  '.Statement[0].Principal.AWS = ("arn:aws:iam::" + $account_id + ":root")' \
+  bootstrap/provisioner-trust.json > "${trust_document}"
+jq --arg account_id "${EXPECTED_ACCOUNT_ID}" \
+  '(.Statement[] | select(.Sid == "ManageProjectRoles").Resource[]) |= sub("000000000000"; $account_id)
+  | (.Statement[] | select(.Sid == "PassExecutorRoleToEC2").Resource) |= sub("000000000000"; $account_id)' \
+  bootstrap/provisioner-iam-policy.json > "${iam_policy_document}"
+
 if ! aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "${ROLE_NAME}" \
     --description "Short-lived Terraform provisioner for CryptoBot Labs production" \
-    --assume-role-policy-document file://bootstrap/provisioner-trust.json \
+    --assume-role-policy-document "file://${trust_document}" \
     --tags Key=Application,Value=cryptobot-labs Key=Environment,Value=production Key=ManagedBy,Value=bootstrap \
     >/dev/null
 fi
@@ -30,7 +50,7 @@ aws iam attach-role-policy \
 aws iam put-role-policy \
   --role-name "${ROLE_NAME}" \
   --policy-name CryptoBotLabsTerraformIamBoundary \
-  --policy-document file://bootstrap/provisioner-iam-policy.json
+  --policy-document "file://${iam_policy_document}"
 
 if ! command -v terraform >/dev/null 2>&1; then
   sudo dnf install -y dnf-plugins-core >/dev/null

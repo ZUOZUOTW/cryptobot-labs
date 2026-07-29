@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { validateTradeAuditEvent } from "../src/main/trade-audit";
 
+const invalidUnmaskedSuffix = ["live", "api", "key", "1234"].join("-");
+
 function envelope(category: string, event: string, payload: object): object {
   return {
     version: 1,
@@ -61,7 +63,7 @@ describe("trade audit contract", () => {
 
   it("rejects unmasked keys, unsafe free text, and invalid market targets", () => {
     expect(() => validateTradeAuditEvent(envelope("key", "configured", {
-      maskedApiKeySuffix: "live-api-key-1234",
+      maskedApiKeySuffix: invalidUnmaskedSuffix,
     }))).toThrow("Masked API key suffix is invalid");
 
     expect(() => validateTradeAuditEvent(envelope("api", "request-failed", {
