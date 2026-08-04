@@ -88,7 +88,24 @@ describe("dependency security pins", () => {
     expect(netlifyConfig).toContain('NODE_VERSION = "22.23.1"');
     for (const workflow of [ciWorkflow, agentCiWorkflow, agentReleaseWorkflow]) {
       expect(workflow).toContain("node-version: 22.23.1");
+      expect(workflow).toContain(
+        "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      );
+      expect(workflow).toContain(
+        "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+      );
     }
+    for (const workflow of [ciWorkflow, codeqlWorkflow, agentCiWorkflow, agentReleaseWorkflow]) {
+      expect(workflow).toContain(
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      );
+    }
+    expect(agentCiWorkflow).toContain(
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    );
+    expect(agentReleaseWorkflow).toContain(
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    );
     expect(ciWorkflow).toContain("pnpm audit --audit-level low");
     expect(ciWorkflow).toContain("pnpm audit signatures");
     expect(ciWorkflow).not.toContain("pnpm audit --prod");
