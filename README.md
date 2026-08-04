@@ -100,6 +100,7 @@ Set the repository Actions variable `CBL_CONTROL_PLANE_ORIGIN` to the deployed H
 - [WEEX credential handling](docs/security/credential-handling.md)
 - [Desktop Agent release checklist](docs/operations/agent-release-checklist.md)
 - [Live execution smoke-test checklist](docs/operations/live-smoke-test-checklist.md)
+- [WEEX security review and infrastructure handover](docs/operations/weex-security-review-and-infrastructure-handover.md)
 - [Security reporting policy](SECURITY.md)
 - [Open-source publication audit](docs/security/open-source-audit.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

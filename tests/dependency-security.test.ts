@@ -1,24 +1,30 @@
 import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-describe("production dependency security pins", () => {
-  it("keeps the reviewed Next.js patch and scoped transitive overrides", async () => {
+describe("dependency security pins", () => {
+  it("keeps the reviewed runtime, desktop, and build-chain patches", async () => {
     const [
       packageSource,
+      agentSource,
       executorSource,
       workspace,
+      lockfile,
       denoLock,
       netlifyConfig,
       ciWorkflow,
+      codeqlWorkflow,
       agentCiWorkflow,
       agentReleaseWorkflow,
     ] = await Promise.all([
       readFile("package.json", "utf8"),
+      readFile("apps/agent/package.json", "utf8"),
       readFile("apps/executor/package.json", "utf8"),
       readFile("pnpm-workspace.yaml", "utf8"),
+      readFile("pnpm-lock.yaml", "utf8"),
       readFile("deno.lock", "utf8"),
       readFile("netlify.toml", "utf8"),
       readFile(".github/workflows/ci.yml", "utf8"),
+      readFile(".github/workflows/codeql.yml", "utf8"),
       readFile(".github/workflows/agent-ci.yml", "utf8"),
       readFile(".github/workflows/agent-release.yml", "utf8"),
     ]);
@@ -31,24 +37,87 @@ describe("production dependency security pins", () => {
     const executorPackage = JSON.parse(executorSource) as {
       devDependencies?: Record<string, string>;
     };
+    const agentPackage = JSON.parse(agentSource) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
 
     expect(packageJson.dependencies?.next).toBe("16.2.12");
+    expect(packageJson.dependencies?.react).toBe("19.2.8");
+    expect(packageJson.dependencies?.["react-dom"]).toBe("19.2.8");
     expect(packageJson.dependencies?.remotion).toBeUndefined();
     expect(packageJson.dependencies?.["@remotion/player"]).toBeUndefined();
     expect(packageJson.devDependencies?.["eslint-config-next"]).toBe("16.2.12");
-    expect(packageJson.devDependencies?.esbuild).toBe("0.28.0");
+    expect(packageJson.devDependencies?.esbuild).toBe("0.28.1");
+    expect(packageJson.devDependencies?.["react-server-dom-webpack"]).toBe("19.2.8");
+    expect(packageJson.devDependencies?.vite).toBe("8.1.5");
     expect(packageJson.engines?.node).toBe(">=22.23.1");
     expect(packageJson.packageManager).toBe("pnpm@11.9.0");
-    expect(executorPackage.devDependencies?.esbuild).toBe("0.28.0");
+    expect(agentPackage.dependencies?.react).toBe("19.2.8");
+    expect(agentPackage.dependencies?.["react-dom"]).toBe("19.2.8");
+    expect(agentPackage.devDependencies?.electron).toBe("43.2.0");
+    expect(agentPackage.devDependencies?.["@electron/fuses"]).toBe("2.1.3");
+    expect(agentPackage.devDependencies?.["@electron-forge/cli"]).toBe("7.11.2");
+    expect(agentPackage.devDependencies?.["@electron-forge/plugin-vite"]).toBe("7.11.2");
+    expect(agentPackage.devDependencies?.vite).toBe("8.1.5");
+    expect(executorPackage.devDependencies?.esbuild).toBe("0.28.1");
+    expect(workspace).toContain('"@electron/rebuild": "4.2.0"');
+    expect(workspace).toContain('"brace-expansion@1": "2.1.4"');
+    expect(workspace).toContain('"brace-expansion@2": "2.1.4"');
+    expect(workspace).toContain('"brace-expansion@5": "5.0.9"');
+    expect(workspace).toContain('"esbuild": "0.28.1"');
+    expect(workspace).toContain('"fast-uri@3": "3.1.5"');
+    expect(workspace).toContain('"undici@6": "6.28.0"');
+    expect(workspace).toContain('"undici@7": "7.29.0"');
+    expect(workspace).not.toContain("ignoreGhsas");
+    expect(workspace).toContain('"@electron-forge/plugin-fuses>@electron/fuses": "2.1.3"');
+    expect(workspace).toContain('"js-yaml@4": "4.3.0"');
+    expect(workspace).toContain('"tar": "7.5.22"');
+    expect(workspace).toContain('"tmp": "0.2.7"');
     expect(workspace).toContain('"next>sharp": "0.35.3"');
     expect(workspace).toContain('"next>postcss": "8.5.24"');
     expect(workspace).toContain("postcss@8.5.24");
+    expect(lockfile).not.toMatch(/^\s{2}brace-expansion@1\./mu);
+    expect(lockfile).toMatch(/^\s{2}brace-expansion@2\.1\.4:/mu);
+    expect(lockfile).toMatch(/^\s{2}brace-expansion@5\.0\.9:/mu);
+    expect(lockfile).toMatch(/^\s{2}fast-uri@3\.1\.5:/mu);
+    expect(lockfile).toMatch(/^\s{2}undici@6\.28\.0:/mu);
+    expect(lockfile).toMatch(/^\s{2}undici@7\.29\.0:/mu);
     expect(denoLock).toContain("npm:next@16.2.12");
     expect(denoLock).not.toMatch(/remotion/i);
     expect(netlifyConfig).toContain('NODE_VERSION = "22.23.1"');
     for (const workflow of [ciWorkflow, agentCiWorkflow, agentReleaseWorkflow]) {
       expect(workflow).toContain("node-version: 22.23.1");
+      expect(workflow).toContain(
+        "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      );
+      expect(workflow).toContain(
+        "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+      );
     }
+    for (const workflow of [ciWorkflow, codeqlWorkflow, agentCiWorkflow, agentReleaseWorkflow]) {
+      expect(workflow).toContain(
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      );
+    }
+    expect(agentCiWorkflow).toContain(
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    );
+    expect(agentReleaseWorkflow).toContain(
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    );
+    expect(ciWorkflow).toContain("pnpm audit --audit-level low");
+    expect(ciWorkflow).toContain("pnpm audit signatures");
+    expect(ciWorkflow).not.toContain("pnpm audit --prod");
+    expect(codeqlWorkflow).toContain("Analyze (javascript-typescript)");
+    expect(codeqlWorkflow).toContain("languages: javascript-typescript");
+    expect(codeqlWorkflow).toContain("build-mode: none");
+    expect(codeqlWorkflow).toContain(
+      "github/codeql-action/init@e60ea984bd3baa95954f2856bcf24f9eaba46637",
+    );
+    expect(codeqlWorkflow).toContain(
+      "github/codeql-action/analyze@e60ea984bd3baa95954f2856bcf24f9eaba46637",
+    );
   });
 
   it("keeps the reviewed third-party notices available to distributors", async () => {
