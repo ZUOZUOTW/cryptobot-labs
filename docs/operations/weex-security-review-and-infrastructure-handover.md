@@ -1,11 +1,11 @@
 # WEEX security review and infrastructure handover plan
 
-Status date: 2026-07-29 (Asia/Taipei)
+Status date: 2026-08-04 (Asia/Taipei)
 
 ## Decisions
 
 - Submit the website source code to the WEEX technical team for security review
-  on 2026-07-29. Do not wait for the infrastructure migration design to be
+  on 2026-08-04. Do not wait for the infrastructure migration design to be
   completed before submitting the reviewed source snapshot.
 - Move production maintenance and administrative ownership away from personal
   accounts. AWS, Cloudflare, and Supabase must become WEEX-managed or be
@@ -79,7 +79,8 @@ also includes:
 - `.env.example`, with placeholders only;
 - `pnpm-lock.yaml`, workspace manifests, and the dependency-license checker;
 - successful PR and `main` CI evidence for tests, lint, build, complete
-  dependency audit, license policy, and complete-history Gitleaks scanning;
+  dependency audit, registry-signature verification, license policy,
+  complete-history Gitleaks scanning, and CodeQL analysis;
 - the production deployment commit reference, without private deploy IDs or
   provider credentials.
 
@@ -173,7 +174,7 @@ password, or long-lived administrator key.
 3. Generate the source archive, manifest, and SHA-256.
 4. Perform a second-person check that the archive contains no prohibited
    material.
-5. Deliver to WEEX and obtain written acknowledgement on 2026-07-29.
+5. Deliver to WEEX and obtain written acknowledgement on 2026-08-04.
 
 Exit gate: WEEX confirms receipt of the exact commit and returns a review
 ticket/case identifier.
@@ -303,7 +304,7 @@ device, mailbox, payment method, or secret.
 | Cutover approval and rollback command | Consulted | Accountable |
 | Post-cutover operations and incident response | Informed/advisory only | Accountable and responsible |
 
-## Immediate schedule for 2026-07-29
+## Immediate schedule for 2026-08-04
 
 1. **Now:** send WEEX the repository URL and frozen full commit SHA so the
    review can begin immediately.

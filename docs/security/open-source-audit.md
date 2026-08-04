@@ -1,6 +1,6 @@
 # Open-source publication audit
 
-Audit date: 2026-07-29
+Audit date: 2026-08-04
 
 ## Scope
 
@@ -58,18 +58,20 @@ Public `.env` and Terraform examples use RFC-reserved or example values.
 - The publication branch upgraded Next.js to `16.2.12`, Electron to `43.2.0`,
   Electron Forge to `7.11.2`, React to `19.2.8`, and applies reviewed
   transitive security overrides. A complete pnpm audit covers production,
-  desktop-runtime, development, and build dependencies; CI fails on future
-  high/critical advisories. The registry range for
-  `GHSA-mh99-v99m-4gvg` does not yet recognize the CommonJS-compatible
-  `brace-expansion@2.1.3` backport; this single advisory is ignored only after
-  converging all legacy consumers on that reviewed patched source, with
-  lockfile regression tests preventing older versions from returning.
+  desktop-runtime, development, and build dependencies; CI fails on every
+  known advisory severity. The August refresh removes the former registry
+  exception and pins patched `brace-expansion`, `fast-uri`, and `undici`
+  versions. No advisory is ignored by the workspace audit policy.
 - Registry-signature verification passed for all 964 packages in the
   remediation lockfile.
-- GitHub private vulnerability reporting and secret scanning should be enabled
-  before or at publication.
-- Branch protection must require the publication checks and prevent force
-  pushes or deletion of `main`.
+- GitHub secret scanning and push protection are enabled. The 2026-08-04
+  repository check reported zero open secret-scanning alerts; complete-history
+  Gitleaks remains a required pull-request check for non-provider patterns.
+- CodeQL analyzes JavaScript and TypeScript on pull requests, `main` pushes,
+  weekly schedules, and manual dispatches using an immutable action commit.
+- Branch protection requires the publication checks, includes administrators,
+  and prevents force pushes or deletion of `main`. CodeQL becomes required
+  after its first successful check establishes the status context.
 - Any real secret finding requires revocation/rotation first; deleting a file
   in a new commit is not sufficient remediation for Git history.
 

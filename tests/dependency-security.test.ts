@@ -12,6 +12,7 @@ describe("dependency security pins", () => {
       denoLock,
       netlifyConfig,
       ciWorkflow,
+      codeqlWorkflow,
       agentCiWorkflow,
       agentReleaseWorkflow,
     ] = await Promise.all([
@@ -23,6 +24,7 @@ describe("dependency security pins", () => {
       readFile("deno.lock", "utf8"),
       readFile("netlify.toml", "utf8"),
       readFile(".github/workflows/ci.yml", "utf8"),
+      readFile(".github/workflows/codeql.yml", "utf8"),
       readFile(".github/workflows/agent-ci.yml", "utf8"),
       readFile(".github/workflows/agent-release.yml", "utf8"),
     ]);
@@ -60,11 +62,14 @@ describe("dependency security pins", () => {
     expect(agentPackage.devDependencies?.vite).toBe("8.1.5");
     expect(executorPackage.devDependencies?.esbuild).toBe("0.28.1");
     expect(workspace).toContain('"@electron/rebuild": "4.2.0"');
-    expect(workspace).toContain('"brace-expansion@1": "2.1.3"');
-    expect(workspace).toContain('"brace-expansion@2": "2.1.3"');
-    expect(workspace).toContain('"brace-expansion@5": "5.0.8"');
+    expect(workspace).toContain('"brace-expansion@1": "2.1.4"');
+    expect(workspace).toContain('"brace-expansion@2": "2.1.4"');
+    expect(workspace).toContain('"brace-expansion@5": "5.0.9"');
     expect(workspace).toContain('"esbuild": "0.28.1"');
-    expect(workspace).toContain("GHSA-mh99-v99m-4gvg");
+    expect(workspace).toContain('"fast-uri@3": "3.1.5"');
+    expect(workspace).toContain('"undici@6": "6.28.0"');
+    expect(workspace).toContain('"undici@7": "7.29.0"');
+    expect(workspace).not.toContain("ignoreGhsas");
     expect(workspace).toContain('"@electron-forge/plugin-fuses>@electron/fuses": "2.1.3"');
     expect(workspace).toContain('"js-yaml@4": "4.3.0"');
     expect(workspace).toContain('"tar": "7.5.22"');
@@ -73,16 +78,29 @@ describe("dependency security pins", () => {
     expect(workspace).toContain('"next>postcss": "8.5.24"');
     expect(workspace).toContain("postcss@8.5.24");
     expect(lockfile).not.toMatch(/^\s{2}brace-expansion@1\./mu);
-    expect(lockfile).toMatch(/^\s{2}brace-expansion@2\.1\.3:/mu);
-    expect(lockfile).toMatch(/^\s{2}brace-expansion@5\.0\.8:/mu);
+    expect(lockfile).toMatch(/^\s{2}brace-expansion@2\.1\.4:/mu);
+    expect(lockfile).toMatch(/^\s{2}brace-expansion@5\.0\.9:/mu);
+    expect(lockfile).toMatch(/^\s{2}fast-uri@3\.1\.5:/mu);
+    expect(lockfile).toMatch(/^\s{2}undici@6\.28\.0:/mu);
+    expect(lockfile).toMatch(/^\s{2}undici@7\.29\.0:/mu);
     expect(denoLock).toContain("npm:next@16.2.12");
     expect(denoLock).not.toMatch(/remotion/i);
     expect(netlifyConfig).toContain('NODE_VERSION = "22.23.1"');
     for (const workflow of [ciWorkflow, agentCiWorkflow, agentReleaseWorkflow]) {
       expect(workflow).toContain("node-version: 22.23.1");
     }
-    expect(ciWorkflow).toContain("pnpm audit --audit-level high");
+    expect(ciWorkflow).toContain("pnpm audit --audit-level low");
+    expect(ciWorkflow).toContain("pnpm audit signatures");
     expect(ciWorkflow).not.toContain("pnpm audit --prod");
+    expect(codeqlWorkflow).toContain("Analyze (javascript-typescript)");
+    expect(codeqlWorkflow).toContain("languages: javascript-typescript");
+    expect(codeqlWorkflow).toContain("build-mode: none");
+    expect(codeqlWorkflow).toContain(
+      "github/codeql-action/init@e60ea984bd3baa95954f2856bcf24f9eaba46637",
+    );
+    expect(codeqlWorkflow).toContain(
+      "github/codeql-action/analyze@e60ea984bd3baa95954f2856bcf24f9eaba46637",
+    );
   });
 
   it("keeps the reviewed third-party notices available to distributors", async () => {
