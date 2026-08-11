@@ -57,9 +57,59 @@ describe("cloud strategy launch prerequisites", () => {
     expect(sql).toMatch(/r\.configuration_hash=s\.config_hash/);
     expect(sql).toMatch(/\?::text::jsonb/);
     expect(sql).not.toMatch(/\?::jsonb/);
-    expect(sql).toMatch(/on conflict \(id\) do nothing/i);
+    expect(sql).toMatch(/configuration_hash,market,symbol,version/);
+    expect(sql).toMatch(/active\.market=t\.market and active\.symbol=t\.symbol/);
+    expect(sql).toMatch(/active\.state<>'stopped'/);
+    expect(sql).toMatch(/on conflict do nothing/i);
+    expect(sql).not.toMatch(/insert\s+or\s+ignore/i);
     expect(JSON.parse(String(bindings[2]))).toEqual(risk);
     expect(first).toHaveBeenCalledOnce();
+  });
+
+  it("selects the persisted market and symbol target for every dashboard run", async () => {
+    let sql = "";
+    const all = vi.fn().mockResolvedValue({ results: [] });
+    const database = {
+      prepare: vi.fn((statement: string) => {
+        sql = statement;
+        return { bind: vi.fn(() => ({ all })) };
+      }),
+    };
+
+    await createCloudRunRepository(database as never).list("user_1");
+
+    expect(sql).toMatch(/select[\s\S]*state,market,symbol,version[\s\S]*from cloud_strategy_runs/i);
+    expect(all).toHaveBeenCalledOnce();
+  });
+
+  it("finds a non-terminal run targeting the same WEEX connection, market, and symbol", async () => {
+    let sql = "";
+    let bindings: unknown[] = [];
+    const first = vi.fn().mockResolvedValue({ conflict: 1 });
+    const database = {
+      prepare: vi.fn((statement: string) => {
+        sql = statement;
+        return { bind: vi.fn((...values: unknown[]) => {
+          bindings = values;
+          return { first };
+        }) };
+      }),
+    };
+
+    await expect(createCloudRunRepository(database as never).hasActiveTargetConflict({
+      id: "crun_new",
+      userId: "user_1",
+      strategyVersionId: "sv_1",
+      configurationHash: "a".repeat(64),
+    })).resolves.toBe(true);
+
+    expect(sql).toMatch(/active\.connection_id=requested_connection\.id/);
+    expect(sql).toMatch(/active\.market=requested_strategy\.market/);
+    expect(sql).toMatch(/active\.symbol=requested_strategy\.symbol/);
+    expect(sql).toMatch(/active\.id<>\?/);
+    expect(sql).toMatch(/active\.state<>'stopped'/);
+    expect(sql).not.toMatch(/json_extract|insert\s+or\s+ignore/i);
+    expect(bindings).toEqual(["user_1", "sv_1", "a".repeat(64), "crun_new"]);
   });
 
   it("clears stale failure and lease state when a user resumes an errored run", async () => {
@@ -86,6 +136,9 @@ describe("cloud strategy launch prerequisites", () => {
 
     expect(sql).toMatch(/consecutive_failures=case when \?='running' then 0/);
     expect(sql).toMatch(/lease_owner=null,lease_expires_at=null/);
+    expect(sql).toMatch(/\?<>'running' or not exists/);
+    expect(sql).toMatch(/active\.connection_id=target\.connection_id/);
+    expect(sql).toMatch(/active\.market=target\.market and active\.symbol=target\.symbol/);
     expect(bindings).toEqual([
       "running",
       1_700_000_000_000,
@@ -98,6 +151,7 @@ describe("cloud strategy launch prerequisites", () => {
       "user_1",
       "crun_1",
       4,
+      "running",
     ]);
   });
 });

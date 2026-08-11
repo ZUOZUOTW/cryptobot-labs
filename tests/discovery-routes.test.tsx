@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
@@ -271,6 +271,114 @@ describe("bot catalog route", () => {
       "/api/strategy-publications",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("loads cursor pages once, removes duplicate publications, and announces the end", async () => {
+    const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6MTIzfQ";
+    const nextPublication: PublicStrategyPublication = {
+      ...ownedPublication,
+      slug: "strategy-secondrelease",
+      name: "第二頁公開策略",
+      publishedAt: ownedPublication.publishedAt - 1,
+      updatedAt: ownedPublication.updatedAt - 1,
+    };
+    let resolveMore: (response: Response) => void = () => undefined;
+    const moreResponse = new Promise<Response>((resolve) => { resolveMore = resolve; });
+    let moreRequests = 0;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications") {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: cursor }), { status: 200 });
+      }
+      if (url === `/api/strategy-publications?cursor=${cursor}`) {
+        moreRequests += 1;
+        return moreResponse;
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    const loadMore = await screen.findByRole("button", { name: "載入更多會員策略" });
+    fireEvent.click(loadMore);
+    fireEvent.click(loadMore);
+    expect(moreRequests).toBe(1);
+    expect(screen.getByRole("button", { name: "正在載入更多會員策略…" })).toBeDisabled();
+    resolveMore(new Response(JSON.stringify({
+      publications: [ownedPublication, nextPublication],
+      nextCursor: null,
+    }), { status: 200 }));
+
+    expect(await screen.findByRole("heading", { name: "第二頁公開策略" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "我的公開雙向策略" })).toHaveLength(1);
+    expect(screen.getByText("已顯示全部會員公開策略")).toHaveAttribute("role", "status");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      `/api/strategy-publications?cursor=${cursor}`,
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("keeps pagination reachable when the first public page is empty but has a continuation", async () => {
+    const user = userEvent.setup();
+    const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6Nzg5fQ";
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications") {
+        return new Response(JSON.stringify({ publications: [], nextCursor: cursor }), { status: 200 });
+      }
+      if (url === `/api/strategy-publications?cursor=${cursor}`) {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    expect(await screen.findByRole("heading", { name: "會員公開策略" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "載入更多會員策略" }));
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(screen.getByText("已顯示全部會員公開策略")).toBeInTheDocument();
+  });
+
+  it("keeps the cursor available when loading more fails and supports an explicit retry", async () => {
+    const user = userEvent.setup();
+    const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6NDU2fQ";
+    const nextPublication: PublicStrategyPublication = {
+      ...ownedPublication,
+      slug: "strategy-retriedpage",
+      name: "重試後載入策略",
+      publishedAt: ownedPublication.publishedAt - 1,
+      updatedAt: ownedPublication.updatedAt - 1,
+    };
+    let moreAttempts = 0;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications") {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: cursor }), { status: 200 });
+      }
+      if (url === `/api/strategy-publications?cursor=${cursor}`) {
+        moreAttempts += 1;
+        return moreAttempts === 1
+          ? new Response(JSON.stringify({ publications: [], nextCursor: null }), { status: 503 })
+          : new Response(JSON.stringify({ publications: [nextPublication], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    await user.click(await screen.findByRole("button", { name: "載入更多會員策略" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("無法載入更多會員策略，請稍後重試。");
+    await user.click(screen.getByRole("button", { name: "重試載入更多會員策略" }));
+    expect(await screen.findByRole("heading", { name: "重試後載入策略" })).toBeInTheDocument();
+    expect(moreAttempts).toBe(2);
+    expect(screen.getByText("已顯示全部會員公開策略")).toBeInTheDocument();
   });
 
   it("sorts visible bots from derived catalog data", async () => {

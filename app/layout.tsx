@@ -12,6 +12,7 @@ import { demoModeEnabled } from "@/lib/server/demo-mode";
 import { DEFAULT_LOCALE, localeDirection } from "@/lib/i18n/locales";
 import {
   buildSiteMetadata,
+  configuredSiteOrigin,
   SITE_DESCRIPTION,
   SITE_TITLE,
 } from "@/lib/site-metadata";
@@ -28,14 +29,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const metadataOrigin = (() => {
-  try {
-    const value = new URL(process.env.PUBLIC_ORIGIN ?? "https://www.cryptobotlabs.app");
-    return value.protocol === "https:" && !value.username && !value.password ? value : null;
-  } catch {
-    return null;
-  }
-})();
+const metadataOrigin = configuredSiteOrigin(
+  process.env.PUBLIC_ORIGIN ?? "https://www.cryptobotlabs.app",
+);
 
 export const metadata: Metadata = buildSiteMetadata(metadataOrigin, {
   title: SITE_TITLE,

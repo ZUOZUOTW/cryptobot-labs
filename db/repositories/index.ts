@@ -29,6 +29,7 @@ export { createStrategyVersionRepository, type OwnedStrategyVersionRecord,
   type SavedStrategyVersionRecord } from "./strategies";
 export {
   createStrategyPublicationRepository,
+  type StrategyPublicationCursor,
   type StrategyPublicationRecord,
 } from "./strategy-publications";
 export {

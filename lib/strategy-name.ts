@@ -7,7 +7,25 @@ export type StrategyNameValidation =
   | { valid: true; value: string }
   | { valid: false; reason: string };
 
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+const CONTROL_CHARACTERS = /\p{Cc}/u;
+const CONTROL_CHARACTERS_GLOBAL = /\p{Cc}+/gu;
+const UNSAFE_INVISIBLE_CHARACTERS = /[\p{Bidi_Control}\p{Default_Ignorable_Code_Point}\p{Cf}]/u;
+const UNSAFE_INVISIBLE_CHARACTERS_GLOBAL = /[\p{Bidi_Control}\p{Default_Ignorable_Code_Point}\p{Cf}]/gu;
+
+/**
+ * Last-line output hardening for legacy or externally sourced display names.
+ * Validation rejects these characters; render/share surfaces also remove them
+ * so an old record cannot visually reorder or invisibly join trusted labels.
+ */
+export function sanitizeStrategyDisplayText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .normalize("NFKC")
+    .replace(UNSAFE_INVISIBLE_CHARACTERS_GLOBAL, "")
+    .replace(CONTROL_CHARACTERS_GLOBAL, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
 
 const normalizeForModeration = (value: string): string => (
   value
@@ -47,15 +65,18 @@ export function validateStrategyName(value: unknown): StrategyNameValidation {
   if (typeof value !== "string") return { valid: false, reason: STRATEGY_NAME_REQUIRED_MESSAGE };
   const trimmed = value.trim();
   if (!trimmed) return { valid: false, reason: STRATEGY_NAME_REQUIRED_MESSAGE };
-  if (trimmed.length > STRATEGY_NAME_MAX_LENGTH) {
+  const canonical = trimmed.normalize("NFKC");
+  if (canonical.length > STRATEGY_NAME_MAX_LENGTH) {
     return { valid: false, reason: STRATEGY_NAME_LENGTH_MESSAGE };
   }
-  if (CONTROL_CHARACTERS.test(trimmed)) {
+  // Persisted config identity compares the exact name. Reject non-canonical
+  // input instead of silently changing it and invalidating that comparison.
+  if (canonical !== trimmed || CONTROL_CHARACTERS.test(trimmed) || UNSAFE_INVISIBLE_CHARACTERS.test(trimmed)) {
     return { valid: false, reason: STRATEGY_NAME_SENSITIVE_MESSAGE };
   }
-  const normalized = normalizeForModeration(trimmed);
+  const normalized = normalizeForModeration(canonical);
   if (SENSITIVE_NAME_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return { valid: false, reason: STRATEGY_NAME_SENSITIVE_MESSAGE };
   }
-  return { valid: true, value: trimmed };
+  return { valid: true, value: canonical };
 }

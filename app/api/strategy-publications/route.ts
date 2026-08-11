@@ -8,11 +8,13 @@ import { requireApiUser, platformIdentityProvider, deriveWorkspaceUserId } from 
 import { HttpProblem, errorResponse } from "@/lib/server/http";
 import { env } from "@/lib/server/platform-env";
 import { validateStrategyName } from "@/lib/strategy-name";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import {
   parsePublicationInput,
   publicationSlug,
+  publicStrategyPublicationCacheTag,
   publicStrategyFreshnessHeaders,
+  servePublicStrategyPublicationList,
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
 
@@ -26,24 +28,8 @@ const response = (status: number, body: unknown) => Response.json(body, {
 
 const database = () => createControlPlaneDatabase(env.DB);
 
-export async function GET(): Promise<Response> {
-  try {
-    const records = await createStrategyPublicationRepository(database()).list(24);
-    const publications = records.flatMap((record) => {
-      try { return [toPublicStrategyPublication(record)]; }
-      catch (error) {
-        console.error("[strategy-publications] skipped invalid public record", {
-          slug: record.slug,
-          name: error instanceof Error ? error.name : "Error",
-        });
-        return [];
-      }
-    });
-    return response(200, { publications });
-  } catch (error) {
-    console.error("[strategy-publications] list failed", { name: error instanceof Error ? error.name : "Error" });
-    return response(503, { error: "publication_service_unavailable" });
-  }
+export async function GET(request: Request): Promise<Response> {
+  return servePublicStrategyPublicationList(request, createStrategyPublicationRepository(database()));
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -86,6 +72,7 @@ export async function POST(request: Request): Promise<Response> {
     if (!saved) throw new HttpProblem(409, "verified_backtest_required");
     const record = await repository.getBySlug(saved.slug);
     if (!record) throw new Error("published record could not be loaded");
+    revalidateTag(publicStrategyPublicationCacheTag(saved.slug), { expire: 0 });
     revalidatePath("/api/strategy-publications");
     revalidatePath("/bots");
     revalidatePath(`/strategies/${saved.slug}`);

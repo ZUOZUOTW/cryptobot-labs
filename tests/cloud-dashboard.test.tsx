@@ -60,6 +60,7 @@ describe("connection-level WEEX dashboard", () => {
 
     expect(await screen.findByText("先完成 WEEX 安全連線")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "連接 WEEX API" })).toHaveAttribute("href", "/connections");
-    expect(screen.getByText("+0.00 USDT")).toBeInTheDocument();
+    expect(screen.getAllByText("等待快照").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("+0.00 USDT")).not.toBeInTheDocument();
   });
 });

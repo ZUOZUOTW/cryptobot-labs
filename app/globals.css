@@ -30,17 +30,19 @@
 }
 
 html {
-  min-width: 20rem;
+  min-width: 0;
   scroll-behavior: smooth;
   color-scheme: dark;
 }
 
 body {
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  overflow-x: clip;
   background:
     radial-gradient(circle at 50% -10%, rgb(139 99 255 / 14%), transparent 38rem),
     linear-gradient(rgb(76 221 255 / 2%) 1px, transparent 1px),
@@ -61,10 +63,18 @@ a {
   text-decoration: none;
 }
 
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
 button,
 input,
 select,
 textarea {
+  max-width: 100%;
   color: inherit;
   font: inherit;
 }
@@ -123,14 +133,17 @@ a {
 }
 
 .site-container {
+  min-width: 0;
   width: min(100%, calc(var(--content-width) + (var(--page-gutter) * 2)));
   margin-inline: auto;
   padding-inline: var(--page-gutter);
 }
 
 .site-main {
+  min-width: 0;
   flex: 1 0 auto;
   min-height: calc(100vh - var(--header-height));
+  min-height: calc(100dvh - var(--header-height));
 }
 
 .glass-panel {
@@ -336,9 +349,11 @@ a {
 }
 
 .menu-button {
+  min-width: 2.75rem;
   width: 2.75rem;
   aspect-ratio: 1;
   display: none;
+  flex: 0 0 2.75rem;
   border: 1px solid var(--border);
   border-radius: 0.8rem;
   background: rgb(255 255 255 / 3%);
@@ -368,6 +383,9 @@ a {
 
 .site-nav--mobile {
   width: min(calc(100% - 2rem), var(--content-width));
+  max-height: calc(100dvh - var(--header-height) - 1rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   margin: 0 auto 0.9rem;
   padding: 0.5rem;
   border: 1px solid var(--border);
@@ -826,6 +844,7 @@ a {
     background: rgb(6 7 11 / 94%);
     box-shadow: 0 -1rem 2.5rem rgb(0 0 0 / 34%);
     backdrop-filter: blur(1.1rem) saturate(150%);
+    touch-action: manipulation;
   }
 
   .mobile-tab-bar a {
@@ -840,6 +859,7 @@ a {
     font-size: 0.58rem;
     line-height: 1;
     text-align: center;
+    touch-action: manipulation;
   }
 
   .mobile-tab-bar a[aria-current="page"] {
@@ -2306,14 +2326,14 @@ body {
 
 @media (max-width: 52rem) {
   .orbital-hero { position: relative; grid-template-columns: 1fr; overflow: hidden; }
-  .orbital-hero__visual { position: absolute; z-index: 0; top: 4.5rem; right: -4.8rem; width: 18rem; min-height: 18rem; opacity: 0.28; }
+  .orbital-hero__visual { position: absolute; z-index: 0; top: 4.5rem; right: 0; width: min(17rem, 65vw); min-height: 18rem; opacity: 0.24; }
   .orbital-hero__visual .hero-metric { display: none; }
   .orbital-hero__visual .ai-observatory { inset: 0; }
   .orbital-hero__visual .ai-observatory__sphere { width: 100%; }
   .orbital-hero__visual .ai-observatory__mascot { width: 92%; }
   .orbital-hero__visual .ai-observatory__token,
   .orbital-hero__visual .ai-observatory__caption { display: none; }
-  .route-companion { top: 2rem; right: -3rem; width: 14rem; opacity: 0.3; }
+  .route-companion { top: 2rem; right: 0; width: min(13rem, 46vw); opacity: 0.24; }
   .route-companion__status,
   .route-companion__signal { display: none; }
   .catalog-page .page-intro,
@@ -2327,7 +2347,7 @@ body {
 }
 
 @media (max-width: 38rem) {
-  .route-companion { right: -4.5rem; width: 12rem; opacity: 0.22; }
+  .route-companion { right: 0; width: min(10rem, 44vw); opacity: 0.18; }
   .catalog-page .page-intro,
   .leaderboard-page__intro,
   .backtests-page__intro,
@@ -2612,11 +2632,18 @@ body {
   .workshop-page__intro h1,
   .leaderboard-page__intro h1 { font-size: clamp(2.7rem, 11vw, 4rem); }
   .route-companion__workshop-readout { display: none; }
+  .route-companion--builder,
+  .route-companion--ranking { right: 0; width: min(13rem, 46vw); }
   .catalog-page .bot-card { grid-template-columns: 1fr; }
   .catalog-page .bot-card h3 { white-space: normal; }
   .podium-card[data-rank="1"],
   .podium-card[data-rank="2"],
   .podium-card[data-rank="3"] { order: initial; min-height: 18rem; transform: none; }
+}
+
+@media (max-width: 38rem) {
+  .route-companion--builder,
+  .route-companion--ranking { width: min(10rem, 44vw); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3721,7 +3748,15 @@ html[lang="ru"] body {
   .catalog-controls > label:nth-of-type(3) { grid-column: auto; grid-row: auto; }
 }
 @media (max-width: 38rem) {
-  .demo-mode-banner { align-items: flex-start; flex-direction: column; gap: 0.1rem; }
+  .demo-mode-banner {
+    min-height: max-content;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+    padding-bottom: 0.5rem;
+    line-height: 1.35;
+  }
   .header-login { display: none; }
   .language-switcher select { min-width: 0; width: 5.4rem; }
   .user-menu summary { max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3798,6 +3833,15 @@ html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
 html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
   :is(h1, h2, h3, h4) {
   letter-spacing: var(--locale-heading-tracking);
+  text-wrap: balance;
+}
+
+html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
+  .mobile-tab-bar span {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.15;
   text-wrap: balance;
 }
 
@@ -4002,4 +4046,41 @@ html[data-locale="ru"] :is(.eyebrow, .site-footer__label) {
 @media (max-width: 38rem) {
   .catalog-filter-toggle { width: 100%; display: flex; }
   .catalog-controls[data-mobile-open="false"] { display: none; }
+}
+
+/* Cursor-paginated community discovery */
+.published-strategies__pagination {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.published-strategies__pagination p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.published-strategies__pagination .button,
+.published-strategies__error .text-button {
+  min-height: 2.75rem;
+}
+.published-strategies__error {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.published-strategies__error p { margin: 0; }
+
+@media (max-width: 38rem) {
+  .published-strategies__pagination,
+  .published-strategies__error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .published-strategies__pagination .button,
+  .published-strategies__error .text-button { width: 100%; }
 }

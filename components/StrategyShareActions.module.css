@@ -1,0 +1,322 @@
+.root {
+  align-items: center;
+}
+
+.shareTrigger {
+  gap: 0.42rem;
+}
+
+.shareTrigger svg,
+.modalButton svg,
+.closeButton svg {
+  flex: 0 0 auto;
+}
+
+.backdrop {
+  position: fixed;
+  z-index: 2500;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: rgb(1 5 10 / 82%);
+  backdrop-filter: blur(14px);
+  animation: backdrop-in 160ms ease-out both;
+}
+
+.dialog {
+  width: min(68rem, 100%);
+  max-height: min(92dvh, 52rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgb(126 228 255 / 22%);
+  border-radius: 1.35rem;
+  background:
+    radial-gradient(circle at 84% 8%, rgb(60 213 255 / 12%), transparent 34%),
+    linear-gradient(145deg, rgb(9 18 29 / 99%), rgb(5 11 19 / 99%));
+  box-shadow: 0 2rem 7rem rgb(0 0 0 / 58%), inset 0 1px rgb(255 255 255 / 5%);
+  animation: dialog-in 200ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.dialogHeader {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 1.2rem 1rem;
+  border-bottom: 1px solid rgb(137 195 221 / 12%);
+  background: rgb(7 14 23 / 92%);
+  backdrop-filter: blur(16px);
+}
+
+.dialogHeader p,
+.dialogHeader h2,
+.dialogHeader small {
+  margin: 0;
+}
+
+.dialogHeader p {
+  color: #72e7ff;
+  font: 700 0.64rem/1.2 var(--font-geist-mono), monospace;
+  letter-spacing: 0.12em;
+}
+
+.dialogHeader h2 {
+  margin-top: 0.38rem;
+  color: #f4fbff;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+}
+
+.dialogHeader small {
+  display: block;
+  margin-top: 0.32rem;
+  color: #90a5b5;
+  font-size: 0.73rem;
+  line-height: 1.5;
+}
+
+.closeButton {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(146 194 218 / 18%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 5%);
+  color: #d9e9f2;
+  cursor: pointer;
+  transition: 150ms ease;
+}
+
+.closeButton:hover {
+  border-color: rgb(115 229 255 / 42%);
+  background: rgb(101 224 255 / 10%);
+  color: white;
+}
+
+.dialogBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(18rem, .72fr);
+  gap: 1.15rem;
+  padding: 1.2rem;
+}
+
+.posterColumn,
+.shareColumn {
+  min-width: 0;
+}
+
+.posterFrame {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 1200 / 630;
+  border: 1px solid rgb(111 219 247 / 24%);
+  border-radius: 1rem;
+  background: #07111c;
+  box-shadow: 0 1.2rem 3.2rem rgb(0 0 0 / 35%);
+}
+
+.posterImage {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.posterMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.7rem;
+  color: #748c9d;
+  font-size: 0.68rem;
+}
+
+.posterMeta a {
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #89eaff;
+  text-decoration: none;
+}
+
+.shareColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.captionCard {
+  padding: 0.9rem;
+  border: 1px solid rgb(132 188 215 / 17%);
+  border-radius: 0.9rem;
+  background: rgb(255 255 255 / 3.5%);
+}
+
+.captionCard span {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #7893a6;
+  font: 700 0.6rem/1.2 var(--font-geist-mono), monospace;
+  letter-spacing: 0.1em;
+}
+
+.captionCard p {
+  margin: 0;
+  color: #dbe8ef;
+  font-size: 0.76rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.primaryActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+.modalButton {
+  min-height: 2.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgb(118 220 247 / 22%);
+  border-radius: 0.76rem;
+  background: rgb(89 221 255 / 8%);
+  color: #dff9ff;
+  font: 700 0.7rem/1.2 var(--font-geist-sans), sans-serif;
+  cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.modalButton:hover {
+  transform: translateY(-1px);
+  border-color: rgb(117 230 255 / 45%);
+  background: rgb(89 221 255 / 13%);
+}
+
+.modalButton:disabled {
+  cursor: wait;
+  opacity: .62;
+  transform: none;
+}
+
+.modalButtonPrimary {
+  grid-column: 1 / -1;
+  border-color: rgb(105 231 255 / 46%);
+  background: linear-gradient(135deg, rgb(71 215 245 / 22%), rgb(64 129 255 / 13%));
+  color: #f4fdff;
+}
+
+.networkLabel {
+  margin: 0.1rem 0 -0.25rem;
+  color: #7893a6;
+  font: 700 0.6rem/1.2 var(--font-geist-mono), monospace;
+  letter-spacing: 0.1em;
+}
+
+.networkGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.48rem;
+}
+
+.networkButton {
+  min-height: 2.75rem;
+  border-radius: 0.72rem;
+  background: rgb(255 255 255 / 4%);
+}
+
+.networkButton[data-network="line"] { border-color: rgb(6 199 85 / 35%); color: #8bf1b1; }
+.networkButton[data-network="x"] { border-color: rgb(255 255 255 / 20%); color: #f2f7fa; }
+.networkButton[data-network="facebook"] { border-color: rgb(87 144 255 / 35%); color: #aecbff; }
+.networkButton[data-network="telegram"] { border-color: rgb(39 166 229 / 35%); color: #a7e1ff; }
+
+.supportNote {
+  margin: 0;
+  color: #6f8798;
+  font-size: 0.65rem;
+  line-height: 1.55;
+}
+
+.modalFeedback {
+  min-height: 1.1rem;
+  margin: 0;
+  color: #8df3c1;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(0.75rem) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 760px) {
+  .backdrop {
+    place-items: end stretch;
+    padding: max(0.5rem, env(safe-area-inset-top)) max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom)) max(0.5rem, env(safe-area-inset-left));
+  }
+
+  .dialog {
+    width: 100%;
+    max-height: min(94dvh, 56rem);
+    border-radius: 1.2rem 1.2rem 0.9rem 0.9rem;
+  }
+
+  .dialogHeader {
+    padding: 1rem;
+  }
+
+  .dialogBody {
+    grid-template-columns: 1fr;
+    gap: 0.95rem;
+    padding: 0.85rem 0.85rem calc(0.85rem + env(safe-area-inset-bottom));
+  }
+
+  .posterMeta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .primaryActions {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 390px) {
+  .primaryActions,
+  .networkGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .modalButtonPrimary {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .dialog {
+    animation: none;
+  }
+
+  .modalButton {
+    transition: none;
+  }
+}

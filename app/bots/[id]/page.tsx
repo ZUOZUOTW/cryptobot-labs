@@ -23,7 +23,8 @@ export async function generateMetadata({ params }: Pick<BotDetailPageProps, "par
   const title = translateMessage(locale, `${bot.name}｜公開自動交易策略`);
   const description = translateMessage(locale, `${bot.description}。${bot.market === "spot" ? "現貨" : "合約"} ${bot.timeframe}，${bot.risk}風險；查看模擬績效、最大回撤與策略規則。`);
   const imageAlt = translateMessage(locale, `${bot.name} 公開策略預覽`);
-  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: "/og.png", width: 1672, height: 941, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: ["/og.png"] } };
+  const image = `/bots/${bot.id}/opengraph-image`;
+  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: image, width: 1200, height: 630, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: [image] } };
 }
 
 export function generateStaticParams() {
@@ -43,6 +44,11 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
   if (!bot) notFound();
   const workshopHref = `/workshop?bot=${encodeURIComponent(bot.id)}&version=1`;
   const mascot = bot.risk === "高" ? "/mascots/ai-guardian.webp" : bot.market === "spot" ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp";
+  const shareDetails = {
+    marketKind: bot.market,
+    riskLevel: bot.risk,
+    timeframe: bot.timeframe,
+  };
 
   return (
     <article className="bot-detail-page">
@@ -61,7 +67,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
             <div className="bot-detail-hero__actions">
               <StrategyLaunchButton bot={bot} />
               <Link className="button button--primary" href={workshopHref}>直接套用</Link>
-              <StrategyShareActions botId={bot.id} botName={bot.name} />
+              <StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} />
             </div>
           </div>
           <aside className="bot-detail-snapshot glass-panel" aria-label="策略摘要">
@@ -108,7 +114,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
 
       <section className="detail-section detail-cta site-container glass-panel">
         <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始模擬運行；原分享版本不會因後續修改而改變。</p></div>
-        <div className="button-row"><StrategyLaunchButton bot={bot} /><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} /></div>
+        <div className="button-row"><StrategyLaunchButton bot={bot} /><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} /></div>
       </section>
     </article>
   );

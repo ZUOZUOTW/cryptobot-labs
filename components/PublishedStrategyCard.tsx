@@ -1,11 +1,7 @@
 import Link from "next/link";
 import type { PublicStrategyPublication } from "@/lib/strategy-publications";
+import { formatDrawdownMagnitude, formatRate, formatSignedReturn } from "@/lib/strategy-sharing";
 import { PerformanceChart } from "./PerformanceChart";
-
-const percent = (value: string): string => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${parsed >= 0 ? "+" : ""}${(parsed * 100).toFixed(2)}%` : "—";
-};
 
 export function PublishedStrategyCard({ publication }: { publication: PublicStrategyPublication }) {
   const points = publication.equityCurve.map((point) => ({
@@ -28,9 +24,9 @@ export function PublishedStrategyCard({ publication }: { publication: PublicStra
       <p className="published-strategy-card__description">{publication.description}</p>
       <PerformanceChart label={`${publication.name} 歷史權益曲線`} points={points} tone="cyan" variant="smooth" />
       <dl className="bot-card__metrics">
-        <div><dt>總報酬</dt><dd>{percent(publication.metrics.totalReturn)}</dd></div>
-        <div><dt>最大回撤</dt><dd>{percent(publication.metrics.maxDrawdown)}</dd></div>
-        <div><dt>勝率</dt><dd>{percent(publication.metrics.winRate)}</dd></div>
+        <div><dt>總報酬</dt><dd>{formatSignedReturn(publication.metrics.totalReturn, 2)}</dd></div>
+        <div><dt>最大回撤</dt><dd>{formatDrawdownMagnitude(publication.metrics.maxDrawdown, 2)}</dd></div>
+        <div><dt>勝率</dt><dd>{formatRate(publication.metrics.winRate, 2)}</dd></div>
         <div><dt>交易次數</dt><dd>{publication.metrics.trades}</dd></div>
       </dl>
       <div className="bot-card__actions">

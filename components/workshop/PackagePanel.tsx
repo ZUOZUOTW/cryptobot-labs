@@ -21,6 +21,7 @@ interface PackagePanelProps {
 
 type WorkState = "idle" | "working" | "complete" | "error";
 interface SavedVersion { id: string; configHash: string }
+interface PublishedPublication { slug: string; updatedAt: number }
 
 const ACTION_MASCOTS = {
   save: "/mascots/ai-strategy-vault-v1.webp",
@@ -145,6 +146,21 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
         && (hostname === "weex.com" || hostname.endsWith(".weex.com"));
     } catch { return false; }
   };
+  const parsePublishedPublication = (value: unknown): PublishedPublication | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = (value as { publication?: unknown }).publication;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const record = candidate as Record<string, unknown>;
+    return typeof record.slug === "string" && /^[a-z0-9][a-z0-9-]{7,79}$/.test(record.slug)
+      && Number.isSafeInteger(record.updatedAt) && Number(record.updatedAt) >= 0
+      ? { slug: record.slug, updatedAt: record.updatedAt as number }
+      : null;
+  };
+  const publicationUrl = ({ slug, updatedAt }: PublishedPublication): string => {
+    const url = new URL(`/strategies/${encodeURIComponent(slug)}`, window.location.origin);
+    url.searchParams.set("v", String(updatedAt));
+    return url.toString();
+  };
 
   const publishStrategy = async () => {
     if (!strategyName.valid) {
@@ -222,14 +238,10 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
         }),
       });
       if (publicationResponse.status === 401) { requireLogin(); return; }
-      const publicationBody = await publicationResponse.json().catch(() => null) as {
-        publication?: { slug?: unknown };
-      } | null;
-      if (!publicationResponse.ok || typeof publicationBody?.publication?.slug !== "string") {
-        throw new Error("publish_failed");
-      }
-      const url = `${window.location.origin}/strategies/${encodeURIComponent(publicationBody.publication.slug)}`;
-      setPublication({ fingerprint, slug: publicationBody.publication.slug, url });
+      const published = parsePublishedPublication(await publicationResponse.json().catch(() => null));
+      if (!publicationResponse.ok || !published) throw new Error("publish_failed");
+      const url = publicationUrl(published);
+      setPublication({ fingerprint, slug: published.slug, url });
       setPublishState("complete");
       setShareState("idle");
       setMessage("策略已發布到公開策略列表；你現在可以查看公開頁或分享策略連結。");
@@ -252,6 +264,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       return;
     }
     setShareState("working");
+    let shareUrl = publishedUrl;
     try {
       if (referralUrl) {
         const response = await fetch(`/api/strategy-publications/${encodeURIComponent(publication.slug)}`, {
@@ -261,7 +274,12 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           body: JSON.stringify({ weexReferralUrl: referralUrl }),
         });
         if (response.status === 401) { requireLogin(); return; }
-        if (!response.ok) throw new Error("referral_update_failed");
+        const updated = parsePublishedPublication(await response.json().catch(() => null));
+        if (!response.ok || !updated || updated.slug !== publication.slug) {
+          throw new Error("referral_update_failed");
+        }
+        shareUrl = publicationUrl(updated);
+        setPublication({ fingerprint, slug: updated.slug, url: shareUrl });
       }
     } catch {
       setShareState("error");
@@ -269,14 +287,14 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       return;
     }
     try {
-      await navigator.clipboard.writeText(publishedUrl);
+      await navigator.clipboard.writeText(shareUrl);
       setShareState("complete");
       setMessage(referralUrl ? "邀請連結已保存，策略分享連結已複製。" : "策略分享連結已複製。");
     } catch {
       setShareState("error");
       setMessage(referralUrl
-        ? `邀請連結已保存，但無法自動複製；請手動分享此策略連結：${publishedUrl}`
-        : `無法自動複製，請手動分享此策略連結：${publishedUrl}`);
+        ? `邀請連結已保存，但無法自動複製；請手動分享此策略連結：${shareUrl}`
+        : `無法自動複製，請手動分享此策略連結：${shareUrl}`);
     }
   };
   return (

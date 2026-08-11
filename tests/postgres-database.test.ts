@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCloudRunRepository } from "../lib/server/cloud-runs";
 import { PostgresControlPlaneDatabase } from "../lib/server/postgres-database";
 
 describe("Supabase Postgres D1 compatibility adapter", () => {
@@ -29,5 +30,23 @@ describe("Supabase Postgres D1 compatibility adapter", () => {
     const database = new PostgresControlPlaneDatabase({ unsafe } as never);
     await database.prepare("INSERT OR IGNORE INTO device_nonces (id) VALUES (?)").bind("n1").run();
     expect(unsafe).toHaveBeenCalledWith("INSERT INTO device_nonces (id) VALUES ($1) ON CONFLICT DO NOTHING", ["n1"]);
+  });
+
+  it("preserves the quoted camelCase outer ordering used by the cloud-run CTE", async () => {
+    const rows = Object.assign([], { count: 0 });
+    const unsafe = vi.fn(async (sql: string, bindings: unknown[]) => {
+      void sql;
+      void bindings;
+      return rows;
+    });
+    const database = new PostgresControlPlaneDatabase({ unsafe } as never);
+
+    await createCloudRunRepository(database).list("user_1");
+
+    expect(unsafe).toHaveBeenCalledOnce();
+    const [sql, bindings] = unsafe.mock.calls[0]!;
+    expect(sql).toMatch(/created_at AS "createdAt"/);
+    expect(sql).toMatch(/order by "createdAt" desc,id desc$/i);
+    expect(bindings).toEqual(["user_1", "user_1"]);
   });
 });

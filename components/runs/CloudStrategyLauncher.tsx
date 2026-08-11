@@ -30,6 +30,7 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   backtest_execution_failed: "歷史回測未能完成，策略尚未啟動。",
   strategy_service_unavailable: "策略服務暫時無法使用，請稍後再試。",
   cloud_run_service_unavailable: "雲端運行服務暫時無法建立策略，請稍後再試。",
+  cloud_run_target_conflict: "同一個 WEEX 帳戶的此市場與交易對已有未停止策略。請先停止原策略，再啟動新版本。",
   cloud_run_prerequisite_failed: "啟動條件尚未完成。請確認 WEEX API 已啟用此市場的真倉交易權限，並重新整理後再試。",
   live_confirmation_required: "真倉同意已過期，請重新按下啟動按鈕。",
   forbidden_origin: "頁面驗證已過期，請重新整理後再試。",

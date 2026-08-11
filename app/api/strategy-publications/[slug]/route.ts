@@ -5,10 +5,11 @@ import { errorResponse, HttpProblem, readStrictJson } from "@/lib/server/http";
 import { env } from "@/lib/server/platform-env";
 import {
   parseWeexReferralUpdateInput,
+  publicStrategyPublicationCacheTag,
   publicStrategyFreshnessHeaders,
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +83,7 @@ export async function PATCH(
     if (!updated) throw new HttpProblem(404, "not_found");
     const record = await repository.getBySlug(slug);
     if (!record) throw new HttpProblem(404, "not_found");
+    revalidateTag(publicStrategyPublicationCacheTag(slug), { expire: 0 });
     revalidatePath(`/strategies/${slug}`);
     return Response.json({ publication: toPublicStrategyPublication(record) }, {
       headers: publicStrategyFreshnessHeaders,

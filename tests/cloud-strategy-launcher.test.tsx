@@ -204,4 +204,32 @@ describe("control-console API automation launcher", () => {
     expect(await screen.findByText("雲端運行服務暫時無法建立策略，請稍後再試。")).toBeInTheDocument();
     expect(screen.queryByText(/確認 WEEX API 已啟用合約交易權限/)).not.toBeInTheDocument();
   });
+
+  it("explains when the same WEEX target is already controlled by another strategy", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        account: {
+          connectionStatus: "active",
+          withdrawalAccessAbsent: true,
+          permissions: { read: true, futuresTrade: true, spotTrade: true },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        strategyVersion: { id: "sv_1", configHash: hash },
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        backtest: {
+          id: "bt_1", strategyVersionId: "sv_1", status: "succeeded", evidenceLevel: "historical",
+          dataset: { complete: true }, result: { configurationHash: hash },
+        },
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "cloud_run_target_conflict" }), { status: 409 }));
+    const user = userEvent.setup();
+    render(<CloudStrategyLauncher templates={[template]} />);
+
+    await user.click(await screen.findByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
+
+    expect(await screen.findByText("同一個 WEEX 帳戶的此市場與交易對已有未停止策略。請先停止原策略，再啟動新版本。"))
+      .toBeInTheDocument();
+  });
 });

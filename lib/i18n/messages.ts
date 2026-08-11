@@ -59,7 +59,8 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 發布",
     "PUBLIC LIST": "公開列表",
     "03 / SHARE": "03 / 分享",
-    "WEEX / USDT": "WEEX 市場 / USDT", "v": "版本",
+    "WEEX / USDT": "WEEX 市場 / USDT", "收藏保存在此瀏覽器": "收藏保存在此瀏覽器", "v": "版本",
+    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自動生成文案", "SHARE TO SOCIAL": "分享至社群", "WEEX /": "WEEX 市場 /",
   },
   "zh-Hans": {
     "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟",
@@ -108,7 +109,8 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 发布",
     "PUBLIC LIST": "公开列表",
     "03 / SHARE": "03 / 分享",
-    "WEEX / USDT": "WEEX 市场 / USDT", "v": "版本",
+    "WEEX / USDT": "WEEX 市场 / USDT", "收藏保存在此瀏覽器": "收藏保存在此浏览器", "v": "版本",
+    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自动生成文案", "SHARE TO SOCIAL": "分享到社交平台", "WEEX /": "WEEX 市场 /",
   },
   en: {
     "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO",
@@ -157,7 +159,8 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / PUBLISH",
     "PUBLIC LIST": "PUBLIC LIST",
     "03 / SHARE": "03 / SHARE",
-    "WEEX / USDT": "WEEX / USDT", "v": "v",
+    "WEEX / USDT": "WEEX / USDT", "收藏保存在此瀏覽器": "Favorites are saved in this browser", "v": "v",
+    "STRATEGY SHARE STUDIO": "STRATEGY SHARE STUDIO", "AUTO-GENERATED CAPTION": "AUTO-GENERATED CAPTION", "SHARE TO SOCIAL": "SHARE TO SOCIAL", "WEEX /": "WEEX /",
   },
   ar: {
     "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة",
@@ -207,7 +210,8 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / نشر",
     "PUBLIC LIST": "القائمة العامة",
     "03 / SHARE": "03 / مشاركة",
-    "WEEX / USDT": "سوق WEEX / USDT", "v": "الإصدار",
+    "WEEX / USDT": "سوق WEEX / USDT", "收藏保存在此瀏覽器": "تُحفظ المفضلة في هذا المتصفح", "v": "الإصدار",
+    "STRATEGY SHARE STUDIO": "استوديو مشاركة الاستراتيجية", "AUTO-GENERATED CAPTION": "نص مُنشأ تلقائيًا", "SHARE TO SOCIAL": "المشاركة على الشبكات الاجتماعية", "WEEX /": "سوق WEEX /",
   },
   ru: {
     "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX",
@@ -257,7 +261,8 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / ОПУБЛИКОВАТЬ",
     "PUBLIC LIST": "ОБЩИЙ СПИСОК",
     "03 / SHARE": "03 / ПОДЕЛИТЬСЯ",
-    "WEEX / USDT": "РЫНОК WEEX / USDT", "v": "версия",
+    "WEEX / USDT": "РЫНОК WEEX / USDT", "收藏保存在此瀏覽器": "Избранное сохраняется в этом браузере", "v": "версия",
+    "STRATEGY SHARE STUDIO": "СТУДИЯ ПУБЛИКАЦИИ СТРАТЕГИИ", "AUTO-GENERATED CAPTION": "АВТОМАТИЧЕСКИ СОЗДАННЫЙ ТЕКСТ", "SHARE TO SOCIAL": "ПОДЕЛИТЬСЯ В СОЦСЕТЯХ", "WEEX /": "РЫНОК WEEX /",
   },
   ja: {
     "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ",
@@ -307,7 +312,8 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 公開",
     "PUBLIC LIST": "公開一覧",
     "03 / SHARE": "03 / 共有",
-    "WEEX / USDT": "WEEX 市場 / USDT", "v": "バージョン",
+    "WEEX / USDT": "WEEX 市場 / USDT", "收藏保存在此瀏覽器": "お気に入りはこのブラウザに保存されます", "v": "バージョン",
+    "STRATEGY SHARE STUDIO": "ストラテジー共有スタジオ", "AUTO-GENERATED CAPTION": "自動生成キャプション", "SHARE TO SOCIAL": "ソーシャルで共有", "WEEX /": "WEEX 市場 /",
   },
 };
 
@@ -502,7 +508,8 @@ export function canonicalMessageSource(value: string): string {
     for (const locale of Object.keys(messages) as Locale[]) {
       for (const [source, translation] of Object.entries(messages[locale])) {
         if (!sourceByTranslation.has(translation)) sourceByTranslation.set(translation, source);
-        if (!/__\d+__/u.test(translation)) continue;
+        if (!/__\d+__/u.test(translation)
+          || translation.replace(/__\d+__/gu, "").trim().length === 0) continue;
         const placeholderOrder: number[] = [];
         const parts: string[] = [];
         let cursor = 0;
@@ -523,10 +530,10 @@ export function canonicalMessageSource(value: string): string {
   for (const { pattern, placeholderOrder, source } of sourcePatternsByTranslation ?? []) {
     const match = value.match(pattern);
     if (!match) continue;
-    const captures = new Map(placeholderOrder.map((placeholder, index) => [
-      placeholder,
-      canonicalMessageSource(match[index + 1] ?? ""),
-    ]));
+    const captures = new Map(placeholderOrder.map((placeholder, index) => {
+      const capture = match[index + 1] ?? "";
+      return [placeholder, capture === value ? capture : canonicalMessageSource(capture)];
+    }));
     return source.replace(/__(\d+)__/gu, (_, index) => captures.get(Number(index)) ?? "");
   }
   return value;

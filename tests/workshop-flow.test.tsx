@@ -988,6 +988,30 @@ describe("multi-strategy workshop", () => {
     expect(within(bar).queryByRole("button", { name: "行動列：開始模擬運行" })).not.toBeInTheDocument();
   });
 
+  it("switches only mobile workshop steps with an intentional horizontal swipe", () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    try {
+      renderWorkshop();
+      const grid = document.querySelector<HTMLElement>(".workshop-grid");
+      expect(grid).not.toBeNull();
+
+      fireEvent.touchStart(grid!, { touches: [{ clientX: 330, clientY: 260 }] });
+      fireEvent.touchEnd(grid!, { changedTouches: [{ clientX: 250, clientY: 266 }] });
+      expect(screen.getByRole("button", { name: /02.*參數/ })).toHaveAttribute("aria-current", "step");
+
+      fireEvent.touchStart(grid!, { touches: [{ clientX: 250, clientY: 260 }] });
+      fireEvent.touchEnd(grid!, { changedTouches: [{ clientX: 255, clientY: 350 }] });
+      expect(screen.getByRole("button", { name: /02.*參數/ })).toHaveAttribute("aria-current", "step");
+
+      fireEvent.touchStart(grid!, { touches: [{ clientX: 80, clientY: 260 }] });
+      fireEvent.touchEnd(grid!, { changedTouches: [{ clientX: 155, clientY: 262 }] });
+      expect(screen.getByRole("button", { name: /01.*組裝/ })).toHaveAttribute("aria-current", "step");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+    }
+  });
+
   it("returns from validating to idle with guidance when validation rejects the run", () => {
     vi.useFakeTimers();
     const config = cloneConfig(STRATEGY_PRESETS[0]);

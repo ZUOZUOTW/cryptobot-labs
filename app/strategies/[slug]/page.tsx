@@ -5,6 +5,12 @@ import { notFound } from "next/navigation";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { StrategyShareActions } from "@/components/StrategyShareActions";
 import { loadPublicStrategyPublication } from "@/lib/server/public-strategy-loader";
+import {
+  formatDrawdownMagnitude,
+  formatRate,
+  formatSignedReturn,
+  strategyPosterPath,
+} from "@/lib/strategy-sharing";
 
 export const revalidate = 3600;
 
@@ -12,18 +18,14 @@ interface StrategyPageProps {
   params: Promise<{ slug: string }>;
 }
 
-const percent = (value: string): string => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${parsed >= 0 ? "+" : ""}${(parsed * 100).toFixed(2)}%` : "—";
-};
-
 export async function generateMetadata({ params }: StrategyPageProps): Promise<Metadata> {
   const { slug } = await params;
   const publication = await loadPublicStrategyPublication(slug);
   if (!publication) return {};
   const title = `${publication.name}｜${publication.publisherName} 的公開策略`;
   const description = `${publication.description}。${publication.symbol} ${publication.timeframe}，查看經 WEEX 公開歷史行情驗證的績效與完整策略結構。`;
-  const image = `/strategies/${publication.slug}/opengraph-image`;
+  const sharePath = `/strategies/${publication.slug}?v=${publication.updatedAt}`;
+  const image = strategyPosterPath(sharePath);
   return {
     title,
     description,
@@ -32,7 +34,7 @@ export async function generateMetadata({ params }: StrategyPageProps): Promise<M
       title,
       description,
       type: "article",
-      url: `/strategies/${publication.slug}`,
+      url: sharePath,
       publishedTime: new Date(publication.publishedAt).toISOString(),
       images: [{ url: image, width: 1200, height: 630, alt: `${publication.name} 公開策略績效預覽` }],
     },
@@ -52,6 +54,8 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
   const range = publication.actualStartAt !== null && publication.actualEndAt !== null
     ? `${new Date(publication.actualStartAt).toLocaleDateString("zh-TW")}–${new Date(publication.actualEndAt).toLocaleDateString("zh-TW")}`
     : "完整公開行情區間";
+  const sharePath = `/strategies/${publication.slug}?v=${publication.updatedAt}`;
+  const posterPath = strategyPosterPath(sharePath);
 
   return (
     <article className="bot-detail-page public-strategy-page">
@@ -86,7 +90,18 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
               <StrategyShareActions
                 botId={publication.slug}
                 botName={publication.name}
-                sharePath={`/strategies/${publication.slug}`}
+                marketKind={publication.market}
+                posterPath={posterPath}
+                sharePath={sharePath}
+                timeframe={publication.timeframe}
+                verifiedPerformance={{
+                  historicalPeriod: publication.actualStartAt !== null && publication.actualEndAt !== null
+                    ? { startAt: publication.actualStartAt, endAt: publication.actualEndAt }
+                    : undefined,
+                  kind: "total-return",
+                  value: formatSignedReturn(publication.metrics.totalReturn, 2),
+                  verified: true,
+                }}
               />
             </div>
           </div>
@@ -124,9 +139,9 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
         <div className="public-strategy-performance__grid">
           <PerformanceChart label={`${publication.name} 歷史權益曲線`} points={chart} tone="cyan" variant="smooth" />
           <dl className="historical-metrics glass-panel">
-            <div><dt>總報酬</dt><dd>{percent(publication.metrics.totalReturn)}</dd></div>
-            <div><dt>最大回撤</dt><dd>{percent(publication.metrics.maxDrawdown)}</dd></div>
-            <div><dt>勝率</dt><dd>{percent(publication.metrics.winRate)}</dd></div>
+            <div><dt>總報酬</dt><dd>{formatSignedReturn(publication.metrics.totalReturn, 2)}</dd></div>
+            <div><dt>最大回撤</dt><dd>{formatDrawdownMagnitude(publication.metrics.maxDrawdown, 2)}</dd></div>
+            <div><dt>勝率</dt><dd>{formatRate(publication.metrics.winRate, 2)}</dd></div>
             <div><dt>Sharpe</dt><dd>{publication.metrics.sharpe}</dd></div>
             <div><dt>Profit Factor</dt><dd>{publication.metrics.profitFactor ?? "—"}</dd></div>
             <div><dt>交易次數</dt><dd>{publication.metrics.trades}</dd></div>
@@ -183,7 +198,18 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
           <StrategyShareActions
             botId={publication.slug}
             botName={publication.name}
-            sharePath={`/strategies/${publication.slug}`}
+            marketKind={publication.market}
+            posterPath={posterPath}
+            sharePath={sharePath}
+            timeframe={publication.timeframe}
+            verifiedPerformance={{
+              historicalPeriod: publication.actualStartAt !== null && publication.actualEndAt !== null
+                ? { startAt: publication.actualStartAt, endAt: publication.actualEndAt }
+                : undefined,
+              kind: "total-return",
+              value: formatSignedReturn(publication.metrics.totalReturn, 2),
+              verified: true,
+            }}
           />
         </div>
       </section>

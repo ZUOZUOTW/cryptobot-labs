@@ -39,7 +39,14 @@ const I18nContext = createContext<I18nContextValue>({
   t: (source) => source,
 });
 
-const TRANSLATABLE_ATTRIBUTES = ["alt", "aria-description", "aria-label", "placeholder", "title"] as const;
+const TRANSLATABLE_ATTRIBUTES = [
+  "alt",
+  "aria-description",
+  "aria-label",
+  "data-label",
+  "placeholder",
+  "title",
+] as const;
 const SKIPPED_ELEMENTS = new Set(["CODE", "PRE", "SCRIPT", "STYLE", "TEXTAREA"]);
 
 function shouldSkip(node: Node): boolean {

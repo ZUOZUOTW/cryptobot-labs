@@ -23,6 +23,25 @@ type SiteMetadataCopy = {
   imageAlt?: string;
 };
 
+const isLoopbackHostname = (hostname: string) => (
+  hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"
+);
+
+export function configuredSiteOrigin(value: unknown): URL | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+
+  try {
+    const parsed = new URL(value);
+    const loopbackHttp = parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname);
+    if ((parsed.protocol !== "https:" && !loopbackHttp)
+      || parsed.username || parsed.password
+      || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
+    return new URL(parsed.origin);
+  } catch {
+    return null;
+  }
+}
+
 const validPort = (port: string | undefined) => {
   if (port === undefined) return true;
   if (!/^[0-9]+$/.test(port)) return false;

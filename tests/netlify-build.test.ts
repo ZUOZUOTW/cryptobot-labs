@@ -18,15 +18,22 @@ describe("Netlify production build", () => {
   });
 
   it("renders dynamic social cards without reading public assets from the function filesystem", async () => {
-    const [socialImage, publicationLoader] = await Promise.all([
+    const [socialImage, posterCard, publicationLoader] = await Promise.all([
       readFile("app/strategies/[slug]/opengraph-image.tsx", "utf8"),
+      readFile("components/StrategyPosterCard.tsx", "utf8"),
       readFile("lib/server/public-strategy-loader.ts", "utf8"),
     ]);
 
     expect(socialImage).toContain("new ImageResponse");
-    expect(socialImage).toContain("<MascotBadge />");
+    expect(socialImage).toContain("buildMemberStrategyPosterMetrics(publication.metrics)");
+    expect(socialImage).toContain('new URL("/mascots/ai-builder.png", assetOrigin).toString()');
+    expect(socialImage).toContain("resolveStrategyPosterAssetOrigin");
+    expect(socialImage).toContain('"Cache-Control": "no-store"');
+    expect(socialImage).toContain("status: 503");
+    expect(socialImage).toContain("status: 404");
+    expect(socialImage).not.toContain("MascotBadge");
     expect(socialImage).toContain("export const revalidate = 3600");
-    expect(socialImage).toContain('"Netlify-CDN-Cache-Control": "public, durable, s-maxage=3600, stale-while-revalidate=86400"');
+    expect(posterCard).toContain('"Netlify-CDN-Cache-Control": "public, durable, s-maxage=3600, stale-while-revalidate=86400"');
     expect(publicationLoader).toContain("unstable_cache");
     expect(socialImage).not.toContain('from "node:fs');
     expect(socialImage).not.toContain("join(process.cwd()");

@@ -2,11 +2,14 @@ import { unstable_cache } from "next/cache";
 import { createControlPlaneDatabase } from "@/db";
 import { createStrategyPublicationRepository } from "@/db/repositories";
 import { env } from "@/lib/server/platform-env";
-import { toPublicStrategyPublication } from "@/lib/server/strategy-publications";
+import {
+  publicStrategyPublicationCacheTag,
+  toPublicStrategyPublication,
+} from "@/lib/server/strategy-publications";
 import type { PublicStrategyPublication } from "@/lib/strategy-publications";
 
-const loadCachedPublication = unstable_cache(
-  async (slug: string): Promise<PublicStrategyPublication | null> => {
+const loadCachedPublication = (slug: string) => unstable_cache(
+  async (): Promise<PublicStrategyPublication | null> => {
     const database = createControlPlaneDatabase(env.DB);
     const record = await createStrategyPublicationRepository(database).getBySlug(slug);
     if (!record) return null;
@@ -17,13 +20,16 @@ const loadCachedPublication = unstable_cache(
         slug,
         name: error instanceof Error ? error.name : "Error",
       });
-      return null;
+      throw error;
     }
   },
-  ["public-strategy-publication"],
-  { revalidate: 3600 },
-);
+  ["public-strategy-publication", slug],
+  { revalidate: 3600, tags: [publicStrategyPublicationCacheTag(slug)] },
+)();
 
-export const loadPublicStrategyPublication = (slug: string): Promise<PublicStrategyPublication | null> => (
-  loadCachedPublication(slug)
-);
+const PUBLIC_STRATEGY_SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
+
+export const loadPublicStrategyPublication = (slug: string): Promise<PublicStrategyPublication | null> => {
+  if (!PUBLIC_STRATEGY_SLUG.test(slug)) return Promise.resolve(null);
+  return loadCachedPublication(slug);
+};

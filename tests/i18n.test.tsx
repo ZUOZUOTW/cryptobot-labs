@@ -90,6 +90,19 @@ describe("site internationalization", () => {
     });
   });
 
+  it("translates responsive table labels that remain visible when headers are hidden", async () => {
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
+    render(
+      <I18nProvider>
+        <table><tbody><tr><td data-label="市場">BTCUSDT</td></tr></tbody></table>
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("BTCUSDT")).toHaveAttribute("data-label", translateMessage("en", "市場"));
+    });
+  });
+
   it("uses reviewed placeholder translations for high-risk validation copy", () => {
     expect(translateMessage("en", "BTCUSDT 不在 WEEX API 公告支援的現貨交易對中"))
       .toBe("BTCUSDT is not among the spot trading pairs supported by the WEEX API.");

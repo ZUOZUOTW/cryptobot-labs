@@ -57,12 +57,12 @@ describe("production strategy publishing UI", () => {
       }
       if (url === "/api/strategy-publications") {
         return new Response(JSON.stringify({
-          publication: { slug: "strategy-communitycopy" },
+          publication: { slug: "strategy-communitycopy", updatedAt: 1_707_004_800_000 },
         }), { status: 201 });
       }
       if (url === "/api/strategy-publications/strategy-communitycopy") {
         return new Response(JSON.stringify({
-          publication: { slug: "strategy-communitycopy" },
+          publication: { slug: "strategy-communitycopy", updatedAt: 1_707_091_200_000 },
         }), { status: 200 });
       }
       throw new Error(`unexpected request: ${url}`);
@@ -99,7 +99,7 @@ describe("production strategy publishing UI", () => {
     expect(shareButton).toBeEnabled();
     expect(referralInput).toBeEnabled();
     expect(screen.getByRole("link", { name: "查看公開策略" }))
-      .toHaveAttribute("href", `${window.location.origin}/strategies/strategy-communitycopy`);
+      .toHaveAttribute("href", `${window.location.origin}/strategies/strategy-communitycopy?v=1707004800000`);
 
     await user.type(referralInput, "https://www.weex.com/register?inviteCode=TEST");
     await user.click(shareButton);
@@ -111,6 +111,6 @@ describe("production strategy publishing UI", () => {
     });
     expect(await screen.findByRole("status")).toHaveTextContent("邀請連結已保存，策略分享連結已複製");
     expect(await navigator.clipboard.readText())
-      .toBe(`${window.location.origin}/strategies/strategy-communitycopy`);
+      .toBe(`${window.location.origin}/strategies/strategy-communitycopy?v=1707091200000`);
   });
 });

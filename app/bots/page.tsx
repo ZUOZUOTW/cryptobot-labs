@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BotCard } from "../../components/BotCard";
 import { BOT_CATALOG } from "../../data/bots";
 import type { Market, RiskLevel, WeexHistoricalPerformance } from "../../lib/types";
@@ -21,6 +21,35 @@ type SortOption = "recommended" | "return-desc" | "drawdown-asc" | "win-rate-des
 
 const TAGS = Array.from(new Set(BOT_CATALOG.flatMap((bot) => bot.tags))).sort((a, b) => a.localeCompare(b, "zh-Hant"));
 const TIMEFRAMES = Array.from(new Set(BOT_CATALOG.map((bot) => bot.timeframe))).sort();
+const PUBLICATION_CURSOR = /^[A-Za-z0-9_-]{16,384}$/;
+
+const isPublicStrategyPublication = (entry: unknown): entry is PublicStrategyPublication => (
+  Boolean(entry) && typeof entry === "object"
+  && typeof (entry as { slug?: unknown }).slug === "string"
+  && typeof (entry as { name?: unknown }).name === "string"
+  && typeof (entry as { publisherName?: unknown }).publisherName === "string"
+  && ["long", "short", "both"].includes(String((entry as { tradeDirection?: unknown }).tradeDirection))
+  && typeof (entry as { hasPrivateSource?: unknown }).hasPrivateSource === "boolean"
+  && Array.isArray((entry as { blocks?: unknown }).blocks)
+  && Array.isArray((entry as { equityCurve?: unknown }).equityCurve)
+);
+
+const parsePublicationPage = (value: unknown): {
+  publications: PublicStrategyPublication[];
+  nextCursor: string | null;
+} => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("publication_list_failed");
+  const body = value as { publications?: unknown; nextCursor?: unknown };
+  if (!Array.isArray(body.publications)) throw new Error("publication_list_failed");
+  const nextCursor = body.nextCursor ?? null;
+  if (nextCursor !== null && (typeof nextCursor !== "string" || !PUBLICATION_CURSOR.test(nextCursor))) {
+    throw new Error("publication_list_failed");
+  }
+  return {
+    publications: body.publications.filter(isPublicStrategyPublication),
+    nextCursor,
+  };
+};
 
 export default function BotsPage() {
   const { locale } = useI18n();
@@ -39,6 +68,11 @@ export default function BotsPage() {
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
   const [publications, setPublications] = useState<PublicStrategyPublication[]>([]);
   const [publicationState, setPublicationState] = useState<"loading" | "ready" | "error">("loading");
+  const [publicationMoreState, setPublicationMoreState] = useState<"idle" | "loading" | "error">("idle");
+  const [publicationNextCursor, setPublicationNextCursor] = useState<string | null>(null);
+  const [publicationReloadKey, setPublicationReloadKey] = useState(0);
+  const publicationRequestInFlight = useRef(false);
+  const publicationMoreAbort = useRef<AbortController | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
@@ -66,28 +100,59 @@ export default function BotsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     void fetch("/api/strategy-publications", {
       cache: "no-store",
       headers: { Accept: "application/json" },
+      signal: controller.signal,
     })
       .then(async (response) => {
-        const body = await response.json() as { publications?: unknown };
-        if (!response.ok || !Array.isArray(body.publications)) throw new Error("publication_list_failed");
-        const valid = body.publications.filter((entry): entry is PublicStrategyPublication => (
-          Boolean(entry) && typeof entry === "object"
-          && typeof (entry as { slug?: unknown }).slug === "string"
-          && typeof (entry as { name?: unknown }).name === "string"
-          && typeof (entry as { publisherName?: unknown }).publisherName === "string"
-          && ["long", "short", "both"].includes(String((entry as { tradeDirection?: unknown }).tradeDirection))
-          && typeof (entry as { hasPrivateSource?: unknown }).hasPrivateSource === "boolean"
-          && Array.isArray((entry as { blocks?: unknown }).blocks)
-          && Array.isArray((entry as { equityCurve?: unknown }).equityCurve)
-        ));
-        if (!cancelled) { setPublications(valid); setPublicationState("ready"); }
+        const body = parsePublicationPage(await response.json() as unknown);
+        if (!response.ok) throw new Error("publication_list_failed");
+        if (!cancelled) {
+          setPublications(body.publications);
+          setPublicationNextCursor(body.nextCursor);
+          setPublicationState("ready");
+        }
       })
       .catch(() => { if (!cancelled) setPublicationState("error"); });
-    return () => { cancelled = true; };
-  }, []);
+    return () => { cancelled = true; controller.abort(); };
+  }, [publicationReloadKey]);
+
+  useEffect(() => () => publicationMoreAbort.current?.abort(), []);
+
+  const loadMorePublications = useCallback(async () => {
+    const cursor = publicationNextCursor;
+    if (cursor === null || publicationRequestInFlight.current) return;
+    publicationRequestInFlight.current = true;
+    const controller = new AbortController();
+    publicationMoreAbort.current = controller;
+    setPublicationMoreState("loading");
+    try {
+      const response = await fetch(`/api/strategy-publications?cursor=${encodeURIComponent(cursor)}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+      const body = parsePublicationPage(await response.json() as unknown);
+      if (!response.ok || body.nextCursor === cursor) throw new Error("publication_list_failed");
+      setPublications((current) => {
+        const known = new Set(current.map((publication) => publication.slug));
+        return [...current, ...body.publications.filter((publication) => {
+          if (known.has(publication.slug)) return false;
+          known.add(publication.slug);
+          return true;
+        })];
+      });
+      setPublicationNextCursor(body.nextCursor);
+      setPublicationMoreState("idle");
+    } catch {
+      if (!controller.signal.aborted) setPublicationMoreState("error");
+    } finally {
+      if (publicationMoreAbort.current === controller) publicationMoreAbort.current = null;
+      publicationRequestInFlight.current = false;
+    }
+  }, [publicationNextCursor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,8 +225,12 @@ export default function BotsPage() {
         <p>先比較用途、風險、最大回撤、交易次數與資料日期；未登入可預覽精選策略，登入後查看完整策略庫。</p>
       </header>
 
-      {(publicationState === "loading" || publications.length > 0) && (
-        <section className="published-strategies" aria-labelledby="published-strategies-title">
+      {(publicationState === "loading" || publications.length > 0 || publicationNextCursor !== null) && (
+        <section
+          aria-busy={publicationState === "loading" || publicationMoreState === "loading"}
+          aria-labelledby="published-strategies-title"
+          className="published-strategies"
+        >
           <div className="section-heading">
             <p className="eyebrow">COMMUNITY RELEASES</p>
             <h2 id="published-strategies-title">會員公開策略</h2>
@@ -170,14 +239,55 @@ export default function BotsPage() {
           {publicationState === "loading" ? (
             <div className="published-strategies__loading glass-panel" role="status">正在載入會員公開策略…</div>
           ) : (
-            <div className="published-strategies__grid">
-              {publications.map((publication) => <PublishedStrategyCard key={publication.slug} publication={publication} />)}
-            </div>
+            <>
+              <div className="published-strategies__grid">
+                {publications.map((publication) => <PublishedStrategyCard key={publication.slug} publication={publication} />)}
+              </div>
+              <div aria-live="polite" className="published-strategies__pagination">
+                {publicationMoreState === "error" ? (
+                  <>
+                    <p role="alert">無法載入更多會員策略，請稍後重試。</p>
+                    <button
+                      className="button button--secondary"
+                      onClick={() => { void loadMorePublications(); }}
+                      type="button"
+                    >
+                      重試載入更多會員策略
+                    </button>
+                  </>
+                ) : publicationNextCursor !== null ? (
+                  <button
+                    className="button button--secondary"
+                    disabled={publicationMoreState === "loading"}
+                    onClick={() => { void loadMorePublications(); }}
+                    type="button"
+                  >
+                    {publicationMoreState === "loading" ? "正在載入更多會員策略…" : "載入更多會員策略"}
+                  </button>
+                ) : (
+                  <p role="status">已顯示全部會員公開策略</p>
+                )}
+              </div>
+            </>
           )}
         </section>
       )}
       {publicationState === "error" && (
-        <p className="catalog-preference-status" role="status">會員公開策略暫時無法載入；官方策略仍可正常瀏覽。</p>
+        <div className="catalog-preference-status published-strategies__error" role="alert">
+          <p>會員公開策略暫時無法載入；官方策略仍可正常瀏覽。</p>
+          <button
+            className="text-button"
+            onClick={() => {
+              setPublicationState("loading");
+              setPublicationMoreState("idle");
+              setPublicationNextCursor(null);
+              setPublicationReloadKey((value) => value + 1);
+            }}
+            type="button"
+          >
+            重新載入會員公開策略
+          </button>
+        </div>
       )}
 
       <button
@@ -323,7 +433,7 @@ export default function BotsPage() {
                   <h2 id="catalog-login-title">登入後，繼續探索完整策略庫</h2>
                   <p>查看更多現貨與合約策略、保存收藏偏好，並將策略直接帶入組裝車間。</p>
                   <ul aria-label="會員功能">
-                    <li>完整策略比較</li><li>收藏跨裝置保存</li><li>一鍵帶入組裝</li>
+                    <li>完整策略比較</li><li>收藏保存在此瀏覽器</li><li>一鍵帶入組裝</li>
                   </ul>
                 </div>
                 <div className="catalog-login-gate__action">

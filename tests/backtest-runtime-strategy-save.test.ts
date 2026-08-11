@@ -65,7 +65,9 @@ describe("backtest runtime and strategy save wiring", () => {
 
   it("wires the real detail GET route through fail-closed environment initialization", async () => {
     const route = await import("../app/api/backtests/[id]/route");
-    const response = await route.GET(new Request("https://labs.example/api/backtests/job_1"), { params: { id: "job_1" } });
+    const response = await route.GET(new Request("https://labs.example/api/backtests/job_1"), {
+      params: Promise.resolve({ id: "job_1" }),
+    });
     expect(response.status).toBe(500);
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
@@ -115,6 +117,11 @@ describe("backtest runtime and strategy save wiring", () => {
     }, "save-blocked-name"));
     expect(blockedName.status).toBe(422);
     expect(await blockedName.json()).toMatchObject({ error: { code: "invalid_strategy_name" } });
+    for (const [index, name] of ["SAFE\u202Egpj.exe", "CryptoBot\u200BLabs 官方", "Ａtlas Trend"].entries()) {
+      const blockedUnicode = await handlers.strategy(makeRequest({ config: config({ name }) }, `save-blocked-unicode-${index}`));
+      expect(blockedUnicode.status).toBe(422);
+      expect(await blockedUnicode.json()).toMatchObject({ error: { code: "invalid_strategy_name" } });
+    }
     const custom = await handlers.strategy(makeRequest({ config: config({ source: "return {action:'buy'}" }) }, "save-custom"));
     expect(custom.status).toBe(422);
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM strategy_versions").get()).toEqual({ count: 1 });

@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildSiteMetadata, requestOrigin } from "../lib/site-metadata";
+import {
+  buildSiteMetadata,
+  configuredSiteOrigin,
+  requestOrigin,
+} from "../lib/site-metadata";
 
 const readProjectFile = (path: string) => readFile(resolve(process.cwd(), path), "utf8");
 const EXPECTED_TITLE = "CryptoBot Labs｜自動交易策略實驗室";
@@ -16,6 +20,22 @@ describe("production metadata", () => {
       if (name === "x-forwarded-proto") return forwardedProto;
       return null;
     },
+  });
+
+  it("accepts HTTPS origins and local HTTP preview origins only", () => {
+    expect(configuredSiteOrigin("https://labs.example/")?.href).toBe("https://labs.example/");
+    expect(configuredSiteOrigin("http://127.0.0.1:3012/")?.href).toBe("http://127.0.0.1:3012/");
+    expect(configuredSiteOrigin("http://localhost:3012/")?.href).toBe("http://localhost:3012/");
+    expect(configuredSiteOrigin("http://[::1]:3012/")?.href).toBe("http://[::1]:3012/");
+
+    for (const value of [
+      "http://labs.example/",
+      "https://user:secret@labs.example/",
+      "https://labs.example/path",
+      "https://labs.example/?preview=1",
+      "https://labs.example/#preview",
+      "not a URL",
+    ]) expect(configuredSiteOrigin(value)).toBeNull();
   });
 
   it.each([

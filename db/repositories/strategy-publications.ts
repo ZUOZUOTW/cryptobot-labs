@@ -24,6 +24,11 @@ export interface StrategyPublicationRecord {
   updatedAt: number;
 }
 
+export interface StrategyPublicationCursor {
+  publishedAt: number;
+  id: string;
+}
+
 const projection = `p.id,p.user_id AS userId,p.strategy_version_id AS strategyVersionId,
   p.backtest_job_id AS backtestJobId,p.slug,s.name,p.description,p.publisher_name AS publisherName,
   p.weex_referral_url AS weexReferralUrl,s.market,s.symbol,v.config_json AS configJson,
@@ -42,6 +47,38 @@ const publishedJoin = `FROM strategy_publications p
     AND d.id=r.dataset_id AND d.complete=1`;
 
 export function createStrategyPublicationRepository(database: ControlPlaneDatabase) {
+  const listPage = async (options: {
+    limit: number;
+    cursor?: StrategyPublicationCursor;
+  }): Promise<{
+    items: StrategyPublicationRecord[];
+    nextCursor: StrategyPublicationCursor | null;
+  }> => {
+    exactInput(options, ["limit", "cursor"]);
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 100) {
+      throw new Error("publication limit is invalid");
+    }
+    const cursor = options.cursor;
+    if (cursor !== undefined) exactInput(cursor, ["publishedAt", "id"]);
+    const result = cursor === undefined
+      ? await database.prepare(`SELECT ${projection} ${publishedJoin}
+          ORDER BY p.published_at DESC,p.id DESC LIMIT ?`)
+        .bind(options.limit + 1).all<StrategyPublicationRecord>()
+      : await database.prepare(`SELECT ${projection} ${publishedJoin}
+          WHERE (p.published_at < ? OR (p.published_at = ? AND p.id < ?))
+          ORDER BY p.published_at DESC,p.id DESC LIMIT ?`)
+        .bind(time(cursor.publishedAt, "cursor.publishedAt"), time(cursor.publishedAt, "cursor.publishedAt"),
+          id(cursor.id, "cursor.id"), options.limit + 1).all<StrategyPublicationRecord>();
+    if (!result.success) throw new Error("publication list failed");
+    const hasMore = result.results.length > options.limit;
+    const items = result.results.slice(0, options.limit);
+    const last = items.at(-1);
+    return {
+      items,
+      nextCursor: hasMore && last ? { publishedAt: last.publishedAt, id: last.id } : null,
+    };
+  };
+
   return {
     async publish(input: {
       id: string;
@@ -121,11 +158,10 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
     },
 
     async list(limit = 24): Promise<StrategyPublicationRecord[]> {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("publication limit is invalid");
-      const result = await database.prepare(`SELECT ${projection} ${publishedJoin}
-        ORDER BY p.published_at DESC,p.id DESC LIMIT ?`).bind(limit).all<StrategyPublicationRecord>();
-      return result.results;
+      return (await listPage({ limit })).items;
     },
+
+    listPage,
 
     async listByUser(userId: string, limit = 100): Promise<StrategyPublicationRecord[]> {
       const owner = id(userId, "userId");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
 import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
@@ -76,6 +76,7 @@ const configFromPublication = (value: unknown): BotConfig | null => {
 };
 type WorkshopMode = "visual" | "javascript";
 type MobileWorkshopStep = "build" | "parameters" | "test" | "publish";
+const MOBILE_SWIPE_THRESHOLD = 56;
 
 const MOBILE_WORKSHOP_STEPS = [
   { id: "build", number: "01", label: "組裝" },
@@ -102,6 +103,7 @@ export default function WorkshopPage() {
   const [associatedFlowCheck, setAssociatedFlowCheck] = useState<AssociatedFlowCheck | null>(null);
   const [mobileMessage, setMobileMessage] = useState("");
   const [mobileStep, setMobileStep] = useState<MobileWorkshopStep>("build");
+  const mobileSwipeStart = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -261,6 +263,33 @@ export default function WorkshopPage() {
     setMobileMessage(`目前步驟：${next.label}`);
   };
 
+  const beginMobileSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1 || window.innerWidth > 704) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("button, a, input, select, textarea, [contenteditable='true'], [role='slider']")) {
+      mobileSwipeStart.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    mobileSwipeStart.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const finishMobileSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    const start = mobileSwipeStart.current;
+    mobileSwipeStart.current = null;
+    if (!start || event.changedTouches.length !== 1 || window.innerWidth > 704) return;
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < MOBILE_SWIPE_THRESHOLD || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    const nextIndex = deltaX < 0 ? mobileStepIndex + 1 : mobileStepIndex - 1;
+    if (nextIndex < 0 || nextIndex >= MOBILE_WORKSHOP_STEPS.length) {
+      setMobileMessage(deltaX < 0 ? "已是最後一步" : "已是第一步");
+      return;
+    }
+    moveToMobileStep(nextIndex);
+  };
+
   return (
     <div className="workshop-page site-container">
       <header className="page-intro workshop-page__intro">
@@ -289,6 +318,7 @@ export default function WorkshopPage() {
       </div>
 
       <nav className="workshop-stepper" aria-label="手機版組裝步驟">
+        <p className="workshop-swipe-hint" id="workshop-swipe-instructions">左右滑動內容可快速切換步驟</p>
         <ol>
           {MOBILE_WORKSHOP_STEPS.map((step, index) => (
             <li key={step.id}>
@@ -306,7 +336,13 @@ export default function WorkshopPage() {
         </ol>
       </nav>
 
-      <div className="workshop-grid">
+      <div
+        aria-describedby="workshop-swipe-instructions"
+        className="workshop-grid"
+        onTouchCancel={() => { mobileSwipeStart.current = null; }}
+        onTouchEnd={finishMobileSwipe}
+        onTouchStart={beginMobileSwipe}
+      >
         <div className="workshop-step-panel" data-mobile-active={mobileStep === "build"} id="workshop-step-build">
           {mode === "visual" ? (
             <StrategyPalette

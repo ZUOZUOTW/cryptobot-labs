@@ -1,4 +1,4 @@
-import type { StrategyPublicationRecord } from "../../db/repositories";
+import type { StrategyPublicationCursor, StrategyPublicationRecord } from "../../db/repositories";
 import type { BotConfig } from "../types";
 import type {
   PublicStrategyEquityPoint,
@@ -7,7 +7,7 @@ import type {
 } from "../strategy-publications";
 import { validateConfig } from "../strategy-validation";
 import { resolvedTradeDirection } from "../trade-direction";
-import { HttpProblem } from "./http";
+import { HttpProblem, errorResponse } from "./http";
 
 export const publicStrategyFreshnessHeaders = Object.freeze({
   "cache-control": "no-store, max-age=0",
@@ -17,6 +17,77 @@ export const publicStrategyFreshnessHeaders = Object.freeze({
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
 const DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const CURSOR = /^[A-Za-z0-9_-]{16,384}$/;
+const INTEGER = /^(?:0|[1-9]\d*)$/;
+
+export const PUBLICATION_LIST_DEFAULT_LIMIT = 12;
+export const PUBLICATION_LIST_MAX_LIMIT = 24;
+export const PUBLICATION_LIST_MAX_EQUITY_POINTS = 120;
+export const PUBLICATION_LIST_MAX_SCAN_PAGES = 5;
+
+export function publicStrategyPublicationCacheTag(slug: string): string {
+  if (!SLUG.test(slug)) throw new Error("publication slug is invalid");
+  return `public-strategy-publication:${slug}`;
+}
+
+const plainObject = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+  && Object.getPrototypeOf(value) === Object.prototype
+);
+
+const base64UrlEncode = (value: string): string => btoa(value)
+  .replace(/\+/g, "-")
+  .replace(/\//g, "_")
+  .replace(/=+$/, "");
+
+const base64UrlDecode = (value: string): string => atob(value
+  .replace(/-/g, "+")
+  .replace(/_/g, "/")
+  .padEnd(Math.ceil(value.length / 4) * 4, "="));
+
+export function encodePublicationCursor(cursor: StrategyPublicationCursor): string {
+  if (!Number.isSafeInteger(cursor.publishedAt) || cursor.publishedAt < 0 || !ID.test(cursor.id)) {
+    throw new Error("publication cursor is invalid");
+  }
+  return base64UrlEncode(JSON.stringify({ v: 1, publishedAt: cursor.publishedAt, id: cursor.id }));
+}
+
+export function decodePublicationCursor(value: string): StrategyPublicationCursor {
+  if (!CURSOR.test(value)) throw new HttpProblem(400, "invalid_request");
+  let decoded: unknown;
+  try { decoded = JSON.parse(base64UrlDecode(value)) as unknown; }
+  catch { throw new HttpProblem(400, "invalid_request"); }
+  if (!plainObject(decoded) || Object.keys(decoded).sort().join(",") !== "id,publishedAt,v"
+    || decoded.v !== 1 || !Number.isSafeInteger(decoded.publishedAt) || Number(decoded.publishedAt) < 0
+    || typeof decoded.id !== "string" || !ID.test(decoded.id)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  return { publishedAt: decoded.publishedAt as number, id: decoded.id };
+}
+
+export function parsePublicationListRequest(request: Request): {
+  limit: number;
+  cursor?: StrategyPublicationCursor;
+} {
+  const url = new URL(request.url);
+  const allowed = new Set(["limit", "cursor"]);
+  const seen = new Set<string>();
+  for (const [key] of url.searchParams) {
+    if (!allowed.has(key) || seen.has(key)) throw new HttpProblem(400, "invalid_request");
+    seen.add(key);
+  }
+  const rawLimit = url.searchParams.get("limit");
+  if (rawLimit !== null && !INTEGER.test(rawLimit)) throw new HttpProblem(400, "invalid_request");
+  const limit = rawLimit === null ? PUBLICATION_LIST_DEFAULT_LIMIT : Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > PUBLICATION_LIST_MAX_LIMIT) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const rawCursor = url.searchParams.get("cursor");
+  return {
+    limit,
+    ...(rawCursor === null ? {} : { cursor: decodePublicationCursor(rawCursor) }),
+  };
+}
 
 const parseJson = (value: unknown, maximumLength: number): unknown => {
   if (typeof value === "string") {
@@ -134,11 +205,23 @@ export function publicationSlug(id: string): string {
   return slug;
 }
 
-export function toPublicStrategyPublication(record: StrategyPublicationRecord): PublicStrategyPublication {
+export function toPublicStrategyPublication(record: StrategyPublicationRecord, options: {
+  maxEquityPoints?: number;
+} = {}): PublicStrategyPublication {
   const config = configOf(record.configJson);
   if (config.name !== record.name || config.market !== record.market || config.symbol !== record.symbol) {
     throw new Error("published strategy identity mismatch");
   }
+  const equityCurve = equityOf(record.equityCurveJson);
+  const maximum = options.maxEquityPoints;
+  if (maximum !== undefined && (!Number.isSafeInteger(maximum) || maximum < 2 || maximum > 2_000)) {
+    throw new Error("published strategy equity point limit is invalid");
+  }
+  const sampledEquityCurve = maximum !== undefined && equityCurve.length > maximum
+    ? Array.from({ length: maximum }, (_, index) => (
+        equityCurve[Math.round(index * (equityCurve.length - 1) / (maximum - 1))]!
+      ))
+    : equityCurve;
   return {
     slug: record.slug,
     name: record.name,
@@ -157,10 +240,107 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord): 
       parameters: block.parameters.map((parameter) => ({ ...parameter })),
     })),
     metrics: metricsOf(record.metricsJson),
-    equityCurve: equityOf(record.equityCurveJson),
+    equityCurve: sampledEquityCurve,
     actualStartAt: record.actualStartAt,
     actualEndAt: record.actualEndAt,
     publishedAt: record.publishedAt,
     updatedAt: record.updatedAt,
   };
+}
+
+type PublicPublicationListRepository = {
+  listPage(options: { limit: number; cursor?: StrategyPublicationCursor }): Promise<{
+    items: StrategyPublicationRecord[];
+    nextCursor: StrategyPublicationCursor | null;
+  }>;
+};
+
+const cursorOfRecord = (record: StrategyPublicationRecord): StrategyPublicationCursor => {
+  const cursor = { publishedAt: record.publishedAt, id: record.id };
+  encodePublicationCursor(cursor);
+  return cursor;
+};
+
+const cursorKey = (cursor: StrategyPublicationCursor): string => `${cursor.publishedAt}:${cursor.id}`;
+
+const isStrictlyLaterInPublicationOrder = (
+  candidate: StrategyPublicationCursor,
+  previous: StrategyPublicationCursor,
+): boolean => (
+  candidate.publishedAt < previous.publishedAt
+  || (candidate.publishedAt === previous.publishedAt && candidate.id < previous.id)
+);
+
+const sameCursor = (left: StrategyPublicationCursor, right: StrategyPublicationCursor): boolean => (
+  left.publishedAt === right.publishedAt && left.id === right.id
+);
+
+const publicationListResponse = (
+  publications: PublicStrategyPublication[],
+  nextCursor: StrategyPublicationCursor | null,
+): Response => Response.json({
+  publications,
+  nextCursor: nextCursor === null ? null : encodePublicationCursor(nextCursor),
+}, { status: 200, headers: publicStrategyFreshnessHeaders });
+
+export async function servePublicStrategyPublicationList(
+  request: Request,
+  repository: PublicPublicationListRepository,
+): Promise<Response> {
+  try {
+    const options = parsePublicationListRequest(request);
+    const publications: PublicStrategyPublication[] = [];
+    let cursor = options.cursor;
+    const visited = new Set(cursor === undefined ? [] : [cursorKey(cursor)]);
+    for (let scan = 0; scan < PUBLICATION_LIST_MAX_SCAN_PAGES; scan += 1) {
+      const page = await repository.listPage({ limit: options.limit, ...(cursor === undefined ? {} : { cursor }) });
+      if (page.items.length > options.limit
+        || (page.nextCursor !== null && page.items.length !== options.limit)) {
+        throw new Error("publication repository returned an invalid page");
+      }
+      const itemCursors = page.items.map(cursorOfRecord);
+      let previous = cursor;
+      for (const itemCursor of itemCursors) {
+        if (previous !== undefined && !isStrictlyLaterInPublicationOrder(itemCursor, previous)) {
+          throw new Error("publication repository order did not advance");
+        }
+        previous = itemCursor;
+      }
+      const lastCursor = itemCursors.at(-1);
+      if (page.nextCursor !== null && (lastCursor === undefined || !sameCursor(page.nextCursor, lastCursor))) {
+        throw new Error("publication repository cursor does not match its page");
+      }
+
+      for (const [index, record] of page.items.entries()) {
+        try {
+          publications.push(toPublicStrategyPublication(record, {
+            maxEquityPoints: PUBLICATION_LIST_MAX_EQUITY_POINTS,
+          }));
+        } catch (error) {
+          console.error("[strategy-publications] skipped invalid public record", {
+            slug: record.slug,
+            name: error instanceof Error ? error.name : "Error",
+          });
+        }
+        if (publications.length === options.limit) {
+          const nextCursor = index < page.items.length - 1 ? itemCursors[index]! : page.nextCursor;
+          return publicationListResponse(publications, nextCursor);
+        }
+      }
+
+      if (page.nextCursor === null) return publicationListResponse(publications, null);
+      const nextKey = cursorKey(page.nextCursor);
+      if (visited.has(nextKey)) throw new Error("publication repository cursor did not advance");
+      visited.add(nextKey);
+      cursor = page.nextCursor;
+    }
+    return publicationListResponse(publications, cursor ?? null);
+  } catch (error) {
+    if (error instanceof HttpProblem) return errorResponse(error, { status: error.status, code: error.code });
+    console.error("[strategy-publications] list failed", { name: error instanceof Error ? error.name : "Error" });
+    return Response.json({ error: "publication_service_unavailable" }, {
+      status: 503,
+      headers: publicStrategyFreshnessHeaders,
+    });
+  }
 }
