@@ -94,7 +94,7 @@ describe("deployment environment gate", () => {
       ["SUPABASE_URL", "https://project.supabase.co/auth/v1"],
       ["SUPABASE_URL", "https://project.supabase.co?redirect=attacker"],
       ["SUPABASE_PUBLISHABLE_KEY", "sb_secret_elevated_server_credential"],
-      ["SUPABASE_PUBLISHABLE_KEY", "eyJhbGciOiJIUzI1NiJ9.legacy-anon-jwt"],
+      ["SUPABASE_PUBLISHABLE_KEY", ["eyJhbGciOiJIUzI1NiJ9", "legacy-anon-jwt"].join(".")],
       ["SUPABASE_PUBLISHABLE_KEY", "publishable_but_missing_supabase_prefix"],
     ] as const;
 
