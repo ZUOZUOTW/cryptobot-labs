@@ -269,8 +269,7 @@ describe("strategy poster share dialog", () => {
 
   it("preloads the PNG on dialog open and attaches the ready File without awaiting in the click", async () => {
     const { canShare, share } = nativeShare();
-    const poster = new Blob(["png"], { type: "image/png" });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(poster, {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("png", {
       headers: { "content-type": "image/png" },
       status: 200,
     }));
@@ -340,7 +339,7 @@ describe("strategy poster share dialog", () => {
     expect(sharePayload.files).toBeUndefined();
     expect(sharePayload.text).not.toContain("\u202E");
 
-    resolvePoster(new Response(new Blob(["png"], { type: "image/png" }), {
+    resolvePoster(new Response("png", {
       headers: { "content-type": "image/png" },
       status: 200,
     }));
