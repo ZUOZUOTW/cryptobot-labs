@@ -210,7 +210,7 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
         constraint_name: "cloud_run_stop_order_in_flight",
       });
       const rows = await sql.unsafe("select state,version,stopped_at from public.cloud_strategy_runs where id='run_1'");
-      expect(rows[0], order.label).toMatchObject({ state: "running", version: 1, stopped_at: null });
+      expect(rows[0], order.label).toMatchObject({ state: "running", version: "1", stopped_at: null });
       await expect(insertOldWriter("run_successor", "CMT_BTC_USDT"), order.label).rejects.toMatchObject({
         code: "23505",
         constraint_name: "cloud_runs_nonterminal_target_uidx",
@@ -236,7 +236,7 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       await replaceOrder({ ...order, candleCloseAt: 200 });
 
       await expect(stopRun(), order.label).resolves.toEqual([
-        expect.objectContaining({ state: "stopped", version: 2, stopped_at: 2_000 }),
+        expect.objectContaining({ state: "stopped", version: "2", stopped_at: "2000" }),
       ]);
       await expect(insertOldWriter("run_successor", "CMT_BTC_USDT"), order.label).resolves.toBeUndefined();
     }
@@ -251,7 +251,7 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       'user_2','run_1',1,2000)`)).resolves.toEqual([]);
     await expect(stopRun("run_1", 2)).resolves.toEqual([]);
     await expect(sql.unsafe("select state,version from public.cloud_strategy_runs where id='run_1'"))
-      .resolves.toEqual([expect.objectContaining({ state: "running", version: 1 })]);
+      .resolves.toEqual([expect.objectContaining({ state: "running", version: "1" })]);
 
     await replaceOrder({ status: "unknown", candleCloseAt: 50 });
     await expect(sql.unsafe("update public.cloud_strategy_runs set state='stopped' where id='run_1'"))
