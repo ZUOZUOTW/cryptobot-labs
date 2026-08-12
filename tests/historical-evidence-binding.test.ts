@@ -46,7 +46,7 @@ const formalRecord = (candidate: BotConfig): HistoricalBacktestRecord => {
       requestedEndAt: 7_200_000, actualStartAt: 0, actualEndAt: 7_199_999,
       complete: true, gaps: [], checksum: datasetDigest },
     result: {
-      id: "result_1", funding: {}, metrics: { totalReturn: "0.1", annualizedReturn: "0.2",
+      id: "result_1", funding: { mode: "none", events: [] }, metrics: { totalReturn: "0.1", annualizedReturn: "0.2",
         maxDrawdown: "0.05", winRate: "0.6", profitFactor: "1.5", sharpe: "1.2", trades: 4 },
       provenance: { provider: "WEEX", dataSource: "WEEX", sourceKind: "public-api",
         requestedRange: { startTime: 0, endTime: 7_200_000 }, fetchedRange: { startTime: 0, endTime: 7_199_999 },
@@ -55,11 +55,16 @@ const formalRecord = (candidate: BotConfig): HistoricalBacktestRecord => {
           netFunding: "0", convention: "long-pays-positive-short-receives-positive" },
         market: candidate.market, symbol: candidate.symbol, interval: candidate.timeframe,
         engineVersion: "test", configHash: configurationHash, strategyHash: configurationHash,
-        datasetDigest, executionConvention: { signalEvaluation: "completed-candle-close",
+        datasetDigest, fundingMode: "none", fundingCoverageComplete: true,
+        executionConvention: { signalEvaluation: "completed-candle-close",
           signalExecution: "next-candle-open", riskTrigger: "close-only-not-intrabar" },
-        liquidationModel: { maintenanceMarginRate: "0", maximumSupportedLeverage: "500",
-          check: "test", orderingAssumption: "test", model: "test" } },
-      equityCurve: [{ timestamp: 3_599_999, equity: "10000" }, { timestamp: 7_199_999, equity: "11000" }],
+        liquidationModel: { maintenanceMarginRate: "0.02", maximumSupportedLeverage: "500",
+          check: "funding-event-mark-immediately-then-candle-low-long-high-short",
+          orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme",
+          model: "fixed-conservative-not-weex-tier-exact" },
+        maintenanceMarginAssumption: { rate: "0.02", model: "fixed-conservative-not-weex-tier-exact" } },
+      equityCurve: [{ timestamp: 3_599_999, equity: "10000", funding: "0" },
+        { timestamp: 7_199_999, equity: "11000", funding: "0" }],
       engineVersion: "test", configurationHash, strategyHash: configurationHash, scriptHash,
     },
   };
@@ -101,5 +106,21 @@ describe("historical evidence content binding", () => {
     expect(formalBacktestToReport(exact, { ...sourceConfig, source: `${source}\n// changed` })).toBeNull();
     expect(formalBacktestToReport({ ...exact, result: { ...exact.result!, configurationHash: "a".repeat(64) } }, sourceConfig)).toBeNull();
     expect(formalBacktestToReport({ ...exact, dataset: { ...exact.dataset!, checksum: "a".repeat(64) } }, sourceConfig)).toBeNull();
+  });
+
+  it("reports the engine-normalized economics and fails closed on malformed nested provenance", () => {
+    const exact = formalRecord(config);
+    const normalized = formalBacktestToReport({
+      ...exact,
+      request: { ...exact.request!, feeRate: "0.0010", slippageRate: "0.000500" },
+    }, config);
+    expect(normalized?.report.evidence).toMatchObject({ feeRate: "0.001", slippageRate: "0.0005" });
+    expect(formalBacktestToReport({
+      ...exact,
+      result: { ...exact.result!, provenance: {
+        ...exact.result!.provenance,
+        requestedRange: null as never,
+      } },
+    }, config)).toBeNull();
   });
 });

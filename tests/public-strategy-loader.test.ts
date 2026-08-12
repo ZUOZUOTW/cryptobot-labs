@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StrategyPublicationRecord } from "../db/repositories";
 import { STRATEGY_PRESETS } from "../data/strategies";
+import { validFormalEvidenceRow } from "./helpers/formal-evidence";
 
 const mocks = vi.hoisted(() => ({
   record: null as StrategyPublicationRecord | null,
@@ -29,12 +30,18 @@ vi.mock("../lib/server/platform-env", () => ({ env: { DB: undefined } }));
 
 import { loadPublicStrategyPublication } from "../lib/server/public-strategy-loader";
 
-const config = STRATEGY_PRESETS[0]!;
+const config = STRATEGY_PRESETS[2]!;
 const record = (overrides: Partial<StrategyPublicationRecord> = {}): StrategyPublicationRecord => ({
+  ...validFormalEvidenceRow(),
   id: "publication_legacy",
   userId: "usr_owner",
   strategyVersionId: "version_legacy",
   backtestJobId: "job_legacy",
+  jobId: "job_legacy",
+  requestJson: JSON.stringify({
+    ...JSON.parse(validFormalEvidenceRow().requestJson as string),
+    strategyVersionId: "version_legacy",
+  }),
   slug: "strategy-memberlegacy",
   name: config.name,
   description: "This strategy uses complete historical evidence and reviewable risk controls.",
@@ -53,11 +60,19 @@ const record = (overrides: Partial<StrategyPublicationRecord> = {}): StrategyPub
     trades: 12,
   }),
   equityCurveJson: JSON.stringify([
-    { timestamp: 1_000, equity: "10000" },
-    { timestamp: 2_000, equity: "11000" },
+    { timestamp: 1_000, equity: "10000", funding: "0" },
+    { timestamp: 2_999, equity: "11000", funding: "0" },
   ]),
   actualStartAt: 1_000,
-  actualEndAt: 2_000,
+  actualEndAt: 2_999,
+  discoveryMarket: config.market,
+  discoveryTimeframe: config.timeframe,
+  discoveryRisk: "中",
+  discoveryTotalReturn: 10,
+  discoveryMaxDrawdown: 5,
+  discoveryWinRate: 55,
+  discoveryStability: 50,
+  discoveryRecommended: 60,
   publishedAt: 3_000,
   updatedAt: 3_000,
   ...overrides,
@@ -75,8 +90,8 @@ describe("public strategy loader trust boundary", () => {
     mocks.record = record({ publisherName: "WΕΕX Official" });
 
     await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toBeNull();
-    expect(mocks.keyParts).toEqual(["public-strategy-publication", "v3", "strategy-memberlegacy"]);
-    expect(mocks.tags).toEqual(["public-strategy-publication:v3:strategy-memberlegacy"]);
+    expect(mocks.keyParts).toEqual(["public-strategy-publication", "v4", "strategy-memberlegacy"]);
+    expect(mocks.tags).toEqual(["public-strategy-publication:v4:strategy-memberlegacy"]);
   });
 
   it.each(["WΕΕX Official", "WEEX официальный"])(
@@ -91,9 +106,14 @@ describe("public strategy loader trust boundary", () => {
     },
   );
 
-  it("still surfaces non-moderation data corruption instead of caching it as not-found", async () => {
+  it("maps corrupted evidence payloads to not-found instead of caching unsafe output", async () => {
     mocks.record = record({ configJson: "{" });
-    await expect(loadPublicStrategyPublication("strategy-memberlegacy")).rejects.toThrow();
+    await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toBeNull();
+  });
+
+  it("maps a legacy publication with incomplete formal evidence to not-found", async () => {
+    mocks.record = record({ provenanceJson: "{}" });
+    await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toBeNull();
   });
 
   it("never serves a cached legacy referral and resolves current approval on every load", async () => {

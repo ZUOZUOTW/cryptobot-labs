@@ -299,7 +299,7 @@ describe("bot catalog route", () => {
 
   it("shows newly published community strategies with an uncached index request", async () => {
     vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
-      if (String(input) === "/api/strategy-publications") {
+      if (String(input) === "/api/strategy-publications?sort=recommended") {
         return new Response(JSON.stringify({ publications: [ownedPublication] }), { status: 200 });
       }
       return new Response(JSON.stringify({
@@ -314,9 +314,54 @@ describe("bot catalog route", () => {
     expect(screen.getByRole("link", { name: "查看公開策略" }))
       .toHaveAttribute("href", "/strategies/strategy-ownedrelease");
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "/api/strategy-publications",
+      "/api/strategy-publications?sort=recommended",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("applies search and market filters to official and server-paginated member strategies", async () => {
+    const user = userEvent.setup();
+    const requests: string[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith("/api/strategy-publications")) {
+        const query = new URL(url, "https://app.example.test").searchParams;
+        const matches = query.get("q") === "會員 A" && query.get("market") === "futures";
+        return new Response(JSON.stringify({ publications: matches ? [{ ...ownedPublication, market: "futures" }] : [], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ performances: performanceFixture(), updatedAt: "2026-07-13T12:00:00.000Z" }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    await user.type(screen.getByRole("searchbox", { name: "搜尋官方與會員策略" }), "會員 A");
+    await user.click(screen.getByRole("button", { name: /^合約/ }));
+
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(requests).toContain("/api/strategy-publications?q=%E6%9C%83%E5%93%A1+A&market=futures&sort=recommended");
+    expect(screen.getByText("沒有符合條件的策略")).toBeInTheDocument();
+  });
+
+  it("favorites a member publication locally and discloses that favorites do not sync across devices", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (String(input).startsWith("/api/strategy-publications")) {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ performances: performanceFixture(), updatedAt: "2026-07-13T12:00:00.000Z" }), { status: 200 });
+    });
+    const user = userEvent.setup();
+    const { unmount } = render(<BotsPage />);
+    await user.click(await screen.findByRole("button", { name: "收藏 我的公開雙向策略" }));
+    expect(JSON.parse(localStorage.getItem("cryptobot-labs:discovery:v1") ?? "{}")).toMatchObject({
+      communityFavorites: ["strategy-ownedrelease"],
+    });
+    unmount();
+
+    render(<FavoritesPage />);
+    expect(screen.getByText(/收藏不會跨裝置同步/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "取消收藏 我的公開雙向策略" }));
+    expect(screen.queryByRole("heading", { name: "我的公開雙向策略" })).not.toBeInTheDocument();
   });
 
   it("loads cursor pages once, removes duplicate publications, and announces the end", async () => {
@@ -333,10 +378,10 @@ describe("bot catalog route", () => {
     let moreRequests = 0;
     vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
       const url = String(input);
-      if (url === "/api/strategy-publications") {
+      if (url === "/api/strategy-publications?sort=recommended") {
         return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: cursor }), { status: 200 });
       }
-      if (url === `/api/strategy-publications?cursor=${cursor}`) {
+      if (url === `/api/strategy-publications?sort=recommended&cursor=${cursor}`) {
         moreRequests += 1;
         return moreResponse;
       }
@@ -361,7 +406,7 @@ describe("bot catalog route", () => {
     expect(screen.getAllByRole("heading", { name: "我的公開雙向策略" })).toHaveLength(1);
     expect(screen.getByText("已顯示全部會員公開策略")).toHaveAttribute("role", "status");
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      `/api/strategy-publications?cursor=${cursor}`,
+      `/api/strategy-publications?sort=recommended&cursor=${cursor}`,
       expect.objectContaining({ cache: "no-store" }),
     );
   });
@@ -371,10 +416,10 @@ describe("bot catalog route", () => {
     const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6Nzg5fQ";
     vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
       const url = String(input);
-      if (url === "/api/strategy-publications") {
+      if (url === "/api/strategy-publications?sort=recommended") {
         return new Response(JSON.stringify({ publications: [], nextCursor: cursor }), { status: 200 });
       }
-      if (url === `/api/strategy-publications?cursor=${cursor}`) {
+      if (url === `/api/strategy-publications?sort=recommended&cursor=${cursor}`) {
         return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: null }), { status: 200 });
       }
       return new Response(JSON.stringify({
@@ -385,7 +430,7 @@ describe("bot catalog route", () => {
 
     render(<BotsPage />);
     expect(await screen.findByRole("heading", { name: "會員公開策略" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "載入更多會員策略" }));
+    await user.click(await screen.findByRole("button", { name: "載入更多會員策略" }));
     expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
     expect(screen.getByText("已顯示全部會員公開策略")).toBeInTheDocument();
   });
@@ -403,10 +448,10 @@ describe("bot catalog route", () => {
     let moreAttempts = 0;
     vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
       const url = String(input);
-      if (url === "/api/strategy-publications") {
+      if (url === "/api/strategy-publications?sort=recommended") {
         return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: cursor }), { status: 200 });
       }
-      if (url === `/api/strategy-publications?cursor=${cursor}`) {
+      if (url === `/api/strategy-publications?sort=recommended&cursor=${cursor}`) {
         moreAttempts += 1;
         return moreAttempts === 1
           ? new Response(JSON.stringify({ publications: [], nextCursor: null }), { status: 503 })

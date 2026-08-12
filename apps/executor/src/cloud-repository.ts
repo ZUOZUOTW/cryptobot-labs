@@ -1,7 +1,7 @@
 import postgres, { type Sql } from "postgres";
 import type { EncryptedWeexCredentials } from "@cryptobot-labs/weex-client";
 import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client";
-import type { SubmitOutcome } from "@cryptobot-labs/trading-core";
+import type { ExchangeOrderSnapshot, SubmitOutcome } from "@cryptobot-labs/trading-core";
 import {
   assertExecutorDatabaseSchema,
   assertPostgresRuntimeIdentity,
@@ -102,6 +102,113 @@ const jsonValue = (value: unknown): postgres.JSONValue => {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) throw new Error("database JSON value is invalid");
   return JSON.parse(serialized) as postgres.JSONValue;
+};
+const ORDER_EVIDENCE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const ORDER_EVIDENCE_SYMBOL = /^[A-Z0-9_]{3,32}$/;
+const ORDER_EVIDENCE_DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const ORDER_EVIDENCE_SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+
+const compareOrderEvidenceDecimals = (left: string, right: string): -1 | 0 | 1 => {
+  const [leftInteger, leftFraction = ""] = left.split(".");
+  const [rightInteger, rightFraction = ""] = right.split(".");
+  const scale = Math.max(leftFraction.length, rightFraction.length);
+  const leftValue = BigInt(leftInteger! + leftFraction.padEnd(scale, "0"));
+  const rightValue = BigInt(rightInteger! + rightFraction.padEnd(scale, "0"));
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+};
+
+const validOrderEvidenceFillState = (
+  status: ExchangeOrderSnapshot["status"],
+  quantity: string,
+  cumulativeFilledQuantity: string,
+): boolean => {
+  const versusZero = compareOrderEvidenceDecimals(cumulativeFilledQuantity, "0");
+  const versusQuantity = compareOrderEvidenceDecimals(cumulativeFilledQuantity, quantity);
+  if (compareOrderEvidenceDecimals(quantity, "0") <= 0 || versusQuantity > 0) return false;
+  if (status === "NEW" || status === "REJECTED") return versusZero === 0;
+  if (status === "PARTIALLY_FILLED") return versusZero > 0 && versusQuantity < 0;
+  if (status === "FILLED") return versusQuantity === 0;
+  return status === "CANCELED";
+};
+
+export interface CloudOrderExchangeEvidence {
+  readonly schemaVersion: 1;
+  readonly provider: "weex";
+  readonly observedAt: number;
+  readonly clientOrderId: string;
+  readonly exchangeOrderId: string;
+  readonly symbol: string;
+  readonly side: "buy" | "sell";
+  readonly quantity: string;
+  readonly status: ExchangeOrderSnapshot["status"];
+  readonly cumulativeFilledQuantity: string;
+  readonly averageFillPrice?: string;
+  readonly fees?: string;
+  readonly fills?: readonly {
+    readonly exchangeFillId: string;
+    readonly price: string;
+    readonly quantity: string;
+    readonly fee: string;
+    readonly feeCurrency: string;
+    readonly realizedPnl?: string;
+    readonly filledAt: number;
+  }[];
+}
+
+export const normalizeCloudOrderExchangeEvidence = (
+  snapshot: ExchangeOrderSnapshot,
+  observedAt: number,
+): CloudOrderExchangeEvidence => {
+  if (!Number.isSafeInteger(observedAt) || observedAt < 0
+    || !ORDER_EVIDENCE_ID.test(snapshot.clientOrderId)
+    || !ORDER_EVIDENCE_ID.test(snapshot.exchangeOrderId)
+    || !ORDER_EVIDENCE_SYMBOL.test(snapshot.symbol)
+    || (snapshot.side !== "buy" && snapshot.side !== "sell")
+    || !ORDER_EVIDENCE_DECIMAL.test(snapshot.quantity)
+    || !["NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED"].includes(snapshot.status)
+    || !ORDER_EVIDENCE_DECIMAL.test(snapshot.cumulativeFilledQuantity)
+    || !validOrderEvidenceFillState(snapshot.status, snapshot.quantity, snapshot.cumulativeFilledQuantity)
+    || (snapshot.averageFillPrice !== undefined
+      && !ORDER_EVIDENCE_DECIMAL.test(snapshot.averageFillPrice))
+    || (snapshot.fees !== undefined && !ORDER_EVIDENCE_DECIMAL.test(snapshot.fees))
+    || (snapshot.fills !== undefined && (!Array.isArray(snapshot.fills) || snapshot.fills.length > 100))) {
+    throw new Error("Cloud order exchange evidence is invalid");
+  }
+  const fills = snapshot.fills?.map((fill) => {
+    if (!ORDER_EVIDENCE_ID.test(fill.exchangeFillId)
+      || !ORDER_EVIDENCE_DECIMAL.test(fill.price)
+      || !ORDER_EVIDENCE_DECIMAL.test(fill.quantity)
+      || !ORDER_EVIDENCE_DECIMAL.test(fill.fee)
+      || !/^[A-Z0-9]{1,16}$/.test(fill.feeCurrency)
+      || (fill.realizedPnl !== undefined && !ORDER_EVIDENCE_SIGNED_DECIMAL.test(fill.realizedPnl))
+      || !Number.isSafeInteger(fill.filledAt) || fill.filledAt < 0) {
+      throw new Error("Cloud order exchange evidence is invalid");
+    }
+    return Object.freeze({
+      exchangeFillId: fill.exchangeFillId,
+      price: fill.price,
+      quantity: fill.quantity,
+      fee: fill.fee,
+      feeCurrency: fill.feeCurrency,
+      ...(fill.realizedPnl === undefined ? {} : { realizedPnl: fill.realizedPnl }),
+      filledAt: fill.filledAt,
+    });
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "weex",
+    observedAt,
+    clientOrderId: snapshot.clientOrderId,
+    exchangeOrderId: snapshot.exchangeOrderId,
+    symbol: snapshot.symbol,
+    side: snapshot.side,
+    quantity: snapshot.quantity,
+    status: snapshot.status,
+    cumulativeFilledQuantity: snapshot.cumulativeFilledQuantity,
+    ...(snapshot.averageFillPrice === undefined ? {} : { averageFillPrice: snapshot.averageFillPrice }),
+    ...(snapshot.fees === undefined ? {} : { fees: snapshot.fees }),
+    ...(fills === undefined ? {} : { fills: Object.freeze(fills) }),
+  });
 };
 const signedDecimal = (value: unknown): string => {
   if (typeof value !== "string" || !/^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/.test(value)) {
@@ -266,8 +373,22 @@ export class CloudRuntimeRepository {
             or r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1
             or exists (select 1 from private.cloud_order_intents o where o.run_id=r.id and (
               o.status in ('claimed','unknown')
-              or (o.status='acknowledged' and coalesce(o.error_code,'') not in
-                ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+              or not coalesce((
+                o.status='risk-rejected'
+                or (o.status='rejected' and o.exchange_evidence_json is null)
+                or (o.status='acknowledged' and o.error_code='exchange_order_filled'
+                  and o.exchange_evidence_json->>'status'='FILLED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+                or (o.status='acknowledged' and o.error_code='exchange_order_cancelled_partially_filled'
+                  and o.exchange_evidence_json->>'status'='CANCELED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+                or (o.status='rejected' and o.error_code='exchange_order_cancelled'
+                  and o.exchange_evidence_json->>'status'='CANCELED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+                or (o.status='rejected' and o.error_code='exchange_order_rejected'
+                  and o.exchange_evidence_json->>'status'='REJECTED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+              ),false)
               or o.candle_close_at>coalesce(r.last_candle_at,-1)
             )))
         order by coalesce(r.last_evaluated_at,0),r.created_at limit $4 for update of r skip locked)
@@ -375,8 +496,22 @@ export class CloudRuntimeRepository {
       from private.cloud_order_intents
       where run_id=$1 and (
         status in ('claimed','unknown')
-        or (status='acknowledged' and coalesce(error_code,'') not in
-          ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+        or not coalesce((
+          status='risk-rejected'
+          or (status='rejected' and exchange_evidence_json is null)
+          or (status='acknowledged' and error_code='exchange_order_filled'
+            and exchange_evidence_json->>'status'='FILLED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+          or (status='acknowledged' and error_code='exchange_order_cancelled_partially_filled'
+            and exchange_evidence_json->>'status'='CANCELED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+          or (status='rejected' and error_code='exchange_order_cancelled'
+            and exchange_evidence_json->>'status'='CANCELED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+          or (status='rejected' and error_code='exchange_order_rejected'
+            and exchange_evidence_json->>'status'='REJECTED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+        ),false)
         or candle_close_at>$2
       )
       order by candle_close_at asc limit 1`, [runId, lastCandleAt ?? -1]);
@@ -507,13 +642,28 @@ export class CloudRuntimeRepository {
   }
 
   async recordOrder(input: { runId: string; candleCloseAt: number; status: ClaimedOrder["status"];
-    intent?: unknown; exchangeOrderId?: string; errorCode?: string; now: number }): Promise<void> {
-    await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,
+    intent?: unknown; exchangeOrderId?: string; errorCode?: string;
+    exchangeEvidence?: ExchangeOrderSnapshot; now: number }): Promise<void> {
+    const evidence = input.exchangeEvidence === undefined
+      ? null : normalizeCloudOrderExchangeEvidence(input.exchangeEvidence, input.now);
+    if (evidence && input.exchangeOrderId !== undefined
+      && input.exchangeOrderId !== evidence.exchangeOrderId) {
+      throw new Error("Cloud order exchange evidence identity is invalid");
+    }
+    const result = await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,
       intent_json=coalesce($4::jsonb,intent_json),
-      exchange_order_id=$5,error_code=$6,updated_at=$7 where run_id=$1 and candle_close_at=$2`,
+      exchange_order_id=$5,error_code=$6,
+      exchange_evidence_json=coalesce($7::jsonb,exchange_evidence_json),updated_at=$8
+      where run_id=$1 and candle_close_at=$2
+        and ($9::text is null or client_order_id=$9)`,
     [input.runId, input.candleCloseAt, input.status,
       input.intent === undefined ? null : this.#sql.json(jsonValue(input.intent)),
-      input.exchangeOrderId ?? null, input.errorCode ?? null, input.now]);
+      evidence?.exchangeOrderId ?? input.exchangeOrderId ?? null, input.errorCode ?? null,
+      evidence === null ? null : this.#sql.json(jsonValue(evidence)), input.now,
+      evidence?.clientOrderId ?? null]);
+    if (evidence && result.count !== undefined && result.count !== 1) {
+      throw new Error("Cloud order exchange evidence identity is invalid");
+    }
   }
 
   #claimedOrder(row: Row): ClaimedOrder {

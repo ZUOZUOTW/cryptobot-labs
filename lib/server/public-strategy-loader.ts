@@ -10,6 +10,7 @@ import {
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
 import type { PublicStrategyPublication } from "@/lib/strategy-publications";
+import { InvalidFormalBacktestEvidenceError } from "@/lib/server/formal-evidence-gate";
 
 const loadCachedPublication = (slug: string) => unstable_cache(
   async (): Promise<PublicStrategyPublication | null> => {
@@ -23,7 +24,8 @@ const loadCachedPublication = (slug: string) => unstable_cache(
         slug,
         name: error instanceof Error ? error.name : "Error",
       });
-      if (error instanceof InvalidPublicStrategyTrustMetadataError) return null;
+      if (error instanceof InvalidPublicStrategyTrustMetadataError
+        || error instanceof InvalidFormalBacktestEvidenceError) return null;
       throw error;
     }
   },

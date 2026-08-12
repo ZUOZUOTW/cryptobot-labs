@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 
 const TARGET_CONSTRAINT = "cloud_runs_nonterminal_target_uidx";
 const STOP_ORDER_CONSTRAINT = "cloud_run_stop_order_in_flight";
+const CLOUD_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const response = (status: number, body: unknown): Response => Response.json(body, { status,
   headers: { "cache-control": "no-store" } });
 const databaseError = (error: unknown): { name: string; code: string; constraint: string } => {
@@ -29,6 +30,22 @@ const databaseError = (error: unknown): { name: string; code: string; constraint
       && /^[a-z0-9_]{1,80}$/.test(candidate.constraint_name) ? candidate.constraint_name : "unknown",
   };
 };
+
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+  const database = createControlPlaneDatabase(env.DB);
+  const identity = await requireApiUser(request, { identityProvider: platformIdentityProvider,
+    userRepository: createUserRepository(database), deriveUserId: deriveWorkspaceUserId, now: Date.now });
+  if (!identity.ok) return identity.response;
+  const id = (await context.params).id;
+  if (!CLOUD_RUN_ID.test(id)) return response(400, { error: "invalid_request" });
+  try {
+    const orders = await createCloudRunRepository(database).orders(identity.user.id, id, 20);
+    return response(200, { generatedAt: Date.now(), orders });
+  } catch (error) {
+    console.error("[cloud-runs] order evidence read failed", databaseError(error));
+    return response(503, { error: "cloud_run_order_evidence_unavailable" });
+  }
+}
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   if (request.headers.get("sec-fetch-site") !== "same-origin") return Response.json({ error: "forbidden_origin" }, { status: 403 });

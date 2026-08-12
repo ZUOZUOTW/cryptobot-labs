@@ -366,6 +366,7 @@ export async function settleBlockingCloudOrder(input: {
       status: exchangeState.status,
       ...(input.order.intent ? { intent: input.order.intent } : {}),
       exchangeOrderId: existing.exchangeOrderId,
+      exchangeEvidence: existing,
       errorCode: exchangeState.errorCode,
       now: input.now,
     });

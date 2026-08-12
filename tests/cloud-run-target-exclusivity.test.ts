@@ -53,6 +53,17 @@ describe("cloud strategy target exclusivity", () => {
     expect(migration).toMatch(/create trigger cloud_runs_reject_unsettled_stop/i);
     expect(migration).toMatch(/revoke all on function private\.stop_cloud_strategy_run\(text, text, bigint, bigint\)[\s\S]*from public, anon, authenticated, service_role, cryptobot_executor, cryptobot_netlify/i);
     expect(migration).toMatch(/grant execute on function private\.stop_cloud_strategy_run\(text, text, bigint, bigint\)[\s\S]*to cryptobot_netlify/i);
+    expect(migration).toMatch(/add column if not exists exchange_evidence_json jsonb/i);
+    expect(migration).toMatch(/create or replace function private\.is_valid_cloud_order_evidence\(evidence jsonb\)/i);
+    expect(migration).toMatch(/exchange_evidence_json->>'clientOrderId' is not distinct from client_order_id/i);
+    expect(migration).toMatch(/exchange_evidence_json->>'exchangeOrderId' is not distinct from exchange_order_id/i);
+    expect(migration).toMatch(/cumulativeFilledQuantity'\)::numeric > \(evidence->>'quantity'\)::numeric/i);
+    expect(migration).toMatch(/status' = 'FILLED'[\s\S]*cumulativeFilledQuantity'\)::numeric <> \(evidence->>'quantity'\)::numeric/i);
+    expect(migration).toMatch(/and coalesce\(\([\s\S]*exchange_evidence_json is null[\s\S]*\), false\)/i);
+    expect(migration).toMatch(/exchange_order_filled[\s\S]*exchange_evidence_json->>'status' = 'FILLED'/i);
+    expect(migration).toMatch(/not coalesce\(\([\s\S]*exchange_order_filled[\s\S]*FILLED[\s\S]*\), false\)/i);
+    expect(migration).toMatch(/create or replace function private\.list_cloud_run_order_evidence\([\s\S]*security definer[\s\S]*set search_path = ''/i);
+    expect(migration).toMatch(/grant execute on function private\.list_cloud_run_order_evidence\(text, text, integer\)[\s\S]*to cryptobot_netlify/i);
     expect(migration).not.toMatch(/grant (?:select|insert|update|delete)[^;]*private\.cloud_order_intents[^;]*cryptobot_netlify/i);
 
     const database = new DatabaseSync(":memory:");

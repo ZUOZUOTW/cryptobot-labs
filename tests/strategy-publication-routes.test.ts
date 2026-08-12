@@ -9,16 +9,23 @@ import type {
 import { STRATEGY_PRESETS } from "../data/strategies";
 import type { ApiAuthDependencies } from "../lib/server/auth";
 import { createStrategyPublicationRouteHandlers } from "../lib/server/strategy-publication-routes";
+import { validFormalEvidenceRow } from "./helpers/formal-evidence";
 
-const config = STRATEGY_PRESETS[0]!;
+const config = STRATEGY_PRESETS[2]!;
 const description = "This strategy uses complete historical evidence, bounded risk controls, and reviewable rules.";
 const slug = "strategy-aaaaaaaaaaaaaaaaaaaa";
 
 const publicationRecord = (overrides: Partial<StrategyPublicationRecord> = {}): StrategyPublicationRecord => ({
+  ...validFormalEvidenceRow(),
   id: "publication_aaaaaaaaaaaaaaaaaaaa",
   userId: "usr_owner",
   strategyVersionId: "version_a",
   backtestJobId: "job_a",
+  jobId: "job_a",
+  requestJson: JSON.stringify({
+    ...JSON.parse(validFormalEvidenceRow().requestJson as string),
+    strategyVersionId: "version_a",
+  }),
   slug,
   name: config.name,
   description,
@@ -37,11 +44,19 @@ const publicationRecord = (overrides: Partial<StrategyPublicationRecord> = {}): 
     trades: 12,
   }),
   equityCurveJson: JSON.stringify([
-    { timestamp: 1_000, equity: "10000" },
-    { timestamp: 2_000, equity: "11200" },
+    { timestamp: 1_000, equity: "10000", funding: "0" },
+    { timestamp: 2_999, equity: "11200", funding: "0" },
   ]),
   actualStartAt: 1_000,
-  actualEndAt: 2_000,
+  actualEndAt: 2_999,
+  discoveryMarket: config.market,
+  discoveryTimeframe: config.timeframe,
+  discoveryRisk: "中",
+  discoveryTotalReturn: 12,
+  discoveryMaxDrawdown: 8,
+  discoveryWinRate: 55,
+  discoveryStability: 50,
+  discoveryRecommended: 60,
   publishedAt: 3_000,
   updatedAt: 3_000,
   ...overrides,
@@ -222,7 +237,7 @@ describe("strategy publication route contracts", () => {
       publisherName: "Alice",
       description: "This strategy uses complete historical evidence and reviewable risk controls for members.",
     }));
-    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v3:${slug}`);
+    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v4:${slug}`);
     expect(revalidate.path.mock.calls.map(([path]) => path)).toEqual([
       "/api/strategy-publications",
       "/bots",
@@ -256,7 +271,7 @@ describe("strategy publication route contracts", () => {
       slug,
       now: 20,
     });
-    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v3:${slug}`);
+    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v4:${slug}`);
     expect(mine.status).toBe(200);
     expect(publications.listByUser).toHaveBeenCalledWith("usr_owner", 100);
   });

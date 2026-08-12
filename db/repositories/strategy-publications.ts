@@ -4,10 +4,16 @@ import {
   validatePublicPublicationDescription,
   validatePublicPublisherName,
 } from "../../lib/publication-moderation";
+import {
+  hasFormalBacktestEvidence,
+  type FormalEvidenceGateRow,
+} from "../../lib/server/formal-evidence-gate";
+import type { StrategyDiscoverySort } from "../../lib/strategy-discovery-query";
+import type { Market, RiskLevel } from "../../lib/types";
 
 const SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
 
-export interface StrategyPublicationRecord {
+export interface StrategyPublicationRecord extends Partial<FormalEvidenceGateRow> {
   id: string;
   userId: string;
   strategyVersionId: string;
@@ -24,6 +30,14 @@ export interface StrategyPublicationRecord {
   equityCurveJson: string;
   actualStartAt: number | null;
   actualEndAt: number | null;
+  discoveryMarket?: Market;
+  discoveryTimeframe?: string;
+  discoveryRisk?: RiskLevel;
+  discoveryTotalReturn?: number;
+  discoveryMaxDrawdown?: number;
+  discoveryWinRate?: number;
+  discoveryStability?: number;
+  discoveryRecommended?: number;
   publishedAt: number;
   updatedAt: number;
 }
@@ -31,6 +45,19 @@ export interface StrategyPublicationRecord {
 export interface StrategyPublicationCursor {
   publishedAt: number;
   id: string;
+  sortValue?: number;
+  sort?: StrategyDiscoverySort;
+}
+
+export interface StrategyPublicationListOptions {
+  limit: number;
+  cursor?: StrategyPublicationCursor;
+  search?: string;
+  market?: Market;
+  timeframe?: string;
+  risk?: RiskLevel;
+  sort?: StrategyDiscoverySort | "latest";
+  slugs?: string[];
 }
 
 const projection = `p.id,p.user_id AS userId,p.strategy_version_id AS strategyVersionId,
@@ -39,6 +66,22 @@ const projection = `p.id,p.user_id AS userId,p.strategy_version_id AS strategyVe
   s.market,s.symbol,v.config_json AS configJson,
   r.metrics_json AS metricsJson,r.equity_curve_json AS equityCurveJson,
   d.actual_start_at AS actualStartAt,d.actual_end_at AS actualEndAt,
+  v.config_hash AS configHash,v.source_hash AS sourceHash,v.source_code AS sourceCode,
+  j.id AS jobId,j.status AS jobStatus,j.evidence_level AS jobEvidenceLevel,
+  j.request_json AS requestJson,j.completed_at AS completedAt,
+  d.id AS datasetId,d.market AS datasetMarket,d.symbol AS datasetSymbol,
+  d.interval AS datasetInterval,d.source AS datasetSource,
+  d.requested_start_at AS requestedStartAt,d.requested_end_at AS requestedEndAt,
+  d.complete AS datasetComplete,d.gaps_json AS gapsJson,d.checksum,
+  r.id AS resultId,r.evidence_level AS resultEvidenceLevel,
+  r.initial_capital AS initialCapital,r.fee_rate AS feeRate,r.slippage_rate AS slippageRate,
+  r.leverage,r.funding_json AS fundingJson,r.provenance_json AS provenanceJson,
+  r.engine_version AS engineVersion,r.configuration_hash AS configurationHash,
+  r.strategy_hash AS strategyHash,r.script_hash AS scriptHash,
+  p.discovery_market AS discoveryMarket,p.discovery_timeframe AS discoveryTimeframe,
+  p.discovery_risk AS discoveryRisk,p.discovery_total_return AS discoveryTotalReturn,
+  p.discovery_max_drawdown AS discoveryMaxDrawdown,p.discovery_win_rate AS discoveryWinRate,
+  p.discovery_stability AS discoveryStability,p.discovery_recommended AS discoveryRecommended,
   p.published_at AS publishedAt,p.updated_at AS updatedAt`;
 
 const publishedJoin = `FROM strategy_publications p
@@ -51,39 +94,141 @@ const publishedJoin = `FROM strategy_publications p
     AND j.strategy_version_id=v.id AND j.status='succeeded' AND j.evidence_level='historical'
   JOIN backtest_results r ON r.backtest_job_id=j.id AND r.user_id=j.user_id
     AND r.evidence_level='historical' AND r.configuration_hash=v.config_hash
+    AND r.strategy_hash=v.config_hash
+    AND ((v.source_hash IS NULL AND r.script_hash IS NULL) OR r.script_hash=v.source_hash)
   JOIN backtest_datasets d ON d.backtest_job_id=j.id AND d.user_id=j.user_id
-    AND d.id=r.dataset_id AND d.complete=1`;
+    AND d.id=r.dataset_id AND d.complete=1 AND d.gaps_json='[]'`;
+
+const discoveryProjectionOf = (
+  evidence: FormalEvidenceGateRow,
+  description: string,
+  publisherName: string,
+) => {
+  const config = typeof evidence.configJson === "string"
+    ? JSON.parse(evidence.configJson) as Record<string, unknown> : evidence.configJson;
+  const metrics = typeof evidence.metricsJson === "string"
+    ? JSON.parse(evidence.metricsJson) as Record<string, unknown> : evidence.metricsJson;
+  const leverage = Number(config.leverage);
+  const totalReturn = Number(metrics.totalReturn);
+  const maxDrawdown = Math.abs(Number(metrics.maxDrawdown));
+  const winRate = Number(metrics.winRate);
+  const sharpe = Number(metrics.sharpe);
+  const trades = Number(metrics.trades);
+  if (typeof config.name !== "string" || typeof config.market !== "string" || typeof config.symbol !== "string"
+    || typeof config.timeframe !== "string"
+    || ![leverage, totalReturn, maxDrawdown, winRate, sharpe, trades].every(Number.isFinite)) {
+    throw new Error("publication discovery projection is invalid");
+  }
+  const risk: RiskLevel = leverage >= 10 || maxDrawdown >= 0.25
+    ? "高"
+    : leverage >= 3 || maxDrawdown >= 0.12 ? "中" : "低";
+  const stability = Math.max(0, Math.min(100, 100 - maxDrawdown * 100));
+  return {
+    market: config.market as Market,
+    timeframe: config.timeframe,
+    risk,
+    searchText: [config.name, description, publisherName, config.symbol].join(" ").toLowerCase(),
+    totalReturn,
+    maxDrawdown,
+    winRate,
+    stability,
+    recommended: stability + sharpe * 12 - maxDrawdown * 100 + Math.min(trades, 100) / 20,
+  };
+};
 
 export function createStrategyPublicationRepository(database: ControlPlaneDatabase) {
-  const listPage = async (options: {
-    limit: number;
-    cursor?: StrategyPublicationCursor;
-  }): Promise<{
+  const listPage = async (options: StrategyPublicationListOptions): Promise<{
     items: StrategyPublicationRecord[];
     nextCursor: StrategyPublicationCursor | null;
   }> => {
-    exactInput(options, ["limit", "cursor"]);
+    exactInput(options, ["limit", "cursor", "search", "market", "timeframe", "risk", "sort", "slugs"]);
     if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 100) {
       throw new Error("publication limit is invalid");
     }
+    const sort = options.sort ?? "latest";
+    const sortDefinition = {
+      latest: { column: null, direction: "DESC" },
+      recommended: { column: "p.discovery_recommended", direction: "DESC" },
+      "return-desc": { column: "p.discovery_total_return", direction: "DESC" },
+      "drawdown-asc": { column: "p.discovery_max_drawdown", direction: "ASC" },
+      "win-rate-desc": { column: "p.discovery_win_rate", direction: "DESC" },
+      "stability-desc": { column: "p.discovery_stability", direction: "DESC" },
+    }[sort];
+    if (!sortDefinition) throw new Error("publication sort is invalid");
+    const where: string[] = [];
+    const values: unknown[] = [];
+    if (options.search !== undefined) {
+      if (options.search.length < 1 || options.search.length > 80 || options.search.trim() !== options.search) {
+        throw new Error("publication search is invalid");
+      }
+      where.push("p.search_text LIKE ? ESCAPE '\\'");
+      values.push(`%${options.search.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`);
+    }
+    if (options.market !== undefined) {
+      if (options.market !== "spot" && options.market !== "futures") throw new Error("publication market is invalid");
+      where.push("p.discovery_market=?");
+      values.push(options.market);
+    }
+    if (options.timeframe !== undefined) {
+      if (!/^[A-Za-z0-9]{1,16}$/.test(options.timeframe)) throw new Error("publication timeframe is invalid");
+      where.push("p.discovery_timeframe=?");
+      values.push(options.timeframe);
+    }
+    if (options.risk !== undefined) {
+      if (!(["低", "中", "高"] as const).includes(options.risk)) throw new Error("publication risk is invalid");
+      where.push("p.discovery_risk=?");
+      values.push(options.risk);
+    }
+    if (options.slugs !== undefined) {
+      if (options.slugs.length < 1 || options.slugs.length > 24 || new Set(options.slugs).size !== options.slugs.length
+        || options.slugs.some((slug) => !SLUG.test(slug))) throw new Error("publication slugs are invalid");
+      where.push(`p.slug IN (${options.slugs.map(() => "?").join(",")})`);
+      values.push(...options.slugs);
+    }
     const cursor = options.cursor;
-    if (cursor !== undefined) exactInput(cursor, ["publishedAt", "id"]);
-    const result = cursor === undefined
-      ? await database.prepare(`SELECT ${projection} ${publishedJoin}
-          ORDER BY p.published_at DESC,p.id DESC LIMIT ?`)
-        .bind(options.limit + 1).all<StrategyPublicationRecord>()
-      : await database.prepare(`SELECT ${projection} ${publishedJoin}
-          WHERE (p.published_at < ? OR (p.published_at = ? AND p.id < ?))
-          ORDER BY p.published_at DESC,p.id DESC LIMIT ?`)
-        .bind(time(cursor.publishedAt, "cursor.publishedAt"), time(cursor.publishedAt, "cursor.publishedAt"),
-          id(cursor.id, "cursor.id"), options.limit + 1).all<StrategyPublicationRecord>();
+    if (cursor !== undefined) {
+      exactInput(cursor, ["publishedAt", "id", "sortValue", "sort"]);
+      const publishedAt = time(cursor.publishedAt, "cursor.publishedAt");
+      const cursorId = id(cursor.id, "cursor.id");
+      if (sortDefinition.column === null) {
+        if (cursor.sortValue !== undefined || cursor.sort !== undefined) throw new Error("publication cursor is invalid");
+        where.push("(p.published_at < ? OR (p.published_at = ? AND p.id < ?))");
+        values.push(publishedAt, publishedAt, cursorId);
+      } else {
+        if (typeof cursor.sortValue !== "number" || !Number.isFinite(cursor.sortValue) || cursor.sort !== sort) {
+          throw new Error("publication cursor is invalid");
+        }
+        const comparator = sortDefinition.direction === "ASC" ? ">" : "<";
+        where.push(`(${sortDefinition.column} ${comparator} ? OR (${sortDefinition.column} = ? AND (p.published_at < ? OR (p.published_at = ? AND p.id < ?))))`);
+        values.push(cursor.sortValue, cursor.sortValue, publishedAt, publishedAt, cursorId);
+      }
+    }
+    const order = sortDefinition.column === null
+      ? "p.published_at DESC,p.id DESC"
+      : `${sortDefinition.column} ${sortDefinition.direction},p.published_at DESC,p.id DESC`;
+    const result = await database.prepare(`SELECT ${projection} ${publishedJoin}
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY ${order} LIMIT ?`).bind(...values, options.limit + 1).all<StrategyPublicationRecord>();
     if (!result.success) throw new Error("publication list failed");
     const hasMore = result.results.length > options.limit;
     const items = result.results.slice(0, options.limit);
     const last = items.at(-1);
     return {
       items,
-      nextCursor: hasMore && last ? { publishedAt: last.publishedAt, id: last.id } : null,
+      nextCursor: hasMore && last ? {
+        publishedAt: last.publishedAt,
+        id: last.id,
+        ...(sortDefinition.column === null ? {} : {
+          sortValue: ({
+            recommended: last.discoveryRecommended,
+            "return-desc": last.discoveryTotalReturn,
+            "drawdown-asc": last.discoveryMaxDrawdown,
+            "win-rate-desc": last.discoveryWinRate,
+            "stability-desc": last.discoveryStability,
+          } as const)[sort as StrategyDiscoverySort],
+          sort: sort as StrategyDiscoverySort,
+        }),
+      } : null,
     };
   };
 
@@ -133,30 +278,74 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
       if (!description.valid) {
         throw new Error("publication description is invalid");
       }
+      const evidence = await database.prepare(`SELECT
+          v.id AS strategyVersionId,v.config_hash AS configHash,v.source_hash AS sourceHash,
+          v.config_json AS configJson,v.source_code AS sourceCode,
+          j.id AS jobId,j.status AS jobStatus,j.evidence_level AS jobEvidenceLevel,
+          j.request_json AS requestJson,j.completed_at AS completedAt,
+          d.id AS datasetId,d.market AS datasetMarket,d.symbol AS datasetSymbol,
+          d.interval AS datasetInterval,d.source AS datasetSource,
+          d.requested_start_at AS requestedStartAt,d.requested_end_at AS requestedEndAt,
+          d.actual_start_at AS actualStartAt,d.actual_end_at AS actualEndAt,
+          d.complete AS datasetComplete,d.gaps_json AS gapsJson,d.checksum,
+          r.id AS resultId,r.evidence_level AS resultEvidenceLevel,
+          r.initial_capital AS initialCapital,r.fee_rate AS feeRate,
+          r.slippage_rate AS slippageRate,r.leverage,r.funding_json AS fundingJson,
+          r.metrics_json AS metricsJson,r.provenance_json AS provenanceJson,
+          r.equity_curve_json AS equityCurveJson,r.engine_version AS engineVersion,
+          r.configuration_hash AS configurationHash,r.strategy_hash AS strategyHash,
+          r.script_hash AS scriptHash
+        FROM strategy_versions v
+        JOIN backtest_jobs j ON j.user_id=v.user_id AND j.strategy_version_id=v.id AND j.id=?
+        JOIN backtest_results r ON r.user_id=j.user_id AND r.backtest_job_id=j.id
+        JOIN backtest_datasets d ON d.user_id=j.user_id AND d.backtest_job_id=j.id AND d.id=r.dataset_id
+        WHERE v.user_id=? AND v.id=? LIMIT 1`)
+        .bind(jobId, owner, versionId).first<FormalEvidenceGateRow>();
+      if (!evidence || !hasFormalBacktestEvidence(evidence)) return null;
+      const discovery = discoveryProjectionOf(evidence, description.value, publisher.value);
       return database.prepare(`INSERT INTO strategy_publications
         (id,user_id,strategy_version_id,backtest_job_id,slug,description,publisher_name,weex_referral_url,
-          published_at,updated_at)
-        SELECT ?,v.user_id,v.id,j.id,?,?,?,?,?,?
+          discovery_market,discovery_timeframe,discovery_risk,search_text,discovery_total_return,
+          discovery_max_drawdown,discovery_win_rate,discovery_stability,discovery_recommended,published_at,updated_at)
+        SELECT ?,v.user_id,v.id,j.id,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         FROM strategy_versions v
         JOIN backtest_jobs j ON j.user_id=v.user_id AND j.strategy_version_id=v.id
           AND j.id=? AND j.status='succeeded' AND j.evidence_level='historical'
         JOIN backtest_results r ON r.user_id=j.user_id AND r.backtest_job_id=j.id
           AND r.evidence_level='historical' AND r.configuration_hash=v.config_hash
+          AND r.strategy_hash=v.config_hash
+          AND ((v.source_hash IS NULL AND r.script_hash IS NULL) OR r.script_hash=v.source_hash)
         JOIN backtest_datasets d ON d.user_id=j.user_id AND d.backtest_job_id=j.id
-          AND d.id=r.dataset_id AND d.complete=1
+          AND d.id=r.dataset_id AND d.complete=1 AND d.gaps_json='[]'
         WHERE v.user_id=? AND v.id=?
         ON CONFLICT(strategy_version_id) DO UPDATE SET
           backtest_job_id=excluded.backtest_job_id,
           description=excluded.description,
           publisher_name=excluded.publisher_name,
+          discovery_market=excluded.discovery_market,
+          discovery_timeframe=excluded.discovery_timeframe,
+          discovery_risk=excluded.discovery_risk,
+          search_text=excluded.search_text,
+          discovery_total_return=excluded.discovery_total_return,
+          discovery_max_drawdown=excluded.discovery_max_drawdown,
+          discovery_win_rate=excluded.discovery_win_rate,
+          discovery_stability=excluded.discovery_stability,
+          discovery_recommended=excluded.discovery_recommended,
           updated_at=excluded.updated_at
         WHERE strategy_publications.user_id=excluded.user_id
         RETURNING id,user_id AS userId,strategy_version_id AS strategyVersionId,
           backtest_job_id AS backtestJobId,slug,'' AS name,description,publisher_name AS publisherName,
           weex_referral_url AS weexReferralUrl,'' AS market,'' AS symbol,'' AS configJson,
           '' AS metricsJson,'' AS equityCurveJson,NULL AS actualStartAt,NULL AS actualEndAt,
+          discovery_market AS discoveryMarket,discovery_timeframe AS discoveryTimeframe,
+          discovery_risk AS discoveryRisk,discovery_total_return AS discoveryTotalReturn,
+          discovery_max_drawdown AS discoveryMaxDrawdown,discovery_win_rate AS discoveryWinRate,
+          discovery_stability AS discoveryStability,discovery_recommended AS discoveryRecommended,
           published_at AS publishedAt,updated_at AS updatedAt`)
-        .bind(publicationId, input.slug, description.value, publisher.value, null, now, now,
+        .bind(publicationId, input.slug, description.value, publisher.value, null,
+          discovery.market, discovery.timeframe, discovery.risk, discovery.searchText,
+          discovery.totalReturn, discovery.maxDrawdown, discovery.winRate, discovery.stability,
+          discovery.recommended, now, now,
           jobId, owner, versionId).first<StrategyPublicationRecord>();
     },
 

@@ -20,12 +20,14 @@ migration.
 
 1. Run `supabase migration list` against the linked production project and
    compare it with `supabase/production-migration-baseline.json`.
-2. The pending sequence is `20260812061404_authorize_strategy_referrals` then
-   `20260812090000_enforce_cloud_run_target_exclusivity`. If both are absent
+2. The pending sequence is `20260812061404_authorize_strategy_referrals`,
+   `20260812072739_add_strategy_publication_discovery_projection`, then
+   `20260812090000_enforce_cloud_run_target_exclusivity`. If all three are absent
    remotely, review `supabase db push --dry-run`, apply them in that order,
-   verify the promoter grants, compatibility trigger, canonical unique index,
-   and stop-fence function, and only then deploy the application.
-3. If either pending timestamp already exists remotely, stop. Its recorded SQL
+   verify the promoter grants, discovery projection/indexes, compatibility
+   trigger, canonical unique index, and stop-fence function, and only then
+   deploy the application.
+3. If any pending timestamp already exists remotely, stop. Its recorded SQL
    may differ from the reviewed pending file. Compare the remote history and
    applied catalog objects before continuing. For any divergence, create a
    newer forward-only repair with `supabase migration new`, review and apply

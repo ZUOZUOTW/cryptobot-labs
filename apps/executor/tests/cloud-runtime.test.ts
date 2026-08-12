@@ -274,6 +274,11 @@ describe("cloud order crash recovery", () => {
     expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
       status: "acknowledged",
       exchangeOrderId: "exchange-existing",
+      exchangeEvidence: expect.objectContaining({
+        clientOrderId: "cb_original",
+        status: "FILLED",
+        cumulativeFilledQuantity: "0.0001",
+      }),
       errorCode: "exchange_order_filled",
     }));
     expect(value.repository.release).not.toHaveBeenCalled();

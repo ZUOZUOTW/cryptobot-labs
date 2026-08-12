@@ -11,6 +11,7 @@ import type {
 } from "../db";
 import { createStrategyPublicationRepository } from "../db/repositories";
 import { STRATEGY_PRESETS } from "../data/strategies";
+import { historicalConfigurationHash } from "../lib/historical-evidence";
 import {
   decodePublicationCursor,
   encodePublicationCursor,
@@ -75,57 +76,122 @@ const metrics = {
   trades: 12,
 };
 
+const configurationHash = historicalConfigurationHash(config);
+const request = (strategyVersionId: string) => ({
+  strategyVersionId,
+  market: config.market,
+  symbol: config.symbol,
+  interval: config.timeframe,
+  startTime: 1_000,
+  endTime: 3_000,
+  initialCapital: "10000",
+  feeRate: "0.001",
+  slippageRate: "0.0005",
+  leverage: String(config.leverage),
+  fundingMode: "none",
+  gapPolicy: "fail",
+});
+const provenance = (checksum: string) => ({
+  provider: "WEEX",
+  dataSource: "WEEX",
+  sourceKind: "public-api",
+  requestedRange: { startTime: 1_000, endTime: 3_000 },
+  fetchedRange: { startTime: 1_000, endTime: 2_999 },
+  gaps: [],
+  gapCount: 0,
+  duplicateCount: 0,
+  incompleteCount: 0,
+  complete: true,
+  feeRate: "0.001",
+  slippageRate: "0.0005",
+  fundingTreatment: {
+    suppliedEvents: 0,
+    appliedEvents: 0,
+    netFunding: "0",
+    convention: "long-pays-positive-short-receives-positive",
+  },
+  market: config.market,
+  symbol: config.symbol,
+  interval: config.timeframe,
+  engineVersion: "test",
+  configHash: configurationHash,
+  strategyHash: configurationHash,
+  datasetDigest: checksum,
+  fundingMode: "none",
+  fundingCoverageComplete: true,
+  executionConvention: {
+    signalEvaluation: "completed-candle-close",
+    signalExecution: "next-candle-open",
+    riskTrigger: "close-only-not-intrabar",
+  },
+  liquidationModel: {
+    maintenanceMarginRate: "0",
+    maximumSupportedLeverage: "500",
+    check: "funding-event-mark-immediately-then-candle-low-long-high-short",
+    orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme",
+    model: "fixed-conservative-not-weex-tier-exact",
+  },
+  maintenanceMarginAssumption: {
+    rate: "0",
+    model: "fixed-conservative-not-weex-tier-exact",
+  },
+});
+
 const seedVerifiedBacktest = (database: SqliteDatabase) => {
+  const checksum = "b".repeat(64);
   database.raw.exec(`
     INSERT INTO users (id,normalized_email,display_name,created_at,updated_at)
       VALUES ('usr_a','a@example.test','發布者 A',1,1),('usr_b','b@example.test','發布者 B',1,1);
     INSERT INTO strategies (id,user_id,name,market,symbol,created_at,updated_at)
       VALUES ('strategy_a','usr_a','測試公開策略','spot','BTCUSDT',1,1);
     INSERT INTO strategy_versions (id,user_id,strategy_id,version,config_hash,source_hash,config_json,source_code,created_at)
-      VALUES ('version_a','usr_a','strategy_a',1,'${"a".repeat(64)}',NULL,'${JSON.stringify(config).replaceAll("'", "''")}',NULL,2);
+      VALUES ('version_a','usr_a','strategy_a',1,'${configurationHash}',NULL,'${JSON.stringify(config).replaceAll("'", "''")}',NULL,2);
     INSERT INTO backtest_jobs (id,user_id,strategy_version_id,status,evidence_level,request_json,created_at,started_at,completed_at)
-      VALUES ('job_a','usr_a','version_a','succeeded','historical','{}',3,3,4);
+      VALUES ('job_a','usr_a','version_a','succeeded','historical','${JSON.stringify(request("version_a")).replaceAll("'", "''")}',3,3,4000);
     INSERT INTO backtest_datasets
       (id,user_id,backtest_job_id,market,symbol,interval,source,requested_start_at,requested_end_at,
         actual_start_at,actual_end_at,complete,gaps_json,checksum,created_at)
-      VALUES ('dataset_a','usr_a','job_a','spot','BTCUSDT','1h','WEEX public market data',1000,3000,
-        1000,3000,1,'[]','${"b".repeat(64)}',4);
+      VALUES ('dataset_a','usr_a','job_a','spot','BTCUSDT','${config.timeframe}','WEEX public market data',1000,3000,
+        1000,2999,1,'[]','${checksum}',4);
     INSERT INTO backtest_results
       (id,user_id,backtest_job_id,dataset_id,evidence_level,initial_capital,fee_rate,slippage_rate,
         leverage,funding_json,metrics_json,provenance_json,equity_curve_json,engine_version,
         configuration_hash,strategy_hash,script_hash,created_at)
-      VALUES ('result_a','usr_a','job_a','dataset_a','historical','10000','0.001','0.0005','1',
-        '[]','${JSON.stringify(metrics).replaceAll("'", "''")}','{}',
-        '[{"timestamp":1000,"equity":"10000"},{"timestamp":2000,"equity":"11200"}]',
-        'test','${"a".repeat(64)}','${"a".repeat(64)}',NULL,4);
+      VALUES ('result_a','usr_a','job_a','dataset_a','historical','10000','0.001','0.0005','${config.leverage}',
+        '{"mode":"none","events":[]}','${JSON.stringify(metrics).replaceAll("'", "''")}',
+        '${JSON.stringify(provenance(checksum)).replaceAll("'", "''")}',
+        '[{"timestamp":1000,"equity":"10000","funding":"0"},{"timestamp":2999,"equity":"11200","funding":"0"}]',
+        'test','${configurationHash}','${configurationHash}',NULL,4);
   `);
 };
 
 const seedVerifiedBacktestVersion = (database: SqliteDatabase, suffix: string, version: number) => {
-  const configurationHash = suffix.repeat(64);
+  const checksum = suffix.toUpperCase().repeat(64).toLowerCase();
   database.raw.prepare(`INSERT INTO strategy_versions
     (id,user_id,strategy_id,version,config_hash,source_hash,config_json,source_code,created_at)
     VALUES (?, 'usr_a', 'strategy_a', ?, ?, NULL, ?, NULL, ?)`)
     .run(`version_${suffix}`, version, configurationHash, JSON.stringify(config), version + 2);
   database.raw.prepare(`INSERT INTO backtest_jobs
     (id,user_id,strategy_version_id,status,evidence_level,request_json,created_at,started_at,completed_at)
-    VALUES (?, 'usr_a', ?, 'succeeded', 'historical', '{}', ?, ?, ?)`)
-    .run(`job_${suffix}`, `version_${suffix}`, version + 3, version + 3, version + 4);
+    VALUES (?, 'usr_a', ?, 'succeeded', 'historical', ?, ?, ?, ?)`)
+    .run(`job_${suffix}`, `version_${suffix}`, JSON.stringify(request(`version_${suffix}`)),
+      version + 3, version + 3, version + 4_000);
   database.raw.prepare(`INSERT INTO backtest_datasets
     (id,user_id,backtest_job_id,market,symbol,interval,source,requested_start_at,requested_end_at,
       actual_start_at,actual_end_at,complete,gaps_json,checksum,created_at)
-    VALUES (?, 'usr_a', ?, 'spot', 'BTCUSDT', '1h', 'WEEX public market data', 1000, 3000,
-      1000, 3000, 1, '[]', ?, ?)`)
-    .run(`dataset_${suffix}`, `job_${suffix}`, suffix.toUpperCase().repeat(64), version + 4);
+    VALUES (?, 'usr_a', ?, 'spot', 'BTCUSDT', '${config.timeframe}', 'WEEX public market data', 1000, 3000,
+      1000, 2999, 1, '[]', ?, ?)`)
+    .run(`dataset_${suffix}`, `job_${suffix}`, checksum, version + 4);
   database.raw.prepare(`INSERT INTO backtest_results
     (id,user_id,backtest_job_id,dataset_id,evidence_level,initial_capital,fee_rate,slippage_rate,
       leverage,funding_json,metrics_json,provenance_json,equity_curve_json,engine_version,
       configuration_hash,strategy_hash,script_hash,created_at)
-    VALUES (?, 'usr_a', ?, ?, 'historical', '10000', '0.001', '0.0005', '1', '[]', ?, '{}',
-      '[{"timestamp":1000,"equity":"10000"},{"timestamp":2000,"equity":"11200"}]',
+    VALUES (?, 'usr_a', ?, ?, 'historical', '10000', '0.001', '0.0005', ?, ?, ?, ?,
+      '[{"timestamp":1000,"equity":"10000","funding":"0"},{"timestamp":2999,"equity":"11200","funding":"0"}]',
       'test', ?, ?, NULL, ?)`)
-    .run(`result_${suffix}`, `job_${suffix}`, `dataset_${suffix}`, JSON.stringify(metrics), configurationHash,
-      configurationHash, version + 4);
+    .run(`result_${suffix}`, `job_${suffix}`, `dataset_${suffix}`, String(config.leverage),
+      JSON.stringify({ mode: "none", events: [] }), JSON.stringify(metrics), JSON.stringify(provenance(checksum)),
+      configurationHash, configurationHash, version + 4);
 };
 
 describe("strategy publications", () => {
@@ -135,7 +201,7 @@ describe("strategy publications", () => {
       "netlify-cdn-cache-control": "no-store",
     });
     expect(publicStrategyPublicationCacheTag("strategy-publicationa"))
-      .toBe("public-strategy-publication:v3:strategy-publicationa");
+      .toBe("public-strategy-publication:v4:strategy-publicationa");
     expect(() => publicStrategyPublicationCacheTag("unsafe/slug")).toThrow(/slug/);
   });
 
@@ -177,6 +243,25 @@ describe("strategy publications", () => {
       publisherName: "發布者 B",
       now: 8,
     })).resolves.toBeNull();
+  });
+
+  it("rejects a succeeded historical row whose stored provenance is not the formal evidence contract", async () => {
+    const database = new SqliteDatabase();
+    seedVerifiedBacktest(database);
+    database.raw.exec("UPDATE backtest_results SET provenance_json='{}' WHERE id='result_a'");
+
+    const saved = await createStrategyPublicationRepository(database).publish({
+      id: "publication_invalid_evidence",
+      userId: "usr_a",
+      strategyVersionId: "version_a",
+      backtestJobId: "job_a",
+      slug: "strategy-invalid-evidence",
+      description: "即使工作狀態成功，空白溯源也不能成為公開的已驗證歷史證據。",
+      publisherName: "發布者 A",
+      now: 5,
+    });
+
+    expect(saved).toBeNull();
   });
 
   it("uses only the current server-approved active promoter referral and hides it immediately when disabled", async () => {
@@ -304,6 +389,54 @@ describe("strategy publications", () => {
       .rejects.toThrow(/cursor/);
   });
 
+  it("filters indexed discovery projections and paginates every metric sort without overlap", async () => {
+    const database = new SqliteDatabase();
+    seedVerifiedBacktest(database);
+    seedVerifiedBacktestVersion(database, "b", 2);
+    seedVerifiedBacktestVersion(database, "c", 3);
+    const repository = createStrategyPublicationRepository(database);
+    for (const [id, version, now] of [
+      ["publication_a", "a", 20],
+      ["publication_b", "b", 19],
+      ["publication_c", "c", 18],
+    ] as const) {
+      await repository.publish({
+        id,
+        userId: "usr_a",
+        strategyVersionId: `version_${version}`,
+        backtestJobId: `job_${version}`,
+        slug: `strategy-discovery${version}`,
+        description: "這是用來驗證會員策略搜尋、篩選、排序與游標契約的公開歷史策略。",
+        publisherName: "發布者 A",
+        now,
+      });
+    }
+    database.raw.exec(`
+      UPDATE strategy_publications SET discovery_recommended=30,discovery_total_return=0.30 WHERE id='publication_a';
+      UPDATE strategy_publications SET discovery_recommended=20,discovery_total_return=0.20 WHERE id='publication_b';
+      UPDATE strategy_publications SET discovery_recommended=10,discovery_total_return=0.10,
+        discovery_market='futures',discovery_timeframe='4h',discovery_risk='高',search_text='needle publisher btcusdt'
+        WHERE id='publication_c';
+    `);
+
+    const filtered = await repository.listPage({
+      limit: 2,
+      search: "needle",
+      market: "futures",
+      timeframe: "4h",
+      risk: "高",
+      sort: "return-desc",
+    });
+    expect(filtered.items.map((item) => item.id)).toEqual(["publication_c"]);
+
+    const first = await repository.listPage({ limit: 1, sort: "recommended" });
+    expect(first.items.map((item) => item.id)).toEqual(["publication_a"]);
+    expect(first.nextCursor).toEqual({ publishedAt: 20, id: "publication_a", sort: "recommended", sortValue: 30 });
+    const second = await repository.listPage({ limit: 1, sort: "recommended", cursor: first.nextCursor! });
+    expect(second.items.map((item) => item.id)).toEqual(["publication_b"]);
+    expect(second.nextCursor).toEqual({ publishedAt: 19, id: "publication_b", sort: "recommended", sortValue: 20 });
+  });
+
   it("strictly parses opaque public-list cursors and bounds every requested page", () => {
     const cursor = encodePublicationCursor({ publishedAt: 1_700_000_000_000, id: "publication_a" });
     expect(decodePublicationCursor(cursor)).toEqual({ publishedAt: 1_700_000_000_000, id: "publication_a" });
@@ -311,12 +444,37 @@ describe("strategy publications", () => {
       .toEqual({ limit: 12, cursor: { publishedAt: 1_700_000_000_000, id: "publication_a" } });
     expect(parsePublicationListRequest(new Request("https://labs.example/api/strategy-publications")))
       .toEqual({ limit: 12 });
+    const sortedCursor = encodePublicationCursor({
+      publishedAt: 1_700_000_000_000,
+      id: "publication_a",
+      sort: "return-desc",
+      sortValue: 0.42,
+    });
+    expect(decodePublicationCursor(sortedCursor)).toEqual({
+      publishedAt: 1_700_000_000_000,
+      id: "publication_a",
+      sort: "return-desc",
+      sortValue: 0.42,
+    });
+    expect(parsePublicationListRequest(new Request(`https://labs.example/api/strategy-publications?q=BTC&market=futures&timeframe=4h&risk=%E9%AB%98&sort=return-desc&cursor=${sortedCursor}`)))
+      .toEqual({
+        limit: 12,
+        search: "BTC",
+        market: "futures",
+        timeframe: "4h",
+        risk: "高",
+        sort: "return-desc",
+        cursor: { publishedAt: 1_700_000_000_000, id: "publication_a", sort: "return-desc", sortValue: 0.42 },
+      });
     for (const query of [
       "limit=25",
       "limit=01",
       "limit=12&limit=12",
       "offset=12",
       "cursor=not-valid-cursor",
+      "sort=unknown",
+      `sort=drawdown-asc&cursor=${sortedCursor}`,
+      "slugs=strategy-releaseone,strategy-releaseone",
     ]) {
       expect(() => parsePublicationListRequest(new Request(`https://labs.example/api/strategy-publications?${query}`)))
         .toThrow();
@@ -339,8 +497,9 @@ describe("strategy publications", () => {
     });
     const saved = await repository.getBySlug("strategy-publicationa");
     const completeCurve = Array.from({ length: 2_000 }, (_, index) => ({
-      timestamp: 1_700_000_000_000 + index * 60_000,
+      timestamp: 1_000 + index,
       equity: String(10_000 + index),
+      funding: "0",
     }));
     const record = { ...saved!, equityCurveJson: JSON.stringify(completeCurve) };
     let observedOptions: unknown;
@@ -360,8 +519,8 @@ describe("strategy publications", () => {
       nextCursor: string;
     };
     expect(body.publications[0]?.equityCurve).toHaveLength(120);
-    expect(body.publications[0]?.equityCurve[0]).toEqual(completeCurve[0]);
-    expect(body.publications[0]?.equityCurve.at(-1)).toEqual(completeCurve.at(-1));
+    expect(body.publications[0]?.equityCurve[0]).toEqual({ timestamp: 1_000, equity: "10000" });
+    expect(body.publications[0]?.equityCurve.at(-1)).toEqual({ timestamp: 2_999, equity: "11999" });
     expect(decodePublicationCursor(body.nextCursor)).toEqual({ publishedAt: record.publishedAt, id: record.id });
     expect(toPublicStrategyPublication(record).equityCurve).toHaveLength(2_000);
 
@@ -542,6 +701,6 @@ describe("strategy publications", () => {
       ...published!,
       name: "WEEX 官方策略",
       configJson: JSON.stringify({ ...config, name: "WEEX 官方策略" }),
-    })).toThrow(/configuration is invalid/i);
+    })).toThrow(/formal evidence is invalid|configuration is invalid/i);
   });
 });

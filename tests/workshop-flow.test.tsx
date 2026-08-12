@@ -303,6 +303,8 @@ describe("multi-strategy workshop", () => {
           leverage: string; fundingMode: "none" | "historical"; gapPolicy: "fail" | "disclose";
         };
         const configHash = historicalConfigurationHash(savedConfig);
+        const maintenanceMarginRate = request.market === "spot"
+          ? "0" : String(Math.min(0.02, 0.5 / Number(request.leverage)));
         return new Response(JSON.stringify({ backtest: {
           id: "job_source", strategyVersionId: "version_source", status: "succeeded",
           evidenceLevel: "historical", request, error: null, createdAt: 1, startedAt: 2,
@@ -311,7 +313,7 @@ describe("multi-strategy workshop", () => {
             interval: request.interval, source: "WEEX public API", requestedStartAt: request.startTime,
             requestedEndAt: request.endTime, actualStartAt: request.startTime,
             actualEndAt: request.endTime - 1, complete: true, gaps: [], checksum: datasetDigest },
-          result: { id: "result_source", funding: {}, metrics: { totalReturn: "0.1",
+          result: { id: "result_source", funding: { mode: "none", events: [] }, metrics: { totalReturn: "0.1",
             annualizedReturn: "0.2", maxDrawdown: "0.05", winRate: "0.6",
             profitFactor: "1.5", sharpe: "1.2", trades: 4 },
             provenance: { provider: "WEEX", dataSource: "WEEX", sourceKind: "public-api",
@@ -323,12 +325,19 @@ describe("multi-strategy workshop", () => {
                 convention: "long-pays-positive-short-receives-positive" },
               market: request.market, symbol: request.symbol, interval: request.interval,
               engineVersion: "formal-test", configHash, strategyHash: configHash, datasetDigest,
+              fundingMode: "none", fundingCoverageComplete: true,
               executionConvention: { signalEvaluation: "completed-candle-close",
                 signalExecution: "next-candle-open", riskTrigger: "close-only-not-intrabar" },
-              liquidationModel: { maintenanceMarginRate: "0", maximumSupportedLeverage: "500",
-                check: "test", orderingAssumption: "test", model: "test" } },
-            equityCurve: [{ timestamp: request.startTime, equity: "10000" },
-              { timestamp: request.endTime - 1, equity: "11000" }],
+              liquidationModel: { maintenanceMarginRate, maximumSupportedLeverage: "500",
+                check: "funding-event-mark-immediately-then-candle-low-long-high-short",
+                orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme",
+                model: "fixed-conservative-not-weex-tier-exact" },
+              maintenanceMarginAssumption: {
+                rate: maintenanceMarginRate,
+                model: "fixed-conservative-not-weex-tier-exact",
+              } },
+            equityCurve: [{ timestamp: request.startTime, equity: "10000", funding: "0" },
+              { timestamp: request.endTime - 1, equity: "11000", funding: "0" }],
             engineVersion: "formal-test", configurationHash: configHash, strategyHash: configHash,
             scriptHash: historicalScriptHash(savedConfig) },
         } }), { status: 201 });

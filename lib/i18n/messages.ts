@@ -60,7 +60,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "PUBLIC LIST": "公開列表",
     "03 / SHARE": "03 / 分享",
     "WEEX / USDT": "WEEX 市場 / USDT", "收藏保存在此瀏覽器": "收藏保存在此瀏覽器", "v": "版本",
-    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自動生成文案", "SHARE TO SOCIAL": "分享至社群", "WEEX /": "WEEX 市場 /",
+    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自動生成文案", "SHARE TO SOCIAL": "分享至社群", "WEEX /": "WEEX 市場 /", "RUN-BOUND ORDER EVIDENCE": "運行綁定委託證據", "Client ID：": "用戶端 ID：", "Exchange ID：": "交易所 ID：",
   },
   "zh-Hans": {
     "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟", "WEEX FUTURES DEMO / SUSDT": "WEEX 合约模拟 / SUSDT",
@@ -110,7 +110,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "PUBLIC LIST": "公开列表",
     "03 / SHARE": "03 / 分享",
     "WEEX / USDT": "WEEX 市场 / USDT", "收藏保存在此瀏覽器": "收藏保存在此浏览器", "v": "版本",
-    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自动生成文案", "SHARE TO SOCIAL": "分享到社交平台", "WEEX /": "WEEX 市场 /",
+    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自动生成文案", "SHARE TO SOCIAL": "分享到社交平台", "WEEX /": "WEEX 市场 /", "RUN-BOUND ORDER EVIDENCE": "运行绑定委托证据", "Client ID：": "客户端 ID：", "Exchange ID：": "交易所 ID：",
   },
   en: {
     "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO", "WEEX FUTURES DEMO / SUSDT": "WEEX FUTURES DEMO / SUSDT",
@@ -160,7 +160,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "PUBLIC LIST": "PUBLIC LIST",
     "03 / SHARE": "03 / SHARE",
     "WEEX / USDT": "WEEX / USDT", "收藏保存在此瀏覽器": "Favorites are saved in this browser", "v": "v",
-    "STRATEGY SHARE STUDIO": "STRATEGY SHARE STUDIO", "AUTO-GENERATED CAPTION": "AUTO-GENERATED CAPTION", "SHARE TO SOCIAL": "SHARE TO SOCIAL", "WEEX /": "WEEX /",
+    "STRATEGY SHARE STUDIO": "STRATEGY SHARE STUDIO", "AUTO-GENERATED CAPTION": "AUTO-GENERATED CAPTION", "SHARE TO SOCIAL": "SHARE TO SOCIAL", "WEEX /": "WEEX /", "RUN-BOUND ORDER EVIDENCE": "RUN-BOUND ORDER EVIDENCE", "Client ID：": "Client ID:", "Exchange ID：": "Exchange ID:",
   },
   ar: {
     "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة", "WEEX FUTURES DEMO / SUSDT": "محاكاة عقود WEEX الآجلة / SUSDT",
@@ -211,7 +211,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "PUBLIC LIST": "القائمة العامة",
     "03 / SHARE": "03 / مشاركة",
     "WEEX / USDT": "سوق WEEX / USDT", "收藏保存在此瀏覽器": "تُحفظ المفضلة في هذا المتصفح", "v": "الإصدار",
-    "STRATEGY SHARE STUDIO": "استوديو مشاركة الاستراتيجية", "AUTO-GENERATED CAPTION": "نص مُنشأ تلقائيًا", "SHARE TO SOCIAL": "المشاركة على الشبكات الاجتماعية", "WEEX /": "سوق WEEX /",
+    "STRATEGY SHARE STUDIO": "استوديو مشاركة الاستراتيجية", "AUTO-GENERATED CAPTION": "نص مُنشأ تلقائيًا", "SHARE TO SOCIAL": "المشاركة على الشبكات الاجتماعية", "WEEX /": "سوق WEEX /", "RUN-BOUND ORDER EVIDENCE": "أدلة أوامر مرتبطة بالتشغيل", "Client ID：": "معرّف العميل:", "Exchange ID：": "معرّف المنصة:",
   },
   ru: {
     "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX", "WEEX FUTURES DEMO / SUSDT": "ДЕМО ФЬЮЧЕРСОВ WEEX / SUSDT",
@@ -262,7 +262,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "PUBLIC LIST": "ОБЩИЙ СПИСОК",
     "03 / SHARE": "03 / ПОДЕЛИТЬСЯ",
     "WEEX / USDT": "РЫНОК WEEX / USDT", "收藏保存在此瀏覽器": "Избранное сохраняется в этом браузере", "v": "версия",
-    "STRATEGY SHARE STUDIO": "СТУДИЯ ПУБЛИКАЦИИ СТРАТЕГИИ", "AUTO-GENERATED CAPTION": "АВТОМАТИЧЕСКИ СОЗДАННЫЙ ТЕКСТ", "SHARE TO SOCIAL": "ПОДЕЛИТЬСЯ В СОЦСЕТЯХ", "WEEX /": "РЫНОК WEEX /",
+    "STRATEGY SHARE STUDIO": "СТУДИЯ ПУБЛИКАЦИИ СТРАТЕГИИ", "AUTO-GENERATED CAPTION": "АВТОМАТИЧЕСКИ СОЗДАННЫЙ ТЕКСТ", "SHARE TO SOCIAL": "ПОДЕЛИТЬСЯ В СОЦСЕТЯХ", "WEEX /": "РЫНОК WEEX /", "RUN-BOUND ORDER EVIDENCE": "ДОКАЗАТЕЛЬСТВА ОРДЕРОВ ДЛЯ ЗАПУСКА", "Client ID：": "ID клиента:", "Exchange ID：": "ID биржи:",
   },
   ja: {
     "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ", "WEEX FUTURES DEMO / SUSDT": "WEEX先物デモ / SUSDT",
@@ -313,7 +313,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "PUBLIC LIST": "公開一覧",
     "03 / SHARE": "03 / 共有",
     "WEEX / USDT": "WEEX 市場 / USDT", "收藏保存在此瀏覽器": "お気に入りはこのブラウザに保存されます", "v": "バージョン",
-    "STRATEGY SHARE STUDIO": "ストラテジー共有スタジオ", "AUTO-GENERATED CAPTION": "自動生成キャプション", "SHARE TO SOCIAL": "ソーシャルで共有", "WEEX /": "WEEX 市場 /",
+    "STRATEGY SHARE STUDIO": "ストラテジー共有スタジオ", "AUTO-GENERATED CAPTION": "自動生成キャプション", "SHARE TO SOCIAL": "ソーシャルで共有", "WEEX /": "WEEX 市場 /", "RUN-BOUND ORDER EVIDENCE": "運用に紐づく注文証跡", "Client ID：": "クライアント ID：", "Exchange ID：": "取引所 ID：",
   },
 };
 

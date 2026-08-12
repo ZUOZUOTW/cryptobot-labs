@@ -64,10 +64,17 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
     await sql.unsafe(`create table private.cloud_order_intents (
       run_id text not null references public.cloud_strategy_runs(id) on delete cascade,
       candle_close_at bigint not null,
+      client_order_id text not null default 'safe-client-id',
+      signal_json jsonb not null default '{}'::jsonb,
+      intent_json jsonb,
       status text not null check (status in ('claimed', 'risk-rejected', 'acknowledged', 'rejected', 'unknown')),
+      exchange_order_id text,
       error_code text,
+      created_at bigint not null default 0,
+      updated_at bigint not null default 0,
       primary key (run_id, candle_close_at)
     )`);
+    await sql.unsafe("grant execute on all functions in schema public to service_role,cryptobot_executor");
   }
 
   async function insertOldWriter(
@@ -94,10 +101,24 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
     status: "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
     errorCode?: string | null;
     candleCloseAt?: number;
+    evidence?: {
+      status: "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "REJECTED";
+      cumulativeFilledQuantity: string;
+    } | null;
   }): Promise<void> {
     await sql.unsafe("delete from private.cloud_order_intents where run_id='run_1'");
-    await sql.unsafe(`insert into private.cloud_order_intents(run_id,candle_close_at,status,error_code)
-      values ('run_1',$1,$2,$3)`, [input.candleCloseAt ?? 200, input.status, input.errorCode ?? null]);
+    const evidence = input.evidence ? JSON.stringify({
+      schemaVersion: 1, provider: "weex", observedAt: 2_000,
+      clientOrderId: "safe-client-id", exchangeOrderId: "exchange-1",
+      symbol: "BTCUSDT", side: "buy", quantity: "1",
+      status: input.evidence.status,
+      cumulativeFilledQuantity: input.evidence.cumulativeFilledQuantity,
+      fills: [],
+    }) : null;
+    await sql.unsafe(`insert into private.cloud_order_intents
+      (run_id,candle_close_at,status,error_code,exchange_order_id,exchange_evidence_json)
+      values ('run_1',$1,$2,$3,$4,$5::text::jsonb)`, [input.candleCloseAt ?? 200,
+      input.status, input.errorCode ?? null, evidence ? "exchange-1" : null, evidence]);
   }
 
   it("derives canonical targets without mutating hash-bound config or authorized risk snapshots", async () => {
@@ -189,9 +210,11 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       { label: "PARTIALLY_FILLED", status: "acknowledged" as const,
         errorCode: "exchange_order_partially_filled", candleCloseAt: 50 },
       { label: "FILLED before completion", status: "acknowledged" as const,
-        errorCode: "exchange_order_filled", candleCloseAt: 200 },
+        errorCode: "exchange_order_filled", candleCloseAt: 200,
+        evidence: { status: "FILLED" as const, cumulativeFilledQuantity: "1" } },
       { label: "CANCELED with fill before completion", status: "acknowledged" as const,
-        errorCode: "exchange_order_cancelled_partially_filled", candleCloseAt: 200 },
+        errorCode: "exchange_order_cancelled_partially_filled", candleCloseAt: 200,
+        evidence: { status: "CANCELED" as const, cumulativeFilledQuantity: "0.1" } },
       { label: "REJECTED before completion", status: "rejected" as const,
         errorCode: "exchange_order_rejected", candleCloseAt: 200 },
       { label: "risk-rejected before completion", status: "risk-rejected" as const,
@@ -220,11 +243,15 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
 
   it("stops only after terminal evidence has been incorporated into run completion", async () => {
     const terminal = [
-      { label: "FILLED", status: "acknowledged" as const, errorCode: "exchange_order_filled" },
+      { label: "FILLED", status: "acknowledged" as const, errorCode: "exchange_order_filled",
+        evidence: { status: "FILLED" as const, cumulativeFilledQuantity: "1" } },
       { label: "CANCELED after partial fill", status: "acknowledged" as const,
-        errorCode: "exchange_order_cancelled_partially_filled" },
-      { label: "CANCELED", status: "rejected" as const, errorCode: "exchange_order_cancelled" },
-      { label: "REJECTED", status: "rejected" as const, errorCode: "exchange_order_rejected" },
+        errorCode: "exchange_order_cancelled_partially_filled",
+        evidence: { status: "CANCELED" as const, cumulativeFilledQuantity: "0.1" } },
+      { label: "CANCELED", status: "rejected" as const, errorCode: "exchange_order_cancelled",
+        evidence: { status: "CANCELED" as const, cumulativeFilledQuantity: "0" } },
+      { label: "REJECTED", status: "rejected" as const, errorCode: "exchange_order_rejected",
+        evidence: { status: "REJECTED" as const, cumulativeFilledQuantity: "0" } },
       { label: "risk-rejected", status: "risk-rejected" as const, errorCode: "risk_limit" },
     ];
 
@@ -240,6 +267,53 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       ]);
       await expect(insertOldWriter("run_successor", "CMT_BTC_USDT"), order.label).resolves.toBeUndefined();
     }
+  });
+
+  it("requires matching authoritative exchange evidence for provider terminal status codes", async () => {
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+    await sql.unsafe("update public.cloud_strategy_runs set last_candle_at=200 where id='run_1'");
+
+    // A pending migration must remain compatible with terminal rows written by
+    // the previous executor. Such rows are accepted but quarantined: they
+    // cannot release the target until the new executor reconciles a matching
+    // provider snapshot.
+    await replaceOrder({ status: "acknowledged", errorCode: "exchange_order_filled" });
+    await expect(stopRun()).rejects.toMatchObject({
+      code: "23514", constraint_name: "cloud_run_stop_order_in_flight",
+    });
+    await expect(replaceOrder({ status: "acknowledged", errorCode: "exchange_order_filled",
+      evidence: { status: "NEW", cumulativeFilledQuantity: "0" } }))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_order_exchange_evidence_valid" });
+    await expect(replaceOrder({ status: "acknowledged", errorCode: null,
+      evidence: { status: "FILLED", cumulativeFilledQuantity: "1" } }))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_order_exchange_evidence_valid" });
+    await expect(replaceOrder({ status: "rejected", errorCode: "exchange_order_cancelled",
+      evidence: { status: "CANCELED", cumulativeFilledQuantity: "0.1" } }))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_order_exchange_evidence_valid" });
+
+    await replaceOrder({ status: "acknowledged", errorCode: "exchange_order_open",
+      evidence: { status: "NEW", cumulativeFilledQuantity: "0" } });
+    await expect(stopRun()).rejects.toMatchObject({
+      code: "23514", constraint_name: "cloud_run_stop_order_in_flight",
+    });
+  });
+
+  it("rejects impossible provider fill quantities before they can become authoritative", async () => {
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+
+    await expect(replaceOrder({ status: "acknowledged", errorCode: "exchange_order_filled",
+      evidence: { status: "FILLED", cumulativeFilledQuantity: "999" } }))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_order_exchange_evidence_valid" });
+    await expect(replaceOrder({ status: "acknowledged", errorCode: "exchange_order_partially_filled",
+      evidence: { status: "PARTIALLY_FILLED", cumulativeFilledQuantity: "1" } }))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_order_exchange_evidence_valid" });
+    await expect(replaceOrder({ status: "rejected", errorCode: "exchange_order_rejected",
+      evidence: { status: "REJECTED", cumulativeFilledQuantity: "0.1" } }))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_order_exchange_evidence_valid" });
   });
 
   it("returns no row for the wrong tenant or version and protects direct legacy stop writers", async () => {
@@ -271,6 +345,14 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       'cryptobot_netlify','private.cloud_order_intents','select') as allowed`);
     const executorCanExecute = await sql.unsafe(`select has_function_privilege(
       'cryptobot_executor','private.stop_cloud_strategy_run(text,text,bigint,bigint)','execute') as allowed`);
+    const netlifyCanListEvidence = await sql.unsafe(`select has_function_privilege(
+      'cryptobot_netlify','private.list_cloud_run_order_evidence(text,text,integer)','execute') as allowed`);
+    const executorCanListEvidence = await sql.unsafe(`select has_function_privilege(
+      'cryptobot_executor','private.list_cloud_run_order_evidence(text,text,integer)','execute') as allowed`);
+    const executorCanValidateEvidence = await sql.unsafe(`select has_function_privilege(
+      'cryptobot_executor','private.is_valid_cloud_order_evidence(jsonb)','execute') as allowed`);
+    const netlifyCanValidateEvidence = await sql.unsafe(`select has_function_privilege(
+      'cryptobot_netlify','private.is_valid_cloud_order_evidence(jsonb)','execute') as allowed`);
     const dataApiPrivileges = await sql.unsafe(`select role_name,
       has_function_privilege(role_name,'private.stop_cloud_strategy_run(text,text,bigint,bigint)','execute') as allowed
       from unnest(array['anon','authenticated','service_role']) role_name order by role_name`);
@@ -278,7 +360,76 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
     expect(netlifyCanExecute[0]).toMatchObject({ allowed: true });
     expect(netlifyCanReadOrders[0]).toMatchObject({ allowed: false });
     expect(executorCanExecute[0]).toMatchObject({ allowed: false });
+    expect(netlifyCanListEvidence[0]).toMatchObject({ allowed: true });
+    expect(executorCanListEvidence[0]).toMatchObject({ allowed: false });
+    expect(executorCanValidateEvidence[0]).toMatchObject({ allowed: true });
+    expect(netlifyCanValidateEvidence[0]).toMatchObject({ allowed: false });
     expect(dataApiPrivileges.every((row) => row.allowed === false)).toBe(true);
+  });
+
+  it("validates exact secret-free snapshots and returns only owner-scoped order evidence", async () => {
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+    await sql.unsafe(`insert into private.cloud_order_intents
+      (run_id,candle_close_at,client_order_id,signal_json,intent_json,status,exchange_order_id,
+       error_code,created_at,updated_at,exchange_evidence_json)
+      values ('run_1',1700000000000,'safe-client-id','{"action":"buy"}',
+        '{"symbol":"BTCUSDT","side":"buy","quantity":"0.001","price":"64000"}',
+        'acknowledged','exchange-1','exchange_order_filled',1700000000001,1700000000100,
+        $1::jsonb)`, [JSON.stringify({
+          schemaVersion: 1,
+          provider: "weex",
+          observedAt: 1_700_000_000_100,
+          clientOrderId: "safe-client-id",
+          exchangeOrderId: "exchange-1",
+          symbol: "BTCUSDT",
+          side: "buy",
+          quantity: "0.001",
+          status: "FILLED",
+          cumulativeFilledQuantity: "0.001",
+          averageFillPrice: "64001",
+          fees: "0.03",
+          fills: [{ exchangeFillId: "fill-1", price: "64001", quantity: "0.001",
+            fee: "0.03", feeCurrency: "USDT", realizedPnl: "1.25", filledAt: 1_700_000_000_090 }],
+        })]);
+
+    const ownerRows = await sql.begin(async (transaction) => {
+      await transaction.unsafe("set local role cryptobot_netlify");
+      return transaction.unsafe(`select * from private.list_cloud_run_order_evidence(
+        'user_1','run_1',20)`);
+    });
+    const otherTenantRows = await sql.begin(async (transaction) => {
+      await transaction.unsafe("set local role cryptobot_netlify");
+      return transaction.unsafe(`select * from private.list_cloud_run_order_evidence(
+        'user_2','run_1',20)`);
+    });
+
+    expect(ownerRows).toEqual([expect.objectContaining({
+      run_id: "run_1",
+      lifecycle_status: "acknowledged",
+      evidence_level: "authoritative",
+      provider_status: "FILLED",
+      cumulative_filled_quantity: "0.001",
+      fees: "0.03",
+      fills_json: [expect.objectContaining({ realizedPnl: "1.25" })],
+    })]);
+    expect(Object.keys(ownerRows[0] ?? {})).not.toContain("signal_json");
+    expect(Object.keys(ownerRows[0] ?? {})).not.toContain("intent_json");
+    expect(otherTenantRows).toEqual([]);
+
+    await expect(sql.unsafe(`update private.cloud_order_intents
+      set exchange_evidence_json=exchange_evidence_json || '{"secret":"must-not-persist"}'::jsonb
+      where run_id='run_1'`)).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "cloud_order_exchange_evidence_valid",
+    });
+    await expect(sql.unsafe(`update private.cloud_order_intents
+      set exchange_evidence_json=jsonb_set(exchange_evidence_json,'{clientOrderId}','"other-client"'::jsonb)
+      where run_id='run_1'`)).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "cloud_order_exchange_evidence_valid",
+    });
   });
 
   it("serializes stop with the executor run lock in both race directions", async () => {

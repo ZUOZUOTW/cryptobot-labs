@@ -1,4 +1,4 @@
-import { foreignKey, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { foreignKey, index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const timestamp = (name: string) => integer(name, { mode: "number" });
 
@@ -309,6 +309,15 @@ export const strategyPublications = sqliteTable("strategy_publications", {
   description: text("description").notNull(),
   publisherName: text("publisher_name").notNull(),
   weexReferralUrl: text("weex_referral_url"),
+  discoveryMarket: text("discovery_market").notNull().default("spot"),
+  discoveryTimeframe: text("discovery_timeframe").notNull().default("1h"),
+  discoveryRisk: text("discovery_risk").notNull().default("低"),
+  searchText: text("search_text").notNull().default(""),
+  discoveryTotalReturn: real("discovery_total_return").notNull().default(0),
+  discoveryMaxDrawdown: real("discovery_max_drawdown").notNull().default(0),
+  discoveryWinRate: real("discovery_win_rate").notNull().default(0),
+  discoveryStability: real("discovery_stability").notNull().default(0),
+  discoveryRecommended: real("discovery_recommended").notNull().default(0),
   publishedAt: timestamp("published_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
@@ -327,6 +336,13 @@ export const strategyPublications = sqliteTable("strategy_publications", {
   index("strategy_publications_version_user_idx").on(table.strategyVersionId, table.userId),
   index("strategy_publications_backtest_user_idx").on(table.backtestJobId, table.userId),
   index("strategy_publications_published_idx").on(table.publishedAt),
+  index("strategy_publications_market_timeframe_idx").on(table.discoveryMarket, table.discoveryTimeframe, table.publishedAt),
+  index("strategy_publications_risk_published_idx").on(table.discoveryRisk, table.publishedAt),
+  index("strategy_publications_return_idx").on(table.discoveryTotalReturn, table.publishedAt),
+  index("strategy_publications_drawdown_idx").on(table.discoveryMaxDrawdown, table.publishedAt),
+  index("strategy_publications_win_rate_idx").on(table.discoveryWinRate, table.publishedAt),
+  index("strategy_publications_stability_idx").on(table.discoveryStability, table.publishedAt),
+  index("strategy_publications_recommended_idx").on(table.discoveryRecommended, table.publishedAt),
   index("strategy_publications_user_updated_idx").on(table.userId, table.updatedAt),
 ]);
 

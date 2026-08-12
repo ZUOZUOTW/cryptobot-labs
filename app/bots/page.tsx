@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { BotCard } from "../../components/BotCard";
 import { BOT_CATALOG } from "../../data/bots";
 import type { Market, RiskLevel, WeexHistoricalPerformance } from "../../lib/types";
@@ -14,6 +14,7 @@ import { usePlatformUser } from "../../components/PlatformAuthProvider";
 import { useI18n } from "../../components/I18nProvider";
 import { PublishedStrategyCard } from "../../components/PublishedStrategyCard";
 import type { PublicStrategyPublication } from "../../lib/strategy-publications";
+import { normalizeDiscoverySearch, strategyPublicationListPath } from "../../lib/strategy-discovery-query";
 
 type MarketFilter = Market | "all";
 type RiskFilter = RiskLevel | "all";
@@ -59,7 +60,9 @@ export default function BotsPage() {
   const [tag, setTag] = useState("all");
   const [timeframe, setTimeframe] = useState("all");
   const [sort, setSort] = useState<SortOption>("recommended");
+  const [search, setSearch] = useState("");
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [communityFavorites, setCommunityFavorites] = useState<string[]>([]);
   const [preferenceError, setPreferenceError] = useState("");
   const [performanceState, setPerformanceState] = useState<"loading" | "ready" | "error">("loading");
   const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
@@ -94,18 +97,35 @@ export default function BotsPage() {
       setTimeframe(hasMatch ? nextTimeframe : "all");
       setSort(saved.sort);
       setFavorites(saved.favorites.filter((id) => BOT_CATALOG.some((bot) => bot.id === id)));
+      setCommunityFavorites(saved.communityFavorites?.filter((slug) => /^strategy-[a-z0-9-]{8,71}$/.test(slug)).slice(0, 24) ?? []);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  const deferredSearch = useDeferredValue(normalizeDiscoverySearch(search));
+  const publicationQuery = useMemo(() => strategyPublicationListPath({
+    ...(deferredSearch ? { search: deferredSearch } : {}),
+    ...(market === "all" ? {} : { market }),
+    ...(timeframe === "all" ? {} : { timeframe }),
+    ...(risk === "all" ? {} : { risk }),
+    sort,
+  }), [deferredSearch, market, risk, sort, timeframe]);
+
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    void fetch("/api/strategy-publications", {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    })
+    const timer = window.setTimeout(() => {
+      publicationMoreAbort.current?.abort();
+      publicationMoreAbort.current = null;
+      publicationRequestInFlight.current = false;
+      setPublicationState("loading");
+      setPublicationMoreState("idle");
+      setPublicationNextCursor(null);
+      void fetch(publicationQuery, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      })
       .then(async (response) => {
         const body = parsePublicationPage(await response.json() as unknown);
         if (!response.ok) throw new Error("publication_list_failed");
@@ -116,8 +136,9 @@ export default function BotsPage() {
         }
       })
       .catch(() => { if (!cancelled) setPublicationState("error"); });
-    return () => { cancelled = true; controller.abort(); };
-  }, [publicationReloadKey]);
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); };
+  }, [publicationQuery, publicationReloadKey]);
 
   useEffect(() => () => publicationMoreAbort.current?.abort(), []);
 
@@ -129,7 +150,7 @@ export default function BotsPage() {
     publicationMoreAbort.current = controller;
     setPublicationMoreState("loading");
     try {
-      const response = await fetch(`/api/strategy-publications?cursor=${encodeURIComponent(cursor)}`, {
+      const response = await fetch(`${publicationQuery}${publicationQuery.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}`, {
         cache: "no-store",
         headers: { Accept: "application/json" },
         signal: controller.signal,
@@ -152,7 +173,7 @@ export default function BotsPage() {
       if (publicationMoreAbort.current === controller) publicationMoreAbort.current = null;
       publicationRequestInFlight.current = false;
     }
-  }, [publicationNextCursor]);
+  }, [publicationNextCursor, publicationQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,11 +202,16 @@ export default function BotsPage() {
   }), [performances]);
 
   const persist = (next: Partial<DiscoveryPreferences>) => {
-    const result = saveDiscoveryPreferences({ market, risk, tag, timeframe, sort, favorites, ...next });
+    const result = saveDiscoveryPreferences({ market, risk, tag, timeframe, sort, favorites, communityFavorites, ...next });
     setPreferenceError(result.ok ? "" : result.reason);
   };
 
   const visibleBots = useMemo(() => catalog
+    .filter((bot) => {
+      if (!deferredSearch) return true;
+      const haystack = [bot.name, bot.description, bot.symbol, ...bot.tags].join(" ").toLocaleLowerCase(locale);
+      return haystack.includes(deferredSearch.toLocaleLowerCase(locale));
+    })
     .filter((bot) => market === "all" || bot.market === market)
     .filter((bot) => risk === "all" || bot.risk === risk)
     .filter((bot) => tag === "all" || bot.tags.includes(tag))
@@ -199,7 +225,7 @@ export default function BotsPage() {
         return score(b) - score(a);
       }
       return b.metrics.totalReturn - a.metrics.totalReturn;
-    }), [catalog, market, risk, sort, tag, timeframe]);
+    }), [catalog, deferredSearch, locale, market, risk, sort, tag, timeframe]);
   const displayedBots = user ? visibleBots : visibleBots.slice(0, 6);
   const hasMemberResults = !user && visibleBots.length > displayedBots.length;
 
@@ -208,6 +234,7 @@ export default function BotsPage() {
     setRisk("all");
     setTag("all");
     setTimeframe("all");
+    setSearch("");
     persist({ market: "all", risk: "all", tag: "all", timeframe: "all" });
   };
 
@@ -215,6 +242,18 @@ export default function BotsPage() {
     const next = favorites.includes(botId) ? favorites.filter((id) => id !== botId) : [...favorites, botId];
     setFavorites(next);
     persist({ favorites: next });
+  };
+
+  const toggleCommunityFavorite = (slug: string) => {
+    if (!communityFavorites.includes(slug) && communityFavorites.length >= 24) {
+      setPreferenceError("會員策略收藏已達 24 組上限");
+      return;
+    }
+    const next = communityFavorites.includes(slug)
+      ? communityFavorites.filter((favorite) => favorite !== slug)
+      : [...communityFavorites, slug];
+    setCommunityFavorites(next);
+    persist({ communityFavorites: next });
   };
 
   return (
@@ -225,7 +264,7 @@ export default function BotsPage() {
         <p>先比較用途、風險、最大回撤、交易次數與資料日期；未登入可預覽精選策略，登入後查看完整策略庫。</p>
       </header>
 
-      {(publicationState === "loading" || publications.length > 0 || publicationNextCursor !== null) && (
+      {(publicationState === "loading" || publicationState === "ready" || publications.length > 0 || publicationNextCursor !== null) && (
         <section
           aria-busy={publicationState === "loading" || publicationMoreState === "loading"}
           aria-labelledby="published-strategies-title"
@@ -240,9 +279,14 @@ export default function BotsPage() {
             <div className="published-strategies__loading glass-panel" role="status">正在載入會員公開策略…</div>
           ) : (
             <>
-              <div className="published-strategies__grid">
-                {publications.map((publication) => <PublishedStrategyCard key={publication.slug} publication={publication} />)}
-              </div>
+              {publications.length > 0 ? <div className="published-strategies__grid">
+                {publications.map((publication) => <PublishedStrategyCard
+                  favorite={communityFavorites.includes(publication.slug)}
+                  key={publication.slug}
+                  onFavorite={toggleCommunityFavorite}
+                  publication={publication}
+                />)}
+              </div> : <div className="published-strategies__loading glass-panel" role="status">沒有符合目前搜尋與篩選條件的會員策略。</div>}
               <div aria-live="polite" className="published-strategies__pagination">
                 {publicationMoreState === "error" ? (
                   <>
@@ -303,7 +347,7 @@ export default function BotsPage() {
         className="catalog-controls glass-panel"
         data-mobile-open={mobileFiltersOpen}
         id="catalog-filter-panel"
-        aria-label="篩選與排序機器人"
+        aria-label="篩選、搜尋與排序策略"
       >
         <div className="catalog-choice-filter catalog-choice-filter--market">
           <span>市場</span>
@@ -326,13 +370,23 @@ export default function BotsPage() {
             ))}
           </div>
         </div>
-        <label>
+        <label className="catalog-risk-field">
           <span>風險等級</span>
           <select value={risk} onChange={(event) => { const value = event.target.value as RiskFilter; setRisk(value); persist({ risk: value }); }}>
             <option value="all">全部風險</option><option value="低">低風險</option><option value="中">中風險</option><option value="高">高風險</option>
           </select>
         </label>
-        <label>
+        <label className="catalog-search-field">
+          <span>搜尋官方與會員策略</span>
+          <input
+            maxLength={80}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="策略名稱、發布者、交易對或關鍵字"
+            type="search"
+            value={search}
+          />
+        </label>
+        <label className="catalog-tag-field">
           <span>策略類型</span>
           <select value={tag} onChange={(event) => { const value = event.target.value; setTag(value); persist({ tag: value }); }}>
             <option value="all">全部策略</option>
@@ -356,7 +410,7 @@ export default function BotsPage() {
             ))}
           </div>
         </div>
-        <label>
+        <label className="catalog-sort-field">
           <span>排序方式</span>
           <select value={sort} onChange={(event) => { const value = event.target.value as SortOption; setSort(value); persist({ sort: value }); }}>
             <option value="recommended">熱門推薦：完成度與風險調整</option>
@@ -392,7 +446,7 @@ export default function BotsPage() {
         <p aria-live="polite">{user ? `顯示 ${displayedBots.length} / ${visibleBots.length} 組符合策略` : `目前顯示 ${displayedBots.length} 組符合策略`}</p>
         <div className="catalog-summary__actions">
           <Link aria-label="收藏策略" className="text-button catalog-favorites-link" href="/favorites">
-            <span>收藏</span><span>策略</span><strong>{favorites.length}</strong>
+            <span>收藏</span><span>策略</span><strong>{favorites.length + communityFavorites.length}</strong>
           </Link>
           <button className="text-button" onClick={resetFilters} type="button">重設篩選</button>
         </div>

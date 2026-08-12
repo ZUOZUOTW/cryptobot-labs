@@ -19,7 +19,7 @@
 - The official AWS KMS SDK is pinned, the production KMS adapter is compiled, and its focused tests pass.
 - The executor reads `AWSCURRENT` directly from the KMS-backed Secrets Manager container using its instance role; no runtime secret file is required on EC2.
 - `www.cryptobotlabs.app` is the Netlify primary domain with active Let’s Encrypt TLS; the apex redirects to `www`, and Cloudflare authority serves both DNS records.
-- Supabase OAuth/control-plane migrations are applied. The `cryptobot_executor` runtime role is login-enabled, NOBYPASSRLS, SCRAM-protected, connection-limited, and uses the project-specific TLS Session Pooler recorded in the private deployment configuration.
+- The confirmed Supabase OAuth/control-plane migration prefix through `20260728164403` is applied. The `cryptobot_executor` runtime role is login-enabled, NOBYPASSRLS, SCRAM-protected, connection-limited, and uses the project-specific TLS Session Pooler recorded in the private deployment configuration. New August strategy-referral, discovery, and cloud-run safety migrations remain explicitly pending until the rollout gate below records remote evidence.
 - Supabase security advisors report no findings. Performance advisors contain only informational unused-index notices from the newly provisioned workload and one Auth connection-allocation notice; no index is removed before production query evidence exists.
 - The signed executor release is installed through SSM. Caddy serves a valid certificate for `api.cryptobotlabs.app`, Cloudflare proxies the reserved executor origin, and Terraform exposes only HTTPS/443 from reviewed Cloudflare proxy ranges.
 - Public `/healthz` and `/readyz` checks pass. KMS, fixed egress, database, and credential-envelope checks are ready while `oauthEnabled=false` and `liveTradingEnabled=false` remain intentional.
@@ -29,6 +29,40 @@
 - WEEX registered Broker ID `WEEX111162` for CryptoBot Labs. The separate Broker UID stays in private operations metadata and is never placed in an order ID. New Spot, Futures, and Futures Demo submissions fail closed unless their `newClientOrderId` uses the 35-character `b-WEEX111162-<22-character deterministic suffix>` format. Legacy `cb_` IDs remain queryable and cancellable for safe rollout reconciliation.
 - Supabase's production migration history is mirrored by version and normalized SQL hash in the repository. Leaked Password Protection is enabled for the current Google/Email transition login.
 - `WEEX_AUTH_STAGE=transition` is the production rollout state: Google/Email login and the KMS-encrypted manual API path remain available, while WEEX OAuth start is disabled even if credentials are pre-provisioned. `dual` and `oauth-only` require separate reviewed cutovers.
+
+## Pending database rollout gate
+
+The repository baseline currently marks these migrations as pending, not as
+production evidence:
+
+1. `20260812061404_authorize_strategy_referrals.sql`
+2. `20260812072739_add_strategy_publication_discovery_projection.sql`
+3. `20260812090000_enforce_cloud_run_target_exclusivity.sql`
+
+Before deploying either the website or Executor:
+
+1. Use the reviewed Supabase CLI release to run `supabase migration list` and
+   compare the local and remote histories with
+   `supabase/production-migration-baseline.json`.
+2. Stop if any pending version already exists remotely without matching,
+   reviewable SQL evidence. Do not use history repair, `--include-all`, or an
+   edit to an applied migration to conceal the divergence. Generate a later
+   forward-only repair with `supabase migration new` after the remote state is
+   understood.
+3. Review `supabase db push --dry-run`, then apply the three pending migrations
+   in timestamp order during the database maintenance window, before the new
+   website or Executor artifact.
+4. Re-run `supabase migration list`. Only after the remote versions are
+   confirmed may their entries move from `pendingMigrations` to `migrations`
+   in the baseline.
+5. Run `node scripts/check-production-database-readiness.mjs website` with the
+   website runtime role and `node scripts/check-production-database-readiness.mjs executor`
+   with the Executor runtime role. Both checks must pass before application
+   traffic is shifted.
+
+Schema rollback is not an accepted recovery path after these migrations are
+applied. Keep Live disabled, roll application traffic forward only, and add a
+new CLI-generated corrective migration if a database defect is discovered.
 
 ## External gates still required
 

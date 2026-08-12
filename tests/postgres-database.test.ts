@@ -13,6 +13,12 @@ const websiteIdentity = {
 };
 
 describe("Supabase Postgres D1 compatibility adapter", () => {
+  it("identifies itself as the PostgreSQL control-plane dialect", () => {
+    const database = new PostgresControlPlaneDatabase({ unsafe: vi.fn() } as never);
+
+    expect(database.dialect).toBe("postgres");
+  });
+
   it("verifies the formal website role before its first control-plane query", async () => {
     const unsafe = vi.fn()
       .mockResolvedValueOnce([websiteIdentity])

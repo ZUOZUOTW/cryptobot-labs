@@ -33,6 +33,10 @@ const executorSchema = {
   orders_table_ready: true,
   account_snapshots_table_ready: true,
   realized_pnl_table_ready: true,
+  order_evidence_column_ready: true,
+  order_evidence_constraint_ready: true,
+  order_evidence_validator_ready: true,
+  order_evidence_validator_acl_ready: true,
   market_column_ready: true,
   symbol_column_ready: true,
   target_index_definition: "CREATE UNIQUE INDEX cloud_runs_nonterminal_target_uidx ON public.cloud_strategy_runs USING btree (user_id, connection_id, market, symbol) WHERE (state <> 'stopped'::text)",
@@ -482,6 +486,75 @@ describe("CloudRuntimeRepository account projection", () => {
   });
 });
 
+describe("CloudRuntimeRepository order evidence persistence", () => {
+  beforeEach(() => {
+    database.unsafe.mockReset().mockResolvedValue(Object.assign([], { count: 1 }));
+    database.json.mockClear();
+  });
+
+  it("stores a strictly normalized, client-id-bound exchange snapshot without raw provider payloads", async () => {
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    await repository.recordOrder({
+      runId: "run_1",
+      candleCloseAt: 1_700_000_000_000,
+      status: "acknowledged",
+      exchangeOrderId: "exchange-1",
+      errorCode: "exchange_order_filled",
+      now: 1_700_000_000_100,
+      exchangeEvidence: {
+        clientOrderId: "b-WEEX111162-safe-client-id",
+        exchangeOrderId: "exchange-1",
+        symbol: "BTCUSDT",
+        side: "buy",
+        quantity: "0.001",
+        status: "FILLED",
+        cumulativeFilledQuantity: "0.001",
+        averageFillPrice: "64001",
+        fees: "0.03",
+        fills: [{ exchangeFillId: "fill-1", price: "64001", quantity: "0.001", fee: "0.03",
+          feeCurrency: "USDT", realizedPnl: "1.25", filledAt: 1_700_000_000_090 }],
+      },
+    });
+
+    const sql = String(database.unsafe.mock.calls[0]?.[0]);
+    const bindings = database.unsafe.mock.calls[0]?.[1] as unknown[];
+    expect(sql).toContain("exchange_evidence_json=coalesce($7::jsonb,exchange_evidence_json)");
+    expect(sql).toContain("and ($9::text is null or client_order_id=$9)");
+    expect(bindings[4]).toBe("exchange-1");
+    expect(bindings[6]).toEqual({ json: expect.objectContaining({
+      schemaVersion: 1,
+      provider: "weex",
+      observedAt: 1_700_000_000_100,
+      clientOrderId: "b-WEEX111162-safe-client-id",
+      fills: [expect.objectContaining({ realizedPnl: "1.25" })],
+    }) });
+    expect(bindings[8]).toBe("b-WEEX111162-safe-client-id");
+  });
+
+  it("rejects mismatched or malformed exchange evidence before a database write", async () => {
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const evidence = {
+      clientOrderId: "safe-client-id", exchangeOrderId: "exchange-1", symbol: "BTCUSDT",
+      side: "buy" as const, quantity: "0.001", status: "FILLED" as const,
+      cumulativeFilledQuantity: "0.001",
+    };
+
+    await expect(repository.recordOrder({ runId: "run_1", candleCloseAt: 1, status: "acknowledged",
+      exchangeOrderId: "exchange-other", exchangeEvidence: evidence, now: 2 }))
+      .rejects.toThrow("Cloud order exchange evidence identity is invalid");
+    await expect(repository.recordOrder({ runId: "run_1", candleCloseAt: 1, status: "acknowledged",
+      exchangeEvidence: { ...evidence, quantity: "NaN" }, now: 2 }))
+      .rejects.toThrow("Cloud order exchange evidence is invalid");
+    await expect(repository.recordOrder({ runId: "run_1", candleCloseAt: 1, status: "acknowledged",
+      exchangeEvidence: { ...evidence, cumulativeFilledQuantity: "999" }, now: 2 }))
+      .rejects.toThrow("Cloud order exchange evidence is invalid");
+    await expect(repository.recordOrder({ runId: "run_1", candleCloseAt: 1, status: "acknowledged",
+      exchangeEvidence: { ...evidence, status: "PARTIALLY_FILLED", cumulativeFilledQuantity: "0.001" }, now: 2 }))
+      .rejects.toThrow("Cloud order exchange evidence is invalid");
+    expect(database.unsafe).not.toHaveBeenCalled();
+  });
+});
+
 describe("CloudRuntimeRepository run failures", () => {
   beforeEach(() => {
     database.unsafe.mockReset().mockResolvedValue(Object.assign([], { count: 1 }));
@@ -652,9 +725,32 @@ describe("CloudRuntimeRepository order claims", () => {
     expect(database.unsafe.mock.calls[0]?.[0]).toContain("status in ('claimed','unknown')");
     expect(database.unsafe.mock.calls[0]?.[0]).toContain("status='acknowledged'");
     expect(database.unsafe.mock.calls[0]?.[0]).toContain("'exchange_order_filled'");
+    expect(database.unsafe.mock.calls[0]?.[0]).toContain("exchange_evidence_json->>'status'='FILLED'");
     expect(database.unsafe.mock.calls[0]?.[0]).toContain("candle_close_at>$2");
     expect(database.unsafe.mock.calls[0]?.[0]).toContain("order by candle_close_at asc");
     expect(database.unsafe.mock.calls[0]?.[1]).toEqual(["run_1", 1_699_999_900_000]);
+  });
+
+  it("reconciles legacy terminal status codes that have no authoritative exchange snapshot", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      status: "acknowledged",
+      exchange_order_id: "exchange-legacy",
+      client_order_id: "cb_legacy_terminal",
+      candle_close_at: 1_699_999_940_000,
+      created_at: 1_699_999_940_001,
+      signal_json: { action: "buy", reason: "legacy" },
+      intent_json: { symbol: "BTCUSDT", side: "buy", quantity: "0.001" },
+      fresh: false,
+    }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.blockingOrder("run_1", 1_699_999_940_000)).resolves.toMatchObject({
+      status: "acknowledged",
+      exchangeOrderId: "exchange-legacy",
+      clientOrderId: "cb_legacy_terminal",
+    });
+    expect(database.unsafe.mock.calls[0]?.[0]).toContain("not coalesce((");
+    expect(database.unsafe.mock.calls[0]?.[0]).toContain("exchange_evidence_json");
   });
 });
 

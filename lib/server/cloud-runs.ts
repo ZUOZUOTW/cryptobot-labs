@@ -1,9 +1,36 @@
 import type { ControlPlaneDatabase } from "@/db";
 import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client";
+import {
+  hasFormalBacktestEvidence,
+  type FormalEvidenceGateRow,
+} from "./formal-evidence-gate";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+
+const compareOrderDecimals = (left: string, right: string): -1 | 0 | 1 => {
+  const [leftInteger, leftFraction = ""] = left.split(".");
+  const [rightInteger, rightFraction = ""] = right.split(".");
+  const scale = Math.max(leftFraction.length, rightFraction.length);
+  const leftValue = BigInt(leftInteger! + leftFraction.padEnd(scale, "0"));
+  const rightValue = BigInt(rightInteger! + rightFraction.padEnd(scale, "0"));
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+};
+
+const validOrderFillState = (
+  status: CloudOrderProviderStatus,
+  quantity: string,
+  cumulativeFilledQuantity: string,
+): boolean => {
+  const versusZero = compareOrderDecimals(cumulativeFilledQuantity, "0");
+  const versusQuantity = compareOrderDecimals(cumulativeFilledQuantity, quantity);
+  if (compareOrderDecimals(quantity, "0") <= 0 || versusQuantity > 0) return false;
+  if (status === "NEW" || status === "REJECTED") return versusZero === 0;
+  if (status === "PARTIALLY_FILLED") return versusZero > 0 && versusQuantity < 0;
+  if (status === "FILLED") return versusQuantity === 0;
+  return status === "CANCELED";
+};
 
 export const CLOUD_RUN_TARGET_CONFLICT = Object.freeze({
   error: "cloud_run_target_conflict",
@@ -66,6 +93,42 @@ export interface RealizedPnlSeries {
   tradeCount: number;
   points: RealizedPnlPointRow[];
 }
+export type CloudOrderLifecycleStatus = "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
+export type CloudOrderEvidenceLevel = "authoritative" | "uncertain" | "pending" | "control-plane";
+export type CloudOrderProviderStatus = "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "REJECTED";
+export interface CloudOrderFillEvidence {
+  exchangeFillId: string;
+  price: string;
+  quantity: string;
+  fee: string;
+  feeCurrency: string;
+  realizedPnl: string | null;
+  filledAt: number;
+}
+export interface CloudOrderEvidence {
+  runId: string;
+  candleCloseAt: number;
+  createdAt: number;
+  updatedAt: number;
+  lifecycleStatus: CloudOrderLifecycleStatus;
+  evidenceLevel: CloudOrderEvidenceLevel;
+  errorCode: string | null;
+  clientOrderId: string | null;
+  exchangeOrderId: string | null;
+  symbol: string;
+  side: "buy" | "sell" | null;
+  quantity: string | null;
+  requestedPrice: string | null;
+  providerStatus: CloudOrderProviderStatus | null;
+  cumulativeFilledQuantity: string | null;
+  averageFillPrice: string | null;
+  fees: string | null;
+  fills: CloudOrderFillEvidence[];
+  evidenceObservedAt: number | null;
+}
+interface CloudOrderEvidenceQueryRow extends Omit<CloudOrderEvidence, "fills"> {
+  fillsJson: unknown;
+}
 export type CloudRunMode = "futures-demo" | "live";
 interface RealizedPnlQueryRow extends RealizedPnlPointRow {
   overallNetPnl: string;
@@ -123,6 +186,92 @@ const normalizeCloudRunRow = (row: CloudRunRow): CloudRunRow => {
     ? [...new Set(row.allowedSymbols.map(canonicalizeWeexSymbol).filter((item): item is string => item !== null))]
     : row.allowedSymbols;
   return { ...row, ...(symbol ? { symbol } : {}), allowedSymbols };
+};
+
+const ORDER_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const ORDER_SYMBOL = /^[A-Z0-9_]{3,32}$/;
+const ORDER_DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const ORDER_SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const cloudOrderArray = (value: unknown): unknown[] | null => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+const optionalOrderText = (value: unknown, pattern: RegExp): string | null | undefined =>
+  value === null ? null : typeof value === "string" && pattern.test(value) ? value : undefined;
+const orderTimestamp = (value: unknown): number | null => {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value)
+    ? Number(value) : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+const normalizeCloudOrderEvidence = (row: CloudOrderEvidenceQueryRow): CloudOrderEvidence => {
+  const lifecycleStatuses: readonly CloudOrderLifecycleStatus[] = [
+    "claimed", "risk-rejected", "acknowledged", "rejected", "unknown",
+  ];
+  const evidenceLevels: readonly CloudOrderEvidenceLevel[] = [
+    "authoritative", "uncertain", "pending", "control-plane",
+  ];
+  const providerStatuses: readonly CloudOrderProviderStatus[] = [
+    "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED",
+  ];
+  const candleCloseAt = orderTimestamp(row.candleCloseAt);
+  const createdAt = orderTimestamp(row.createdAt);
+  const updatedAt = orderTimestamp(row.updatedAt);
+  const evidenceObservedAt = row.evidenceObservedAt === null ? null : orderTimestamp(row.evidenceObservedAt);
+  const clientOrderId = optionalOrderText(row.clientOrderId, ORDER_ID);
+  const exchangeOrderId = optionalOrderText(row.exchangeOrderId, ORDER_ID);
+  const quantity = optionalOrderText(row.quantity, ORDER_DECIMAL);
+  const requestedPrice = optionalOrderText(row.requestedPrice, ORDER_DECIMAL);
+  const cumulativeFilledQuantity = optionalOrderText(row.cumulativeFilledQuantity, ORDER_DECIMAL);
+  const averageFillPrice = optionalOrderText(row.averageFillPrice, ORDER_DECIMAL);
+  const fees = optionalOrderText(row.fees, ORDER_DECIMAL);
+  const fillsJson = cloudOrderArray(row.fillsJson);
+  const fills = fillsJson?.map((value): CloudOrderFillEvidence | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const fill = value as Record<string, unknown>;
+    const filledAt = orderTimestamp(fill.filledAt);
+    const realizedPnl = optionalOrderText(fill.realizedPnl ?? null, ORDER_SIGNED_DECIMAL);
+    if (typeof fill.exchangeFillId !== "string" || !ORDER_ID.test(fill.exchangeFillId)
+      || typeof fill.price !== "string" || !ORDER_DECIMAL.test(fill.price)
+      || typeof fill.quantity !== "string" || !ORDER_DECIMAL.test(fill.quantity)
+      || typeof fill.fee !== "string" || !ORDER_DECIMAL.test(fill.fee)
+      || typeof fill.feeCurrency !== "string" || !/^[A-Z0-9]{1,16}$/.test(fill.feeCurrency)
+      || filledAt === null || realizedPnl === undefined) return null;
+    return { exchangeFillId: fill.exchangeFillId, price: fill.price, quantity: fill.quantity,
+      fee: fill.fee, feeCurrency: fill.feeCurrency, realizedPnl, filledAt };
+  }) ?? null;
+  const authoritative = row.evidenceLevel === "authoritative";
+  if (typeof row.runId !== "string" || !ID.test(row.runId)
+    || candleCloseAt === null || createdAt === null || updatedAt === null
+    || !lifecycleStatuses.includes(row.lifecycleStatus)
+    || !evidenceLevels.includes(row.evidenceLevel)
+    || (row.errorCode !== null && (typeof row.errorCode !== "string" || !/^[a-z0-9_-]{1,64}$/.test(row.errorCode)))
+    || clientOrderId === undefined || exchangeOrderId === undefined
+    || typeof row.symbol !== "string" || !ORDER_SYMBOL.test(row.symbol)
+    || (row.side !== null && row.side !== "buy" && row.side !== "sell")
+    || quantity === undefined || requestedPrice === undefined
+    || (row.providerStatus !== null && !providerStatuses.includes(row.providerStatus))
+    || cumulativeFilledQuantity === undefined || averageFillPrice === undefined || fees === undefined
+    || !fills || fills.some((fill) => fill === null)
+    || new Set((fills as CloudOrderFillEvidence[]).map(({ exchangeFillId: id }) => id)).size !== fills.length
+    || (authoritative && (row.providerStatus === null || evidenceObservedAt === null
+      || clientOrderId === null || exchangeOrderId === null || row.side === null || quantity === null
+      || cumulativeFilledQuantity === null
+      || !validOrderFillState(row.providerStatus, quantity, cumulativeFilledQuantity)))
+    || (!authoritative && (row.providerStatus !== null || evidenceObservedAt !== null
+      || cumulativeFilledQuantity !== null || averageFillPrice !== null || fees !== null || fills.length > 0))) {
+    throw new Error("Cloud order evidence projection is invalid");
+  }
+  return { runId: row.runId, candleCloseAt, createdAt, updatedAt,
+    lifecycleStatus: row.lifecycleStatus, evidenceLevel: row.evidenceLevel,
+    errorCode: row.errorCode, clientOrderId, exchangeOrderId, symbol: row.symbol, side: row.side,
+    quantity, requestedPrice, providerStatus: row.providerStatus, cumulativeFilledQuantity,
+    averageFillPrice, fees, fills: fills as CloudOrderFillEvidence[], evidenceObservedAt };
 };
 
 export function createCloudRunRepository(database: ControlPlaneDatabase) {
@@ -188,10 +337,54 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         })),
       };
     },
+    async orders(userId: string, runId: string, limit = 20): Promise<CloudOrderEvidence[]> {
+      if (!ID.test(userId) || !ID.test(runId) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) return [];
+      // Cloud execution is a PostgreSQL-only production surface. D1 fixtures
+      // have no private schema and therefore no order evidence to project.
+      if (database.dialect !== "postgres") return [];
+      const result = await database.prepare(`select
+          run_id as runId,candle_close_at as candleCloseAt,created_at as createdAt,
+          updated_at as updatedAt,lifecycle_status as lifecycleStatus,
+          evidence_level as evidenceLevel,error_code as errorCode,
+          client_order_id as clientOrderId,exchange_order_id as exchangeOrderId,
+          symbol,side,quantity,requested_price as requestedPrice,
+          provider_status as providerStatus,
+          cumulative_filled_quantity as cumulativeFilledQuantity,
+          average_fill_price as averageFillPrice,fees,fills_json as fillsJson,
+          evidence_observed_at as evidenceObservedAt
+        from private.list_cloud_run_order_evidence(?,?,?)`)
+        .bind(userId, runId, limit).all<CloudOrderEvidenceQueryRow>();
+      return result.results.map(normalizeCloudOrderEvidence);
+    },
     async create(input: { id: string; userId: string; strategyVersionId: string; name: string;
       configurationHash: string; mode: CloudRunMode; risk: CloudRiskInput; now: number }): Promise<CloudRunRow | null> {
       if (!ID.test(input.id) || !ID.test(input.userId) || !ID.test(input.strategyVersionId)
         || input.name.trim().length < 1 || input.name.trim().length > 100 || !HASH.test(input.configurationHash)) return null;
+      const evidence = await database.prepare(`select
+          s.id as strategyVersionId,s.config_hash as configHash,s.source_hash as sourceHash,
+          s.config_json as configJson,s.source_code as sourceCode,
+          j.id as jobId,j.status as jobStatus,j.evidence_level as jobEvidenceLevel,
+          j.request_json as requestJson,j.completed_at as completedAt,
+          d.id as datasetId,d.market as datasetMarket,d.symbol as datasetSymbol,
+          d.interval as datasetInterval,d.source as datasetSource,
+          d.requested_start_at as requestedStartAt,d.requested_end_at as requestedEndAt,
+          d.actual_start_at as actualStartAt,d.actual_end_at as actualEndAt,
+          d.complete as datasetComplete,d.gaps_json as gapsJson,d.checksum,
+          r.id as resultId,r.evidence_level as resultEvidenceLevel,
+          r.initial_capital as initialCapital,r.fee_rate as feeRate,
+          r.slippage_rate as slippageRate,r.leverage,r.funding_json as fundingJson,
+          r.metrics_json as metricsJson,r.provenance_json as provenanceJson,
+          r.equity_curve_json as equityCurveJson,r.engine_version as engineVersion,
+          r.configuration_hash as configurationHash,r.strategy_hash as strategyHash,
+          r.script_hash as scriptHash
+        from strategy_versions s
+        join backtest_jobs j on j.user_id=s.user_id and j.strategy_version_id=s.id
+        join backtest_results r on r.user_id=j.user_id and r.backtest_job_id=j.id
+        join backtest_datasets d on d.user_id=j.user_id and d.backtest_job_id=j.id and d.id=r.dataset_id
+        where s.user_id=? and s.id=? and s.config_hash=?
+        order by j.completed_at desc,j.id desc limit 1`)
+        .bind(input.userId, input.strategyVersionId, input.configurationHash).first<FormalEvidenceGateRow>();
+      if (!hasFormalBacktestEvidence(evidence)) return null;
       const row = await database.prepare(`insert into cloud_strategy_runs
         (id,user_id,connection_id,executor_shard_id,strategy_version_id,name,mode,state,config_json,risk_json,
          configuration_hash,version,consecutive_failures,created_at,updated_at,started_at)
@@ -231,8 +424,10 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
             select 1 from backtest_jobs j
             join backtest_results r on r.user_id=j.user_id and r.backtest_job_id=j.id
               and r.evidence_level='historical' and r.configuration_hash=s.config_hash
+              and r.strategy_hash=s.config_hash
+              and ((s.source_hash is null and r.script_hash is null) or r.script_hash=s.source_hash)
             join backtest_datasets d on d.user_id=j.user_id and d.backtest_job_id=j.id
-              and d.id=r.dataset_id and d.complete=1
+              and d.id=r.dataset_id and d.complete=1 and d.gaps_json='[]'
             where j.user_id=s.user_id and j.strategy_version_id=s.id
               and j.status='succeeded' and j.evidence_level='historical'
           )

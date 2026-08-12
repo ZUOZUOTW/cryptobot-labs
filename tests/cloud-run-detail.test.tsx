@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudRunDetailPanel } from "../components/runs/CloudRunDetailPanel";
+import { CLOUD_RUNS_REFRESH_EVENT } from "../components/runs/events";
 
 vi.mock("../components/I18nProvider", () => ({
   useI18n: () => ({ locale: "zh-TW" }),
@@ -22,6 +23,7 @@ const run = {
   consecutiveFailures: 4,
   updatedAt: 1_760_000_200_000,
   allowedSymbols: ["BTCUSDT"],
+  accountAsset: "USDT",
   accountObservedAt: 1_760_000_300_000,
   accountEquity: "5000",
   availableEquity: "5000",
@@ -42,6 +44,28 @@ const payload = {
     unrealizedPnl: "0",
     positionsJson: [],
   },
+};
+const emptyOrders = { orders: [] };
+const filledOrder = {
+  runId: "crun_live_1",
+  candleCloseAt: 1_760_000_000_000,
+  createdAt: 1_760_000_000_001,
+  updatedAt: 1_760_000_000_100,
+  lifecycleStatus: "acknowledged",
+  evidenceLevel: "authoritative",
+  errorCode: "exchange_order_filled",
+  clientOrderId: "safe-client-id",
+  exchangeOrderId: "exchange-order-id",
+  symbol: "BTCUSDT",
+  side: "buy",
+  quantity: "0.001",
+  requestedPrice: "64000",
+  providerStatus: "FILLED",
+  cumulativeFilledQuantity: "0.001",
+  averageFillPrice: "64000",
+  fees: "0.01",
+  fills: [],
+  evidenceObservedAt: 1_760_000_000_100,
 };
 
 const position = (symbol: string, unrealizedPnl: string) => ({
@@ -84,9 +108,60 @@ describe("CloudRunDetailPanel", () => {
     expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/runs/"), expect.anything());
   });
 
+  it("loads the run-bound order projection from the owner-scoped cloud-run endpoint", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ orders: [{
+        runId: "crun_live_1", candleCloseAt: 1_760_000_000_000,
+        createdAt: 1_760_000_000_001, updatedAt: 1_760_000_000_100,
+        lifecycleStatus: "unknown", evidenceLevel: "uncertain",
+        errorCode: "order_reconciliation_required", clientOrderId: "safe-client-id",
+        exchangeOrderId: null, symbol: "BTCUSDT", side: "buy", quantity: "0.001",
+        requestedPrice: "64000", providerStatus: null, cumulativeFilledQuantity: null,
+        averageFillPrice: null, fees: null, fills: [], evidenceObservedAt: null,
+      }] }), { status: 200 }));
+
+    render(<CloudRunDetailPanel runId="crun_live_1" />);
+
+    expect(await screen.findByRole("heading", { name: "最近委託與成交對帳" })).toBeInTheDocument();
+    expect(screen.getByText("待對帳（狀態不確定）")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/cloud-runs/crun_live_1",
+      expect.objectContaining({ cache: "no-store" }));
+  });
+
+  it("marks retained evidence stale after a background failure and preserves it after manual retry failure", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ orders: [filledOrder] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }))
+      .mockRejectedValueOnce(new Error("background order evidence unavailable"))
+      .mockRejectedValueOnce(new Error("manual order evidence unavailable"));
+    const user = userEvent.setup();
+    render(<CloudRunDetailPanel runId="crun_live_1" />);
+
+    expect(await screen.findByText("交易所已成交")).toBeInTheDocument();
+    const later = Date.now() + 2_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    window.dispatchEvent(new Event(CLOUD_RUNS_REFRESH_EVENT));
+
+    const section = screen.getByRole("region", { name: "最近委託與成交對帳" });
+    const alert = await within(section).findByRole("alert");
+    expect(alert).toHaveTextContent("不代表目前即時狀態");
+    expect(section).toHaveAttribute("data-evidence-state", "stale");
+    expect(screen.getByText("交易所已成交")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重新載入委託證據" }));
+
+    await waitFor(() => expect(section).toHaveAttribute("data-evidence-state", "error"));
+    expect(section).toHaveAttribute("data-evidence-freshness", "stale");
+    expect(screen.getByText("交易所已成交")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
   it("resumes with the current version and explains order reconciliation", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(emptyOrders), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         run: { ...run, state: "running", version: 3, lastErrorCode: null, consecutiveFailures: 0 },
       }), { status: 200 }));
@@ -109,8 +184,10 @@ describe("CloudRunDetailPanel", () => {
     const pausedPayload = { ...payload, runs: [paused] };
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(pausedPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(emptyOrders), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "cloud_run_target_conflict" }), { status: 409 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(pausedPayload), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(pausedPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(emptyOrders), { status: 200 }));
     const user = userEvent.setup();
     render(<CloudRunDetailPanel runId="crun_live_1" />);
 
@@ -126,8 +203,10 @@ describe("CloudRunDetailPanel", () => {
     const runningPayload = { ...payload, runs: [running] };
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(runningPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(emptyOrders), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "cloud_run_order_in_flight" }), { status: 409 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(runningPayload), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(runningPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(emptyOrders), { status: 200 }));
     const user = userEvent.setup();
     render(<CloudRunDetailPanel runId="crun_live_1" />);
 
@@ -333,6 +412,11 @@ describe("CloudRunDetailPanel", () => {
       name: "Demo",
       mode: "futures-demo",
       state: "running",
+      accountAsset: "SUSDT",
+      accountEquity: "10000",
+      availableEquity: "9950",
+      unrealizedPnl: "12.5",
+      positionsJson: [position("BTCUSDT", "12.5")],
       lastErrorCode: null,
       consecutiveFailures: 0,
     };
@@ -340,15 +424,26 @@ describe("CloudRunDetailPanel", () => {
     usePayload({
       ...payload,
       runs: [demo, live],
-      account: { ...payload.account, positionsJson: [position("BTCUSDT", "9")] },
+      account: {
+        ...payload.account,
+        accountEquity: "5000",
+        availableEquity: "4900",
+        unrealizedPnl: "9",
+        positionsJson: [position("BTCUSDT", "9")],
+      },
     });
 
     render(<CloudRunDetailPanel runId={demo.id} />);
 
-    expect(await screen.findByText("這是模擬運行；實盤帳戶部位不會歸屬到此運行。"))
-      .toBeInTheDocument();
-    expect(within(fact("交易目標部位未實現損益")).getByText("不適用")).toBeInTheDocument();
-    expect(screen.queryByRole("cell", { name: "BTCUSDT" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "模擬策略部位" })).toBeInTheDocument();
+    expect(within(fact("模擬權益")).getByText("10,000.00 SUSDT")).toBeInTheDocument();
+    expect(within(fact("模擬可用權益")).getByText("9,950.00 SUSDT")).toBeInTheDocument();
+    expect(within(fact("模擬未實現損益")).getByText("12.50 SUSDT")).toBeInTheDocument();
+    expect(within(fact("交易目標部位未實現損益")).getByText("12.50 SUSDT")).toBeInTheDocument();
+    expect(screen.getByText("此運行的 WEEX Futures Demo 快照")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "12.5 SUSDT" })).toBeInTheDocument();
+    expect(screen.queryByText("5,000.00 USDT")).not.toBeInTheDocument();
+    expect(screen.queryByText("9.00 USDT")).not.toBeInTheDocument();
   });
 
   it("keeps a live target attributable when a same-symbol demo run exists", async () => {

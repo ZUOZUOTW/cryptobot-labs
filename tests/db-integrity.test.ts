@@ -46,6 +46,7 @@ describe("D1 tenant integrity migrations", () => {
       "0003_mushy_frightful_four.sql",
       "0004_glorious_jetstream.sql",
       "0005_cuddly_brother_voodoo.sql",
+      "0006_tranquil_proudstar.sql",
     ]);
     const journal = JSON.parse(await readFile(resolve("drizzle/meta/_journal.json"), "utf8")) as {
       entries: Array<{ idx: number; tag: string }>;

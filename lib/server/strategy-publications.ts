@@ -1,4 +1,8 @@
-import type { StrategyPublicationCursor, StrategyPublicationRecord } from "../../db/repositories";
+import type {
+  StrategyPublicationCursor,
+  StrategyPublicationListOptions,
+  StrategyPublicationRecord,
+} from "../../db/repositories";
 import type { BotConfig } from "../types";
 import type {
   PublicStrategyEquityPoint,
@@ -8,11 +12,22 @@ import type {
 import { validateConfig } from "../strategy-validation";
 import { resolvedTradeDirection } from "../trade-direction";
 import {
+  hasFormalBacktestEvidence,
+  InvalidFormalBacktestEvidenceError,
+  type FormalEvidenceGateRow,
+} from "./formal-evidence-gate";
+import {
   validatePublicPublicationDescription,
   validatePublicPublisherName,
   validatePublicStrategyName,
 } from "../publication-moderation";
 import { HttpProblem, errorResponse } from "./http";
+import {
+  normalizeDiscoverySearch,
+  STRATEGY_DISCOVERY_SORTS,
+  type StrategyDiscoverySort,
+} from "../strategy-discovery-query";
+import type { Market, RiskLevel } from "../types";
 
 export const publicStrategyFreshnessHeaders = Object.freeze({
   "cache-control": "no-store, max-age=0",
@@ -29,7 +44,7 @@ export const PUBLICATION_LIST_DEFAULT_LIMIT = 12;
 export const PUBLICATION_LIST_MAX_LIMIT = 24;
 export const PUBLICATION_LIST_MAX_EQUITY_POINTS = 120;
 export const PUBLICATION_LIST_MAX_SCAN_PAGES = 5;
-export const PUBLIC_STRATEGY_CACHE_VERSION = "v3";
+export const PUBLIC_STRATEGY_CACHE_VERSION = "v4";
 
 export class InvalidPublicStrategyTrustMetadataError extends Error {
   constructor() {
@@ -62,7 +77,20 @@ export function encodePublicationCursor(cursor: StrategyPublicationCursor): stri
   if (!Number.isSafeInteger(cursor.publishedAt) || cursor.publishedAt < 0 || !ID.test(cursor.id)) {
     throw new Error("publication cursor is invalid");
   }
-  return base64UrlEncode(JSON.stringify({ v: 1, publishedAt: cursor.publishedAt, id: cursor.id }));
+  if (cursor.sort === undefined && cursor.sortValue === undefined) {
+    return base64UrlEncode(JSON.stringify({ v: 1, publishedAt: cursor.publishedAt, id: cursor.id }));
+  }
+  if (cursor.sort === undefined || !STRATEGY_DISCOVERY_SORTS.includes(cursor.sort)
+    || typeof cursor.sortValue !== "number" || !Number.isFinite(cursor.sortValue)) {
+    throw new Error("publication cursor is invalid");
+  }
+  return base64UrlEncode(JSON.stringify({
+    v: 2,
+    sort: cursor.sort,
+    sortValue: cursor.sortValue,
+    publishedAt: cursor.publishedAt,
+    id: cursor.id,
+  }));
 }
 
 export function decodePublicationCursor(value: string): StrategyPublicationCursor {
@@ -70,20 +98,29 @@ export function decodePublicationCursor(value: string): StrategyPublicationCurso
   let decoded: unknown;
   try { decoded = JSON.parse(base64UrlDecode(value)) as unknown; }
   catch { throw new HttpProblem(400, "invalid_request"); }
-  if (!plainObject(decoded) || Object.keys(decoded).sort().join(",") !== "id,publishedAt,v"
-    || decoded.v !== 1 || !Number.isSafeInteger(decoded.publishedAt) || Number(decoded.publishedAt) < 0
+  if (!plainObject(decoded) || !Number.isSafeInteger(decoded.publishedAt) || Number(decoded.publishedAt) < 0
     || typeof decoded.id !== "string" || !ID.test(decoded.id)) {
     throw new HttpProblem(400, "invalid_request");
   }
-  return { publishedAt: decoded.publishedAt as number, id: decoded.id };
+  if (decoded.v === 1 && Object.keys(decoded).sort().join(",") === "id,publishedAt,v") {
+    return { publishedAt: decoded.publishedAt as number, id: decoded.id };
+  }
+  if (decoded.v !== 2 || Object.keys(decoded).sort().join(",") !== "id,publishedAt,sort,sortValue,v"
+    || typeof decoded.sort !== "string" || !STRATEGY_DISCOVERY_SORTS.includes(decoded.sort as StrategyDiscoverySort)
+    || typeof decoded.sortValue !== "number" || !Number.isFinite(decoded.sortValue)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  return {
+    publishedAt: decoded.publishedAt as number,
+    id: decoded.id,
+    sort: decoded.sort as StrategyDiscoverySort,
+    sortValue: decoded.sortValue,
+  };
 }
 
-export function parsePublicationListRequest(request: Request): {
-  limit: number;
-  cursor?: StrategyPublicationCursor;
-} {
+export function parsePublicationListRequest(request: Request): StrategyPublicationListOptions {
   const url = new URL(request.url);
-  const allowed = new Set(["limit", "cursor"]);
+  const allowed = new Set(["limit", "cursor", "q", "market", "timeframe", "risk", "sort", "slugs"]);
   const seen = new Set<string>();
   for (const [key] of url.searchParams) {
     if (!allowed.has(key) || seen.has(key)) throw new HttpProblem(400, "invalid_request");
@@ -96,9 +133,42 @@ export function parsePublicationListRequest(request: Request): {
     throw new HttpProblem(400, "invalid_request");
   }
   const rawCursor = url.searchParams.get("cursor");
+  const rawSearch = url.searchParams.get("q");
+  const search = rawSearch === null ? undefined : normalizeDiscoverySearch(rawSearch);
+  if (rawSearch !== null && (search === undefined || search.length < 1 || rawSearch.length > 80)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const rawMarket = url.searchParams.get("market");
+  if (rawMarket !== null && rawMarket !== "spot" && rawMarket !== "futures") throw new HttpProblem(400, "invalid_request");
+  const rawTimeframe = url.searchParams.get("timeframe");
+  if (rawTimeframe !== null && !/^[A-Za-z0-9]{1,16}$/.test(rawTimeframe)) throw new HttpProblem(400, "invalid_request");
+  const rawRisk = url.searchParams.get("risk");
+  if (rawRisk !== null && rawRisk !== "低" && rawRisk !== "中" && rawRisk !== "高") {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const rawSort = url.searchParams.get("sort");
+  if (rawSort !== null && !STRATEGY_DISCOVERY_SORTS.includes(rawSort as StrategyDiscoverySort)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const sort = rawSort === null ? "latest" as const : rawSort as StrategyDiscoverySort;
+  const rawSlugs = url.searchParams.get("slugs");
+  const slugs = rawSlugs === null ? undefined : rawSlugs.split(",");
+  if (slugs !== undefined && (slugs.length < 1 || slugs.length > 24 || new Set(slugs).size !== slugs.length
+    || slugs.some((slug) => !SLUG.test(slug)))) throw new HttpProblem(400, "invalid_request");
+  const cursor = rawCursor === null ? undefined : decodePublicationCursor(rawCursor);
+  if ((sort === "latest" && cursor?.sort !== undefined)
+    || (sort !== "latest" && cursor !== undefined && cursor.sort !== sort)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
   return {
     limit,
-    ...(rawCursor === null ? {} : { cursor: decodePublicationCursor(rawCursor) }),
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(search === undefined ? {} : { search }),
+    ...(rawMarket === null ? {} : { market: rawMarket as Market }),
+    ...(rawTimeframe === null ? {} : { timeframe: rawTimeframe }),
+    ...(rawRisk === null ? {} : { risk: rawRisk as RiskLevel }),
+    ...(sort === "latest" ? {} : { sort }),
+    ...(slugs === undefined ? {} : { slugs }),
   };
 }
 
@@ -222,6 +292,9 @@ export function publicationSlug(id: string): string {
 export function toPublicStrategyPublication(record: StrategyPublicationRecord, options: {
   maxEquityPoints?: number;
 } = {}): PublicStrategyPublication {
+  if (!hasFormalBacktestEvidence(record as FormalEvidenceGateRow)) {
+    throw new InvalidFormalBacktestEvidenceError();
+  }
   const config = configOf(record.configJson);
   const strategyName = validatePublicStrategyName(config.name);
   const description = validatePublicPublicationDescription(record.description);
@@ -252,6 +325,7 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord, o
     symbol: config.symbol,
     timeframe: config.timeframe,
     leverage: config.leverage,
+    risk: record.discoveryRisk,
     logicMode: config.logicMode,
     tradeDirection: resolvedTradeDirection(config),
     hasPrivateSource: config.source !== undefined,
@@ -269,30 +343,62 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord, o
 }
 
 type PublicPublicationListRepository = {
-  listPage(options: { limit: number; cursor?: StrategyPublicationCursor }): Promise<{
+  listPage(options: StrategyPublicationListOptions): Promise<{
     items: StrategyPublicationRecord[];
     nextCursor: StrategyPublicationCursor | null;
   }>;
 };
 
-const cursorOfRecord = (record: StrategyPublicationRecord): StrategyPublicationCursor => {
-  const cursor = { publishedAt: record.publishedAt, id: record.id };
+const sortValueOf = (record: StrategyPublicationRecord, sort: StrategyDiscoverySort): number => {
+  const value = ({
+    recommended: record.discoveryRecommended,
+    "return-desc": record.discoveryTotalReturn,
+    "drawdown-asc": record.discoveryMaxDrawdown,
+    "win-rate-desc": record.discoveryWinRate,
+    "stability-desc": record.discoveryStability,
+  })[sort];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("publication discovery sort projection is invalid");
+  }
+  return value;
+};
+
+const cursorOfRecord = (
+  record: StrategyPublicationRecord,
+  sort: StrategyDiscoverySort | "latest",
+): StrategyPublicationCursor => {
+  const cursor = {
+    publishedAt: record.publishedAt,
+    id: record.id,
+    ...(sort === "latest" ? {} : { sort, sortValue: sortValueOf(record, sort) }),
+  };
   encodePublicationCursor(cursor);
   return cursor;
 };
 
-const cursorKey = (cursor: StrategyPublicationCursor): string => `${cursor.publishedAt}:${cursor.id}`;
+const cursorKey = (cursor: StrategyPublicationCursor): string => (
+  `${cursor.sort ?? "latest"}:${cursor.sortValue ?? ""}:${cursor.publishedAt}:${cursor.id}`
+);
 
 const isStrictlyLaterInPublicationOrder = (
   candidate: StrategyPublicationCursor,
   previous: StrategyPublicationCursor,
-): boolean => (
-  candidate.publishedAt < previous.publishedAt
-  || (candidate.publishedAt === previous.publishedAt && candidate.id < previous.id)
-);
+): boolean => {
+  if (candidate.sort !== previous.sort || (candidate.sortValue === undefined) !== (previous.sortValue === undefined)) {
+    return false;
+  }
+  if (candidate.sortValue !== undefined && previous.sortValue !== undefined && candidate.sortValue !== previous.sortValue) {
+    return candidate.sort === "drawdown-asc"
+      ? candidate.sortValue > previous.sortValue
+      : candidate.sortValue < previous.sortValue;
+  }
+  return candidate.publishedAt < previous.publishedAt
+    || (candidate.publishedAt === previous.publishedAt && candidate.id < previous.id);
+};
 
 const sameCursor = (left: StrategyPublicationCursor, right: StrategyPublicationCursor): boolean => (
   left.publishedAt === right.publishedAt && left.id === right.id
+  && left.sort === right.sort && left.sortValue === right.sortValue
 );
 
 const publicationListResponse = (
@@ -309,16 +415,20 @@ export async function servePublicStrategyPublicationList(
 ): Promise<Response> {
   try {
     const options = parsePublicationListRequest(request);
+    const sort = options.sort ?? "latest";
     const publications: PublicStrategyPublication[] = [];
     let cursor = options.cursor;
     const visited = new Set(cursor === undefined ? [] : [cursorKey(cursor)]);
     for (let scan = 0; scan < PUBLICATION_LIST_MAX_SCAN_PAGES; scan += 1) {
-      const page = await repository.listPage({ limit: options.limit, ...(cursor === undefined ? {} : { cursor }) });
+      const page = await repository.listPage({
+        ...options,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
       if (page.items.length > options.limit
         || (page.nextCursor !== null && page.items.length !== options.limit)) {
         throw new Error("publication repository returned an invalid page");
       }
-      const itemCursors = page.items.map(cursorOfRecord);
+      const itemCursors = page.items.map((record) => cursorOfRecord(record, sort));
       let previous = cursor;
       for (const itemCursor of itemCursors) {
         if (previous !== undefined && !isStrictlyLaterInPublicationOrder(itemCursor, previous)) {

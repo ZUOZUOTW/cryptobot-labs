@@ -100,6 +100,8 @@ class PostgresStatement implements ControlPlaneStatement {
 }
 
 export class PostgresControlPlaneDatabase implements ControlPlaneDatabase {
+  readonly dialect = "postgres" as const;
+
   constructor(readonly client: AnySql, private readonly expectedRuntimeRole?: RuntimeDatabaseRole) {}
 
   async assertReady(): Promise<void> {

@@ -4,6 +4,12 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { useI18n } from "@/components/I18nProvider";
 import { cloudRunFailureMessage } from "./CloudRunsPanel";
+import {
+  CloudOrderEvidenceList,
+  parseCloudOrderEvidencePayload,
+  type CloudOrderEvidence,
+  type CloudOrderEvidenceState,
+} from "./CloudOrderEvidence";
 import { attributeCloudPositions, type PositionAttribution } from "./cloudPositionAttribution";
 import { formatExactDecimal, sumExactDecimals } from "./exactDecimal";
 import { CLOUD_RUNS_REFRESH_EVENT } from "./events";
@@ -26,10 +32,12 @@ interface CloudRun {
   consecutiveFailures: number;
   updatedAt: number;
   allowedSymbols: string[];
+  accountAsset: string | null;
   accountObservedAt: number | null;
   accountEquity: string | null;
   availableEquity: string | null;
   unrealizedPnl: string | null;
+  positions: CloudPosition[];
   evaluationCount: number;
   signalCount: number;
   maxTotalExposure: string | null;
@@ -110,6 +118,7 @@ const parseRun = (value: unknown): CloudRun | null => {
   const consecutiveFailures = integer(item.consecutiveFailures);
   const updatedAt = integer(item.updatedAt);
   const accountObservedAt = nullableInteger(item.accountObservedAt);
+  const accountAsset = nullableText(item.accountAsset);
   const evaluationCount = integer(item.evaluationCount);
   const signalCount = integer(item.signalCount);
   const lastErrorCode = nullableText(item.lastErrorCode);
@@ -118,18 +127,22 @@ const parseRun = (value: unknown): CloudRun | null => {
   const unrealizedPnl = nullableText(item.unrealizedPnl);
   const maxTotalExposure = nullableText(item.maxTotalExposure);
   const maxDailyLoss = nullableText(item.maxDailyLoss);
+  const rawPositions = jsonArray(item.positionsJson);
+  const positions = rawPositions?.map(parsePosition) ?? null;
   if (version === null || version < 1 || lastCandleAt === undefined
     || lastEvaluatedAt === undefined || consecutiveFailures === null || updatedAt === null
-    || accountObservedAt === undefined || evaluationCount === null || signalCount === null
+    || accountAsset === undefined || accountObservedAt === undefined || evaluationCount === null || signalCount === null
     || lastErrorCode === undefined || accountEquity === undefined || availableEquity === undefined
-    || unrealizedPnl === undefined || maxTotalExposure === undefined || maxDailyLoss === undefined) return null;
+    || unrealizedPnl === undefined || maxTotalExposure === undefined || maxDailyLoss === undefined
+    || !positions || positions.some((position) => position === null)) return null;
   return {
     id: item.id, name: item.name, mode: item.mode, state: item.state as RunState, version,
     market: item.market, symbol: item.symbol,
     lastCandleAt, lastEvaluatedAt, lastSignalJson: item.lastSignalJson === null
       ? null : jsonRecord(item.lastSignalJson), lastErrorCode, consecutiveFailures, updatedAt,
-    allowedSymbols: item.allowedSymbols as string[], accountObservedAt, accountEquity,
-    availableEquity, unrealizedPnl, evaluationCount, signalCount, maxTotalExposure, maxDailyLoss,
+    allowedSymbols: item.allowedSymbols as string[], accountAsset, accountObservedAt, accountEquity,
+    availableEquity, unrealizedPnl, positions: positions as CloudPosition[], evaluationCount, signalCount,
+    maxTotalExposure, maxDailyLoss,
   };
 };
 
@@ -177,9 +190,29 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
   const [run, setRun] = useState<CloudRun | null>(null);
   const [runs, setRuns] = useState<CloudRun[]>([]);
   const [account, setAccount] = useState<CloudAccount | null>(null);
+  const [orders, setOrders] = useState<CloudOrderEvidence[]>([]);
+  const [orderState, setOrderState] = useState<CloudOrderEvidenceState>("loading");
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error" | "unauthorized">("loading");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
+
+  const loadOrders = useCallback(async (silent = false): Promise<boolean> => {
+    if (!silent) setOrderState("loading");
+    try {
+      const response = await fetch(`/api/cloud-runs/${encodeURIComponent(runId)}`, {
+        cache: "no-store", headers: { Accept: "application/json" },
+      });
+      if (response.status === 401) { setOrderState("unauthorized"); return false; }
+      const parsed = parseCloudOrderEvidencePayload(await response.json(), runId);
+      if (!response.ok || !parsed) throw new Error("invalid_cloud_order_evidence");
+      setOrders(parsed);
+      setOrderState("ready");
+      return true;
+    } catch {
+      setOrderState(silent ? "stale" : "error");
+      return false;
+    }
+  }, [runId]);
 
   const load = useCallback(async (silent = false): Promise<boolean> => {
     if (!silent) { setState("loading"); setFeedback(""); }
@@ -191,16 +224,18 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
       const parsed = parsePayload(await response.json(), runId);
       if (!response.ok || !parsed) throw new Error("invalid_cloud_run_detail");
       if (!parsed.run) { setState("missing"); return false; }
+      const ordersReady = await loadOrders(silent);
       setRun(parsed.run);
       setRuns(parsed.runs);
       setAccount(parsed.account);
       setState("ready");
-      return true;
+      return ordersReady;
     } catch {
       if (!silent) setState("error");
+      else setOrderState((current) => current === "ready" ? "stale" : current);
       return false;
     }
-  }, [runId]);
+  }, [loadOrders, runId]);
 
   useAdaptiveRefresh({
     eventName: CLOUD_RUNS_REFRESH_EVENT,
@@ -210,9 +245,13 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
   const positionEvidence = useMemo<{
     attribution: PositionAttribution;
     positions: CloudPosition[];
-  }>(() => run ? attributeCloudPositions(runs, run, account?.positions ?? [])
+  }>(() => run?.mode === "futures-demo"
+    ? { attribution: "unique", positions: run.accountObservedAt === null ? [] : run.positions }
+    : run ? attributeCloudPositions(runs, run, account?.positions ?? [])
     : { attribution: "not-applicable", positions: [] }, [account, run, runs]);
-  const hasPositionSnapshot = account?.positions !== null && account?.positions !== undefined;
+  const hasPositionSnapshot = run?.mode === "futures-demo"
+    ? run.accountObservedAt !== null
+    : account?.positions !== null && account?.positions !== undefined;
   const positions = positionEvidence.positions;
   const targetPositionUnrealizedPnl = useMemo(() => {
     if (positionEvidence.attribution !== "unique" || !hasPositionSnapshot) return null;
@@ -222,15 +261,27 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
     ? run.lastSignalJson.action : null;
   const time = (value: number | null) => value === null ? "尚無可信證據"
     : new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }).format(value);
-  const amount = (value: string | null) => {
+  const amount = (value: string | null, asset = "USDT") => {
     if (value === null) return "尚無可信證據";
     const formatted = formatExactDecimal(value, locale, { maximumFractionDigits: 8 });
-    return formatted === null ? "尚無可信證據" : `${formatted} USDT`;
+    return formatted === null ? "尚無可信證據" : `${formatted} ${asset}`;
+  };
+  const evidenceAsset = run?.mode === "futures-demo" ? run.accountAsset ?? "SUSDT" : "USDT";
+  const evidenceAccount = run?.mode === "futures-demo" ? {
+    observedAt: run.accountObservedAt,
+    accountEquity: run.accountEquity,
+    availableEquity: run.availableEquity,
+    unrealizedPnl: run.unrealizedPnl,
+  } : {
+    observedAt: account?.observedAt ?? run?.accountObservedAt ?? null,
+    accountEquity: account?.accountEquity ?? run?.accountEquity ?? null,
+    availableEquity: account?.availableEquity ?? run?.availableEquity ?? null,
+    unrealizedPnl: account?.unrealizedPnl ?? run?.unrealizedPnl ?? null,
   };
   const targetPositionPnlLabel = positionEvidence.attribution === "ambiguous" ? "不可歸屬"
     : positionEvidence.attribution === "unmanaged" ? "不可歸屬"
       : positionEvidence.attribution === "not-applicable" ? "不適用"
-        : hasPositionSnapshot ? amount(targetPositionUnrealizedPnl) : "尚無可信證據";
+        : hasPositionSnapshot ? amount(targetPositionUnrealizedPnl, evidenceAsset) : "尚無可信證據";
   const positionCountLabel = positionEvidence.attribution === "ambiguous" ? "不可歸屬"
     : positionEvidence.attribution === "unmanaged" ? "不可歸屬"
       : positionEvidence.attribution === "not-applicable" ? "不適用"
@@ -239,7 +290,9 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
     ? "多個未停止策略共用相同合約交易目標，無法安全歸屬帳戶部位。"
     : positionEvidence.attribution === "unmanaged"
       ? "帳戶已有未受此運行管理的部位，無法安全歸屬部位與損益。"
-      : run?.mode !== "live" ? "這是模擬運行；實盤帳戶部位不會歸屬到此運行。"
+      : run?.mode === "futures-demo" ? !hasPositionSnapshot
+        ? "尚無可用的模擬帳戶快照，暫不顯示模擬部位與損益。"
+        : `最新模擬快照沒有 ${run?.symbol ?? "此交易對"} 合約持倉。`
         : run?.state === "stopped" ? "此策略已停止，不歸屬目前帳戶合約部位。"
           : run?.market === "spot" ? "這是現貨策略；帳戶合約部位不會歸屬到此策略。"
             : !hasPositionSnapshot ? "尚無可用的帳戶部位快照，暫不顯示目標部位與損益。"
@@ -306,16 +359,21 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
     {feedback && <p className="control-feedback" role="status">{feedback}</p>}
 
     <section className="run-evidence" aria-labelledby="cloud-evidence-title">
-      <div className="section-heading"><p className="eyebrow">LIVE EXECUTION EVIDENCE</p>
+      <div className="section-heading"><p className="eyebrow">{run.mode === "futures-demo"
+        ? "DEMO EXECUTION EVIDENCE" : "LIVE EXECUTION EVIDENCE"}</p>
         <h2 id="cloud-evidence-title">策略績效與執行證據</h2></div>
       <dl className="run-facts run-facts--detail">
         <div><dt>狀態</dt><dd>{stateLabel[run.state]}</dd></div>
         <div><dt>交易目標</dt><dd>{run.symbol} · {run.market === "futures" ? "合約" : "現貨"}</dd></div>
-        <div><dt>帳戶權益</dt><dd>{amount(account?.accountEquity ?? run.accountEquity)}</dd></div>
-        <div><dt>可用權益</dt><dd>{amount(account?.availableEquity ?? run.availableEquity)}</dd></div>
+        <div><dt>{run.mode === "futures-demo" ? "模擬權益" : "帳戶權益"}</dt>
+          <dd>{amount(evidenceAccount.accountEquity, evidenceAsset)}</dd></div>
+        <div><dt>{run.mode === "futures-demo" ? "模擬可用權益" : "可用權益"}</dt>
+          <dd>{amount(evidenceAccount.availableEquity, evidenceAsset)}</dd></div>
         <div><dt>交易目標部位未實現損益</dt><dd>{targetPositionPnlLabel}
-          <small style={{ display: "block", marginTop: "0.2rem" }}>帳戶聚合，非 run_id 成交歸屬</small></dd></div>
-        <div><dt>帳戶未實現損益</dt><dd>{amount(account?.unrealizedPnl ?? run.unrealizedPnl)}</dd></div>
+          <small style={{ display: "block", marginTop: "0.2rem" }}>{run.mode === "futures-demo"
+            ? "此運行的 WEEX Futures Demo 快照" : "帳戶聚合，非 run_id 成交歸屬"}</small></dd></div>
+        <div><dt>{run.mode === "futures-demo" ? "模擬未實現損益" : "帳戶未實現損益"}</dt>
+          <dd>{amount(evidenceAccount.unrealizedPnl, evidenceAsset)}</dd></div>
         <div><dt>交易目標部位</dt><dd>{positionCountLabel}</dd></div>
         <div><dt>有效評估</dt><dd>{run.evaluationCount}</dd></div>
         <div><dt>交易訊號</dt><dd>{run.signalCount}</dd></div>
@@ -323,22 +381,26 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
         <div><dt>連續失敗</dt><dd>{run.consecutiveFailures}</dd></div>
         <div><dt>最後評估</dt><dd>{time(run.lastEvaluatedAt)}</dd></div>
         <div><dt>最後行情完成</dt><dd>{time(run.lastCandleAt)}</dd></div>
-        <div><dt>帳戶快照</dt><dd>{time(account?.observedAt ?? run.accountObservedAt)}</dd></div>
+        <div><dt>{run.mode === "futures-demo" ? "模擬快照" : "帳戶快照"}</dt>
+          <dd>{time(evidenceAccount.observedAt)}</dd></div>
         <div><dt>曝險上限</dt><dd>{run.maxTotalExposure ?? "尚未回報"} USDT</dd></div>
         <div><dt>每日虧損上限</dt><dd>{run.maxDailyLoss ?? "尚未回報"} USDT</dd></div>
         <div><dt>證據版本</dt><dd>v{run.version} · {time(run.updatedAt)}</dd></div>
       </dl>
     </section>
 
+    <CloudOrderEvidenceList orders={orders} state={orderState} locale={locale}
+      fallbackAsset={evidenceAsset} retry={() => void loadOrders()} />
+
     <section className="run-positions" aria-labelledby="cloud-positions-title">
-      <h2 id="cloud-positions-title">帳戶交易目標部位</h2>
+      <h2 id="cloud-positions-title">{run.mode === "futures-demo" ? "模擬策略部位" : "帳戶交易目標部位"}</h2>
       {positions.length === 0 ? <p className="runs-empty">{emptyPositionCopy}</p>
         : <div className="table-shell glass-panel"><table><thead><tr><th>交易對</th><th>方向</th>
           <th>數量</th><th>槓桿</th><th>曝險</th><th>未實現損益</th><th>更新時間</th></tr></thead>
         <tbody>{positions.map((position) => <tr key={`${position.symbol}-${position.side}`}>
           <td>{position.symbol}</td><td>{position.side === "long" ? "做多" : "做空"}</td>
-          <td>{position.size}</td><td>{position.leverage}×</td><td>{position.openValue} USDT</td>
-          <td>{position.unrealizedPnl} USDT</td><td>{time(position.updatedAt)}</td></tr>)}</tbody></table></div>}
+          <td>{position.size}</td><td>{position.leverage}×</td><td>{position.openValue} {evidenceAsset}</td>
+          <td>{position.unrealizedPnl} {evidenceAsset}</td><td>{time(position.updatedAt)}</td></tr>)}</tbody></table></div>}
     </section>
   </div>;
 }

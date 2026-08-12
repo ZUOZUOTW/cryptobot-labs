@@ -11,6 +11,7 @@ import { loadDiscoveryPreferences, saveDiscoveryPreferences } from "@/lib/prefer
 import type { PublicStrategyPublication } from "@/lib/strategy-publications";
 import type { WeexHistoricalPerformance } from "@/lib/types";
 import { isVerifiedWeexPerformance, loadWeexBotPerformance } from "@/lib/weex-historical-client";
+import { strategyPublicationListPath } from "@/lib/strategy-discovery-query";
 
 type StrategyCategory = "favorites" | "mine";
 
@@ -29,6 +30,9 @@ export default function FavoritesPage() {
   const { mode: authMode, user } = usePlatformAuth();
   const [category, setCategory] = useState<StrategyCategory>("favorites");
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [communityFavoriteSlugs, setCommunityFavoriteSlugs] = useState<string[]>([]);
+  const [communityFavorites, setCommunityFavorites] = useState<PublicStrategyPublication[]>([]);
+  const [communityFavoritesState, setCommunityFavoritesState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [hydrated, setHydrated] = useState(false);
   const [preferenceError, setPreferenceError] = useState("");
   const [performanceState, setPerformanceState] = useState<"loading" | "ready" | "error">("loading");
@@ -40,10 +44,46 @@ export default function FavoritesPage() {
     const timer = window.setTimeout(() => {
       const saved = loadDiscoveryPreferences();
       setFavorites(saved?.favorites.filter((id) => BOT_CATALOG.some((bot) => bot.id === id)) ?? []);
+      setCommunityFavoriteSlugs(saved?.communityFavorites
+        ?.filter((slug) => /^strategy-[a-z0-9-]{8,71}$/.test(slug)).slice(0, 24) ?? []);
       setHydrated(true);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || communityFavoriteSlugs.length === 0) {
+      const resetTimer = window.setTimeout(() => {
+        setCommunityFavorites([]);
+        setCommunityFavoritesState("idle");
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setCommunityFavoritesState("loading");
+      void fetch(strategyPublicationListPath({
+        limit: communityFavoriteSlugs.length,
+        slugs: communityFavoriteSlugs,
+        sort: "recommended",
+      }), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      }).then(async (response) => {
+      const body = await response.json() as { publications?: unknown };
+      if (!response.ok || !Array.isArray(body.publications)) throw new Error("favorite_publication_list_failed");
+      const found = body.publications.filter(isPublicStrategyPublication);
+      setCommunityFavorites(communityFavoriteSlugs
+        .map((slug) => found.find((publication) => publication.slug === slug))
+        .filter((publication): publication is PublicStrategyPublication => Boolean(publication)));
+      setCommunityFavoritesState("ready");
+      }).catch((error: unknown) => {
+        if ((error as { name?: unknown })?.name !== "AbortError") setCommunityFavoritesState("error");
+      });
+    }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [communityFavoriteSlugs, hydrated]);
 
   useEffect(() => {
     if (authMode !== "production" || !user) {
@@ -105,12 +145,25 @@ export default function FavoritesPage() {
     setPreferenceError(result.ok ? "" : result.reason);
   };
 
+  const removeCommunityFavorite = (slug: string) => {
+    const next = communityFavoriteSlugs.filter((favorite) => favorite !== slug);
+    const saved = loadDiscoveryPreferences();
+    const result = saved
+      ? saveDiscoveryPreferences({ ...saved, communityFavorites: next })
+      : { ok: false as const, reason: "無法儲存探索偏好" };
+    setCommunityFavoriteSlugs(next);
+    setCommunityFavorites((current) => current.filter((publication) => publication.slug !== slug));
+    setPreferenceError(result.ok ? "" : result.reason);
+  };
+
+  const favoriteCount = favoriteBots.length + communityFavoriteSlugs.length;
+
   return (
     <div className="catalog-page favorites-page site-container">
       <header className="page-intro">
         <p className="eyebrow">收藏 / 策略</p>
         <h1>收藏策略</h1>
-        <p>集中查看你收藏的策略，以及自己發布過的公開策略。</p>
+        <p>集中查看你在此瀏覽器收藏的策略，以及自己發布過的公開策略。收藏不會跨裝置同步。</p>
       </header>
 
       <div aria-label="策略分類" className="favorites-page__categories" role="tablist">
@@ -122,7 +175,7 @@ export default function FavoritesPage() {
           role="tab"
           type="button"
         >
-          收藏策略 <strong>{favoriteBots.length}</strong>
+          收藏策略 <strong>{favoriteCount}</strong>
         </button>
         <button
           aria-controls="my-strategies-panel"
@@ -144,10 +197,10 @@ export default function FavoritesPage() {
       >
         {!hydrated ? (
           <p className="catalog-preference-status favorites-page__loading" role="status">正在載入收藏策略…</p>
-        ) : favoriteBots.length > 0 ? (
+        ) : favoriteCount > 0 ? (
           <>
             <div className="catalog-summary">
-              <p aria-live="polite"><strong>{favoriteBots.length}</strong> <span>收藏</span></p>
+              <p aria-live="polite"><strong>{favoriteCount}</strong> <span>此瀏覽器收藏</span></p>
               <Link className="text-button" href="/bots">探索策略</Link>
             </div>
             {preferenceError && <p className="catalog-preference-status" role="status">{preferenceError}</p>}
@@ -166,12 +219,25 @@ export default function FavoritesPage() {
                 />
               ))}
             </section>
+            {communityFavoritesState === "loading" && <p className="catalog-preference-status" role="status">正在載入收藏的會員策略…</p>}
+            {communityFavoritesState === "error" && <p className="catalog-preference-status" role="alert">無法載入收藏的會員策略；官方收藏仍可使用，請稍後重試。</p>}
+            {communityFavorites.length > 0 && <section className="published-strategies__grid" aria-label="收藏的會員策略">
+              {communityFavorites.map((publication) => <PublishedStrategyCard
+                favorite
+                key={publication.slug}
+                onFavorite={removeCommunityFavorite}
+                publication={publication}
+              />)}
+            </section>}
+            {communityFavoritesState === "ready" && communityFavorites.length < communityFavoriteSlugs.length && (
+              <p className="catalog-preference-status" role="note">部分會員策略已取消公開，因此不再顯示。</p>
+            )}
           </>
         ) : (
           <section className="empty-state glass-panel" aria-live="polite">
             <p className="eyebrow">收藏 / 策略</p>
             <h2>尚未收藏任何策略</h2>
-            <p>在探索策略頁點選星號，收藏後會顯示在這裡。</p>
+            <p>在探索策略頁點選星號，收藏後會保存在此瀏覽器並顯示在這裡。</p>
             <Link className="button button--primary" href="/bots">探索策略</Link>
           </section>
         )}

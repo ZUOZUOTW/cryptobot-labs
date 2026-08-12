@@ -22,6 +22,10 @@ const validSchema = {
   orders_table_ready: true,
   account_snapshots_table_ready: true,
   realized_pnl_table_ready: true,
+  order_evidence_column_ready: true,
+  order_evidence_constraint_ready: true,
+  order_evidence_validator_ready: true,
+  order_evidence_validator_acl_ready: true,
   market_column_ready: true,
   symbol_column_ready: true,
   target_index_definition: "CREATE UNIQUE INDEX cloud_runs_nonterminal_target_uidx ON public.cloud_strategy_runs USING btree (user_id, connection_id, market, symbol) WHERE (state <> 'stopped'::text)",
@@ -44,6 +48,13 @@ const validWebsiteSchema = {
   promoters_select_ready: true,
   promoters_mutation_blocked: true,
   promoters_constraints_ready: true,
+  publication_discovery_columns_ready: true,
+  publication_discovery_trigger_ready: true,
+  publication_discovery_indexes_ready: true,
+  publication_discovery_function_ready: true,
+  order_evidence_function_ready: true,
+  order_evidence_function_acl_ready: true,
+  private_order_table_blocked: true,
 };
 
 describe("Postgres production runtime readiness", () => {
@@ -87,11 +98,16 @@ describe("Postgres production runtime readiness", () => {
       .toContain("private.stop_cloud_strategy_run(text,text,bigint,bigint)");
     expect(EXECUTOR_DATABASE_SCHEMA_SQL).toContain("target_function_acl_ready");
     expect(EXECUTOR_DATABASE_SCHEMA_SQL).toContain("stop_function_acl_ready");
+    expect(EXECUTOR_DATABASE_SCHEMA_SQL).toContain("private.is_valid_cloud_order_evidence(jsonb)");
   });
 
   it.each([
     ["market column", { market_column_ready: false }],
     ["symbol column", { symbol_column_ready: false }],
+    ["order evidence column", { order_evidence_column_ready: false }],
+    ["order evidence constraint", { order_evidence_constraint_ready: false }],
+    ["order evidence validator", { order_evidence_validator_ready: false }],
+    ["order evidence validator ACL", { order_evidence_validator_acl_ready: false }],
     ["compatibility trigger", { target_trigger_ready: false }],
     ["target function", { target_function_ready: false }],
     ["target function ACL", { target_function_acl_ready: false }],
@@ -115,6 +131,10 @@ describe("Postgres production runtime readiness", () => {
     expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("to_regclass('public.promoters')");
     expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("relrowsecurity");
     expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("promoters_active_approval");
+    expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("strategy_publications_discovery_projection");
+    expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("strategy_publications_search_trgm_idx");
+    expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("derive_strategy_publication_discovery_projection");
+    expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain("private.list_cloud_run_order_evidence(text,text,integer)");
     for (const privilege of ["INSERT", "UPDATE", "DELETE", "TRUNCATE"]) {
       expect(WEBSITE_DATABASE_SCHEMA_SQL).toContain(`'${privilege}'`);
     }
@@ -128,6 +148,13 @@ describe("Postgres production runtime readiness", () => {
     ["select grant", { promoters_select_ready: false }],
     ["mutation block", { promoters_mutation_blocked: false }],
     ["trust constraints", { promoters_constraints_ready: false }],
+    ["publication discovery columns", { publication_discovery_columns_ready: false }],
+    ["publication discovery trigger", { publication_discovery_trigger_ready: false }],
+    ["publication discovery indexes", { publication_discovery_indexes_ready: false }],
+    ["publication discovery function", { publication_discovery_function_ready: false }],
+    ["order evidence function", { order_evidence_function_ready: false }],
+    ["order evidence function ACL", { order_evidence_function_acl_ready: false }],
+    ["private order table fence", { private_order_table_blocked: false }],
   ])("rejects a website schema missing its %s", (_label, override) => {
     expect(() => assertWebsiteDatabaseSchema({ ...validWebsiteSchema, ...override }))
       .toThrow("Website control-plane database schema is not ready");

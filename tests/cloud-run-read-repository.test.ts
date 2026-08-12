@@ -8,6 +8,9 @@ import type {
   ControlPlaneStatement,
 } from "../db";
 import { createCloudRunRepository } from "../lib/server/cloud-runs";
+import { STRATEGY_PRESETS } from "../data/strategies";
+import { historicalConfigurationHash } from "../lib/historical-evidence";
+import { validFormalEvidenceRow } from "./helpers/formal-evidence";
 
 class Statement implements ControlPlaneStatement {
   private bindings: unknown[] = [];
@@ -88,6 +91,101 @@ const createRunsTable = (database: Database) => database.raw.exec(`create table 
 );`);
 
 describe("cloud run read repository", () => {
+  it("allows a cloud launch to reach persistence with exact formal evidence", async () => {
+    const evidence = validFormalEvidenceRow();
+    const persisted = {
+      id: "cloud_1", name: "Verified", mode: "futures-demo" as const, state: "running" as const,
+      market: "futures" as const, symbol: "BTCUSDT", version: 1, lastCandleAt: null,
+      lastEvaluatedAt: null, lastSignalJson: null, lastErrorCode: null, consecutiveFailures: 0,
+      createdAt: 5_000, updatedAt: 5_000, allowedSymbols: ["BTCUSDT"], accountAsset: null,
+      accountObservedAt: null, accountEquity: null, availableEquity: null, unrealizedPnl: null,
+      positionsJson: [], evaluationCount: 0, signalCount: 0, maxTotalExposure: "200", maxDailyLoss: "20",
+    };
+    let query = 0;
+    const database: ControlPlaneDatabase = {
+      prepare() {
+        query += 1;
+        return {
+          bind() { return this; },
+          async first<T>() { return (query === 1 ? evidence : persisted) as T; },
+          async all<T>() { return { results: [] as T[], success: true }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+      },
+      async batch() { return []; },
+    };
+
+    const run = await createCloudRunRepository(database).create({
+      id: "cloud_1", userId: "user_1", strategyVersionId: evidence.strategyVersionId,
+      name: "Verified", configurationHash: evidence.configHash, mode: "futures-demo",
+      risk: { allowedSymbols: ["BTCUSDT"], maxOrderNotional: "25", maxPositionNotional: "100",
+        maxTotalExposure: "200", maxSimultaneousPositions: 1, maxDailyLoss: "20", maxLeverage: "6",
+        maxSlippageBps: 30, minSignalCooldownMs: 60_000, maxConsecutiveFailures: 3,
+        operationMode: "automatic" },
+      now: 5_000,
+    });
+
+    expect(run).toEqual(persisted);
+    expect(query).toBe(2);
+  });
+
+  it("refuses launch when the only succeeded backtest has empty formal provenance", async () => {
+    const database = openDatabase();
+    const config = STRATEGY_PRESETS[0]!;
+    const configHash = historicalConfigurationHash(config);
+    database.raw.exec(`
+      create table strategy_versions (id text,user_id text,config_hash text,source_hash text,
+        config_json text,source_code text);
+      create table backtest_jobs (id text,user_id text,strategy_version_id text,status text,
+        evidence_level text,request_json text,completed_at integer);
+      create table backtest_datasets (id text,user_id text,backtest_job_id text,market text,symbol text,
+        interval text,source text,requested_start_at integer,requested_end_at integer,
+        actual_start_at integer,actual_end_at integer,complete integer,gaps_json text,checksum text);
+      create table backtest_results (id text,user_id text,backtest_job_id text,dataset_id text,
+        evidence_level text,initial_capital text,fee_rate text,slippage_rate text,leverage text,
+        funding_json text,metrics_json text,provenance_json text,equity_curve_json text,
+        engine_version text,configuration_hash text,strategy_hash text,script_hash text);
+    `);
+    database.raw.prepare(`insert into strategy_versions values (?,?,?,?,?,?)`)
+      .run("version_1", "user_1", configHash, null, JSON.stringify(config), null);
+    database.raw.prepare(`insert into backtest_jobs values (?,?,?,?,?,?,?)`).run(
+      "job_1", "user_1", "version_1", "succeeded", "historical",
+      JSON.stringify({ strategyVersionId: "version_1", market: config.market, symbol: config.symbol,
+        interval: config.timeframe, startTime: 1_000, endTime: 3_000, initialCapital: "10000",
+        feeRate: "0.001", slippageRate: "0.0005", leverage: String(config.leverage),
+        fundingMode: "none", gapPolicy: "fail" }),
+      4_000,
+    );
+    database.raw.prepare(`insert into backtest_datasets values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      "dataset_1", "user_1", "job_1", config.market, config.symbol, config.timeframe, "WEEX public API",
+      1_000, 3_000, 1_000, 2_999, 1, "[]", "b".repeat(64),
+    );
+    database.raw.prepare(`insert into backtest_results values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      "result_1", "user_1", "job_1", "dataset_1", "historical", "10000", "0.001", "0.0005",
+      String(config.leverage), JSON.stringify({ mode: "none", events: [] }), JSON.stringify({}), "{}",
+      JSON.stringify([{ timestamp: 1_000, equity: "10000" }, { timestamp: 2_999, equity: "10000" }]),
+      "test", configHash, configHash, null,
+    );
+
+    const run = await createCloudRunRepository(database).create({
+      id: "cloud_1",
+      userId: "user_1",
+      strategyVersionId: "version_1",
+      name: "Invalid evidence",
+      configurationHash: configHash,
+      mode: "futures-demo",
+      risk: {
+        allowedSymbols: [config.symbol], maxOrderNotional: "25", maxPositionNotional: "100",
+        maxTotalExposure: "200", maxSimultaneousPositions: 1, maxDailyLoss: "20", maxLeverage: "6",
+        maxSlippageBps: 30, minSignalCooldownMs: 60_000, maxConsecutiveFailures: 3,
+        operationMode: "automatic",
+      },
+      now: 5_000,
+    });
+
+    expect(run).toBeNull();
+  });
+
   it("keeps an older non-stopped run after 101 newer stopped rows without crossing tenants", async () => {
     const database = openDatabase();
     createRunsTable(database);

@@ -1,9 +1,13 @@
 import Link from "next/link";
-import type { PublicStrategyPublication } from "@/lib/strategy-publications";
+import { publicStrategyRisk, type PublicStrategyPublication } from "@/lib/strategy-publications";
 import { formatDrawdownMagnitude, formatRate, formatSignedReturn } from "@/lib/strategy-sharing";
 import { PerformanceChart } from "./PerformanceChart";
 
-export function PublishedStrategyCard({ publication }: { publication: PublicStrategyPublication }) {
+export function PublishedStrategyCard({ publication, favorite = false, onFavorite }: {
+  publication: PublicStrategyPublication;
+  favorite?: boolean;
+  onFavorite?: (slug: string) => void;
+}) {
   const points = publication.equityCurve.map((point) => ({
     label: new Date(point.timestamp).toISOString().slice(0, 10),
     value: Number(point.equity),
@@ -16,8 +20,16 @@ export function PublishedStrategyCard({ publication }: { publication: PublicStra
           <h3 id={`published-${publication.slug}`}>{publication.name}</h3>
           <p>由 {publication.publisherName} 發布</p>
         </div>
-        <div className="tag-row">
+        <div className="tag-row published-strategy-card__badges">
+          {onFavorite && <button
+            aria-label={`${favorite ? "取消收藏" : "收藏"} ${publication.name}`}
+            aria-pressed={favorite}
+            className="favorite-button"
+            onClick={() => onFavorite(publication.slug)}
+            type="button"
+          ><span aria-hidden="true">{favorite ? "★" : "☆"}</span></button>}
           <span className="market-badge">{publication.market === "spot" ? "現貨" : "合約"} · {publication.timeframe}</span>
+          <span className="risk-badge" data-risk={publicStrategyRisk(publication)}>{publicStrategyRisk(publication)}風險</span>
           <span className="evidence-badge">固定版本</span>
         </div>
       </header>

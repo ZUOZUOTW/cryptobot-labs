@@ -21,13 +21,19 @@ export interface HistoricalBacktestRecord {
       requestedRange: { startTime?: number; endTime?: number }; fetchedRange: { startTime: number; endTime: number };
       gaps: unknown[]; gapCount: number; duplicateCount: number; incompleteCount: number; complete: boolean;
       feeRate: string; slippageRate: string;
-      fundingTreatment: { suppliedEvents: number; appliedEvents: number; netFunding: string; convention: string };
+      fundingTreatment: { suppliedEvents: number; appliedEvents: number; netFunding: string;
+        convention: "long-pays-positive-short-receives-positive" };
       market: "spot" | "futures"; symbol: string; interval: string; engineVersion: string;
       configHash: string; strategyHash: string; datasetDigest: string;
-      executionConvention: { signalEvaluation: string; signalExecution: string; riskTrigger: string };
-      liquidationModel: { maintenanceMarginRate: string; maximumSupportedLeverage: string; check: string;
-        orderingAssumption: string; model: string } };
-    equityCurve: Array<{ timestamp: number; equity: string }>;
+      fundingMode?: "none" | "historical"; fundingCoverageComplete?: boolean;
+      executionConvention: { signalEvaluation: "completed-candle-close"; signalExecution: "next-candle-open";
+        riskTrigger: "close-only-not-intrabar" };
+      liquidationModel: { maintenanceMarginRate: string; maximumSupportedLeverage: "500";
+        check: "funding-event-mark-immediately-then-candle-low-long-high-short";
+        orderingAssumption: "funding-applied-at-event-timestamp-before-candle-wide-adverse-extreme";
+        model: "fixed-conservative-not-weex-tier-exact" };
+      maintenanceMarginAssumption?: { rate: string; model: "fixed-conservative-not-weex-tier-exact" } };
+    equityCurve: Array<{ timestamp: number; equity: string; funding?: string }>;
     engineVersion: string; configurationHash: string; strategyHash: string; scriptHash: string | null } | null;
 }
 

@@ -30,6 +30,7 @@ export { createStrategyVersionRepository, type OwnedStrategyVersionRecord,
 export {
   createStrategyPublicationRepository,
   type StrategyPublicationCursor,
+  type StrategyPublicationListOptions,
   type StrategyPublicationRecord,
 } from "./strategy-publications";
 export {

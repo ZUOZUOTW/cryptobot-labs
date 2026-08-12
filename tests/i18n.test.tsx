@@ -143,6 +143,65 @@ describe("site internationalization", () => {
       .toBe("BTCUSDT 不在 WEEX API 公告支援的現貨交易對中");
   });
 
+  it("uses professional order and fill terminology in the run-bound evidence ledger", () => {
+    const expectations = [
+      ["zh-Hant", {
+        "最近委託與成交對帳": "最近委託與成交對帳",
+        "正在核對最近委託與成交證據…": "正在核對最近委託與成交證據…",
+        "委託價格": "委託價格",
+        "累計成交": "累計成交",
+        "成交均價": "成交均價",
+        "重新載入委託證據": "重新載入委託證據",
+      }],
+      ["zh-Hans", {
+        "最近委託與成交對帳": "最近委托与成交对账",
+        "正在核對最近委託與成交證據…": "正在核对最近委托与成交证据…",
+        "委託價格": "委托价格",
+        "累計成交": "累计成交量",
+        "成交均價": "成交均价",
+        "重新載入委託證據": "重新加载委托证据",
+      }],
+      ["en", {
+        "最近委託與成交對帳": "Recent order and fill reconciliation",
+        "正在核對最近委託與成交證據…": "Reconciling recent order and fill evidence…",
+        "委託價格": "Order price",
+        "累計成交": "Cumulative filled quantity",
+        "成交均價": "Average fill price",
+        "重新載入委託證據": "Reload order evidence",
+      }],
+      ["ar", {
+        "最近委託與成交對帳": "مطابقة الأوامر وعمليات التنفيذ الأخيرة",
+        "正在核對最近委託與成交證據…": "جارٍ مطابقة أدلة الأوامر والتنفيذات الأخيرة…",
+        "委託價格": "سعر الأمر",
+        "累計成交": "الكمية المنفذة تراكميًا",
+        "成交均價": "متوسط سعر التنفيذ",
+        "重新載入委託證據": "إعادة تحميل أدلة الأوامر",
+      }],
+      ["ru", {
+        "最近委託與成交對帳": "Сверка последних ордеров и исполнений",
+        "正在核對最近委託與成交證據…": "Сверяем последние подтверждения ордеров и исполнений…",
+        "委託價格": "Цена ордера",
+        "累計成交": "Накопленный объём исполнения",
+        "成交均價": "Средняя цена исполнения",
+        "重新載入委託證據": "Повторно загрузить подтверждения по ордерам",
+      }],
+      ["ja", {
+        "最近委託與成交對帳": "最近の注文・約定照合",
+        "正在核對最近委託與成交證據…": "最近の注文・約定証跡を照合しています…",
+        "委託價格": "注文価格",
+        "累計成交": "累計約定数量",
+        "成交均價": "平均約定価格",
+        "重新載入委託證據": "注文証跡を再読み込み",
+      }],
+    ] as const;
+
+    for (const [locale, translations] of expectations) {
+      for (const [source, expected] of Object.entries(translations)) {
+        expect(translateMessage(locale, source), `${locale}: ${source}`).toBe(expected);
+      }
+    }
+  });
+
   it("keeps workshop backtest assumptions semantically distinct in every catalogue", () => {
     const expectations = [
       ["zh-Hant", {

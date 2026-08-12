@@ -5,6 +5,7 @@ export interface DiscoveryPreferences {
   timeframe: string;
   sort: "recommended" | "return-desc" | "drawdown-asc" | "win-rate-desc" | "stability-desc";
   favorites: string[];
+  communityFavorites?: string[];
 }
 
 const STORAGE_KEY = "cryptobot-labs:discovery:v1";
@@ -23,7 +24,9 @@ const isPreferences = (value: unknown): value is DiscoveryPreferences => {
     && typeof item.timeframe === "string"
     && typeof item.sort === "string" && SORTS.has(item.sort)
     && Array.isArray(item.favorites)
-    && item.favorites.every((favorite) => typeof favorite === "string");
+    && item.favorites.every((favorite) => typeof favorite === "string")
+    && (item.communityFavorites === undefined || (Array.isArray(item.communityFavorites)
+      && item.communityFavorites.every((favorite) => typeof favorite === "string")));
 };
 
 export const loadDiscoveryPreferences = (): DiscoveryPreferences | null => {

@@ -6,6 +6,7 @@ import {
   parseCloudRisk,
   type CloudRiskInput,
 } from "../lib/server/cloud-runs";
+import { validFormalEvidenceRow } from "./helpers/formal-evidence";
 
 const risk: CloudRiskInput = {
   allowedSymbols: ["BTCUSDT"],
@@ -39,15 +40,18 @@ describe("cloud strategy launch prerequisites", () => {
   });
 
   it("requires mode-specific futures permissions and complete matching historical evidence", async () => {
-    let sql = "";
-    let bindings: unknown[] = [];
-    const first = vi.fn().mockResolvedValue(null);
+    const statements: Array<{ sql: string; bindings: unknown[] }> = [];
     const database = {
       prepare: vi.fn((statement: string) => {
-        sql = statement;
         return { bind: vi.fn((...values: unknown[]) => {
-          bindings = values;
-          return { first };
+          statements.push({ sql: statement, bindings: values });
+          return {
+            first: vi.fn().mockResolvedValue(
+              /from strategy_versions s\s+join backtest_jobs j/i.test(statement)
+                ? validFormalEvidenceRow()
+                : null,
+            ),
+          };
         }) };
       }),
     };
@@ -55,6 +59,16 @@ describe("cloud strategy launch prerequisites", () => {
       id: "crun_1", userId: "user_1", strategyVersionId: "sv_1",
       name: "突破獵手", configurationHash: "a".repeat(64), mode: "futures-demo", risk, now: 100,
     });
+
+    const evidence = statements.find(({ sql: statement }) => /from strategy_versions s\s+join backtest_jobs j/i.test(statement));
+    const insert = statements.find(({ sql: statement }) => /insert into cloud_strategy_runs/i.test(statement));
+    expect(evidence).toBeDefined();
+    expect(evidence!.sql).toMatch(/r\.strategy_hash as strategyHash/);
+    expect(evidence!.sql).toMatch(/r\.script_hash as scriptHash/);
+    expect(evidence!.sql).toMatch(/d\.gaps_json as gapsJson,d\.checksum/);
+    expect(evidence!.bindings).toEqual(["user_1", "sv_1", "a".repeat(64)]);
+    expect(insert).toBeDefined();
+    const { sql, bindings } = insert!;
 
     expect(sql).toMatch(/permissions_json\s+@>\s+'\\?{"read":true}/);
     expect(sql).toMatch(/spotTrade/);
@@ -87,7 +101,7 @@ describe("cloud strategy launch prerequisites", () => {
     expect(bindings).toHaveLength(16);
     expect(sql.match(/\?/g)).toHaveLength(bindings.length);
     expect(bindings.slice(-2)).toEqual(["futures-demo", "futures-demo"]);
-    expect(first).toHaveBeenCalledOnce();
+    expect(statements).toHaveLength(2);
   });
 
   it("selects the rollback-compatible config target for every dashboard run", async () => {

@@ -16,6 +16,7 @@ export interface ControlPlaneStatement {
 }
 
 export interface ControlPlaneDatabase {
+  readonly dialect?: "postgres" | "sqlite";
   prepare(sql: string): ControlPlaneStatement;
   batch<T extends readonly ControlPlaneStatement[]>(statements: T): Promise<ControlPlaneRunResult[]>;
 }
