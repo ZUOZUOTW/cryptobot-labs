@@ -8,6 +8,7 @@ import type { BotConfig } from "../../lib/types";
 import { BacktestResultCard } from "./BacktestResultCard";
 import { CreateRunPanel } from "../runs/CreateRunPanel";
 import type { HistoricalBacktestRecord, HistoricalRequest } from "./BacktestResultCard";
+import { formalBacktestToReport, type FormalBacktestEvidence } from "../../lib/formal-backtest-report";
 
 const INTERVAL_MS: Readonly<Record<string, number>> = {
   "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
@@ -21,6 +22,7 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   invalid_strategy_configuration: "JavaScript 策略格式或輸出不符合安全規範。",
   data_fetch_failed: "目前無法取得公開行情，請稍後重試。",
   backtest_execution_failed: "歷史回測未能完成，請檢查設定後重試。",
+  strategy_integrity_failed: "回測證據與目前策略版本不一致，請重新保存策略後再試。",
   invalid_economic_parameters: "初始資金、成本或槓桿設定超出歷史回測可計算範圍。",
   strategy_service_unavailable: "歷史回測儲存服務目前無法連線，請稍後再試。",
 };
@@ -51,7 +53,7 @@ const requestKey = (prefix: string, fingerprint: string): string => {
   }
   return `${prefix}-${(hash >>> 0).toString(16)}-${random}`.slice(0, 128);
 };
-const strategyVersionId = (value: unknown): string | null => {
+const strategyVersion = (value: unknown): { id: string; configHash: string } | null => {
   if (!value || typeof value !== "object") return null;
   const root = value as Record<string, unknown>;
   if (Object.keys(root).sort().join(",") !== "idempotent,strategyVersion" || typeof root.idempotent !== "boolean") return null;
@@ -62,15 +64,28 @@ const strategyVersionId = (value: unknown): string | null => {
   return typeof record.id === "string" && record.id.length > 0 && typeof record.strategyId === "string"
     && record.strategyId.length > 0 && Number.isSafeInteger(record.version) && Number(record.version) > 0
     && typeof record.configHash === "string" && /^[a-f0-9]{64}$/.test(record.configHash)
-    && Number.isSafeInteger(record.createdAt) && Number(record.createdAt) >= 0 ? record.id : null;
+    && Number.isSafeInteger(record.createdAt) && Number(record.createdAt) >= 0
+    ? { id: record.id, configHash: record.configHash } : null;
 };
 
-export function BacktestRequestForm({ config, compact = false }: { config: BotConfig; compact?: boolean }) {
+export function BacktestRequestForm({ config, compact = false, onRun, onVerifiedReport }: {
+  config: BotConfig;
+  compact?: boolean;
+  onRun?: () => void;
+  onVerifiedReport?: (evidence: FormalBacktestEvidence) => void;
+}) {
   const fingerprint = backtestConfigFingerprint(config);
-  return <BacktestRequestSession compact={compact} config={config} configFingerprint={fingerprint} key={fingerprint} />;
+  return <BacktestRequestSession compact={compact} config={config} configFingerprint={fingerprint}
+    key={fingerprint} onRun={onRun} onVerifiedReport={onVerifiedReport} />;
 }
 
-function BacktestRequestSession({ config, compact, configFingerprint }: { config: BotConfig; compact: boolean; configFingerprint: string }) {
+function BacktestRequestSession({ config, compact, configFingerprint, onRun, onVerifiedReport }: {
+  config: BotConfig;
+  compact: boolean;
+  configFingerprint: string;
+  onRun?: () => void;
+  onVerifiedReport?: (evidence: FormalBacktestEvidence) => void;
+}) {
   const configurationValid = validateConfig(config).valid;
   const [defaultRange] = useState(() => alignedRecentRange(config));
   const [start, setStart] = useState(toLocalInput(defaultRange.startTime));
@@ -100,6 +115,7 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
 
   const submit = async () => {
     if (!configurationValid || state === "ensuring" || state === "running") return;
+    onRun?.();
     const startTime = fromLocalInput(start);
     const endTime = fromLocalInput(end);
     const interval = INTERVAL_MS[config.timeframe];
@@ -117,7 +133,7 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
       });
       if (strategyResponse.status === 401) { setState("unauthorized"); return; }
       const strategyBody = await safeBody(strategyResponse);
-      const versionId = strategyVersionId(strategyBody);
+      const version = strategyVersion(strategyBody);
       if (!strategyResponse.ok) {
         const strategyCode = strategyBody && typeof strategyBody === "object"
           ? (strategyBody as { error?: { code?: unknown } }).error?.code
@@ -126,11 +142,12 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
           ? "strategy_service_unavailable"
           : typeof strategyCode === "string" ? strategyCode : "strategy_version_failed");
       }
-      if (versionId === null) throw new Error("strategy_version_failed");
+      if (version === null) throw new Error("strategy_version_failed");
+      const effectiveGapPolicy = compact ? "fail" : gapPolicy;
       const request: HistoricalRequest = {
-        strategyVersionId: versionId, market: config.market, symbol: config.symbol, interval: config.timeframe,
+        strategyVersionId: version.id, market: config.market, symbol: config.symbol, interval: config.timeframe,
         startTime, endTime, initialCapital, feeRate, slippageRate, leverage: String(config.leverage),
-        fundingMode: config.market === "futures" ? fundingMode : "none", gapPolicy,
+        fundingMode: config.market === "futures" ? fundingMode : "none", gapPolicy: effectiveGapPolicy,
       };
       const backtestFingerprint = JSON.stringify(request);
       const backtestKey = keyFor(backtestAttempt, "historical", backtestFingerprint);
@@ -146,8 +163,15 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
         const code = body?.error?.code ?? "";
         throw new Error(code || "backtest_failed");
       }
+      const verified = onVerifiedReport && request.gapPolicy === "fail"
+        ? formalBacktestToReport(body.backtest, config, version.configHash)
+        : null;
+      if (body.backtest.status === "succeeded" && onVerifiedReport && request.gapPolicy === "fail" && !verified) {
+        throw new Error("strategy_integrity_failed");
+      }
       setResult(body.backtest); setState(body.backtest.status === "failed" ? "error" : "done");
       if (body.backtest.status === "failed") setMessage(ERROR_MESSAGES[body.backtest.error?.code ?? ""] ?? "歷史回測未能完成。");
+      else if (verified) onVerifiedReport?.(verified);
       strategyAttempt.current = null;
       backtestAttempt.current = null;
     } catch (error) {
@@ -172,17 +196,22 @@ function BacktestRequestSession({ config, compact, configFingerprint }: { config
         <label><span>手續費率</span><input inputMode="decimal" min="0" max="0.05" step="0.0001" type="number" value={feeRate} onChange={(event) => change(setFeeRate, event.target.value)} /></label>
         <label><span>滑價率</span><input inputMode="decimal" min="0" max="0.1" step="0.0001" type="number" value={slippageRate} onChange={(event) => change(setSlippageRate, event.target.value)} /></label>
         <label><span>資金費率</span><select disabled={config.market === "spot"} value={config.market === "spot" ? "none" : fundingMode} onChange={(event) => change(setFundingMode, event.target.value as "none" | "historical")}><option value="historical">歷史資金費率</option><option value="none">不計入</option></select></label>
-        <label><span>資料缺口</span><select value={gapPolicy} onChange={(event) => change(setGapPolicy, event.target.value as "fail" | "disclose")}><option value="fail">遇缺口即停止</option><option value="disclose">揭露缺口並繼續</option></select></label>
+        <label><span>資料缺口</span><select disabled={compact} value={compact ? "fail" : gapPolicy} onChange={(event) => change(setGapPolicy, event.target.value as "fail" | "disclose")}><option value="fail">遇缺口即停止</option>{!compact && <option value="disclose">揭露缺口並繼續</option>}</select></label>
         <div className="historical-config"><span>市場 / 槓桿</span><strong>{config.symbol} · {config.market === "spot" ? "現貨" : "合約"} · {config.leverage}×</strong></div>
       </fieldset>
       <button className="button button--primary historical-submit" disabled={!configurationValid || state === "ensuring" || state === "running"} onClick={submit} type="button">
         {state === "ensuring" ? "固定策略版本中…" : state === "running" ? "取得行情並計算中…" : "執行進階歷史回測"}
       </button>
       <div aria-live="polite">
-        {state === "unauthorized" && <p className="historical-feedback">請先登入，才能保存並查看自己的歷史回測。 <Link href="/auth?return_to=%2Fbacktests">登入</Link></p>}
+        {state === "unauthorized" && <p className="historical-feedback">請先登入，才能保存並查看自己的歷史回測。 <Link href={compact ? "/auth?return_to=%2Fworkshop" : "/auth?return_to=%2Fbacktests"}>登入</Link></p>}
         {state === "error" && message && <p className="historical-feedback historical-feedback--error">{message}</p>}
       </div>
-      {result && <><BacktestResultCard backtest={result} /><CreateRunPanel backtest={result} config={config} /></>}
+      {result && <>
+        <BacktestResultCard backtest={result} />
+        {config.source === undefined
+          ? <CreateRunPanel backtest={result} config={config} />
+          : <p className="historical-notice" role="note">自訂 JavaScript 已完成隔離沙箱回測；目前雲端 Executor 只支援視覺策略，因此不會顯示雲端啟動入口。</p>}
+      </>}
     </section>
   );
 }

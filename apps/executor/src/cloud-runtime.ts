@@ -55,8 +55,16 @@ interface TimedRequest<T> {
 interface CachedPrivateClient {
   readonly client: WeexPrivateClient;
   readonly expiresAt: number;
+  readonly credentialVersion: number;
+  readonly connectionVersion: number;
   readonly verifications: Map<string, TimedRequest<VerifiedAccountSummary>>;
   readonly snapshots: Map<string, TimedRequest<WeexAccountSnapshot>>;
+}
+
+interface PendingPrivateClient {
+  readonly credentialVersion: number;
+  readonly connectionVersion: number;
+  readonly promise: Promise<CachedPrivateClient>;
 }
 
 class AccountSyncStageError extends Error {
@@ -239,7 +247,10 @@ export const deriveFuturesPositionSnapshot = (
 
 export async function executeCloudOrder(input: {
   repository: CloudRuntimeRepository;
-  client: Pick<WeexPrivateClient, "findOrderByClientOrderId" | "submitOrder">;
+  client: Pick<WeexPrivateClient, "findOrderByClientOrderId"> & {
+    submitOrder: (request: Parameters<WeexPrivateClient["submitOrder"]>[0], signal?: AbortSignal) =>
+      ReturnType<WeexPrivateClient["submitOrder"]>;
+  };
   run: CloudRun;
   owner: string;
   candleCloseAt: number;
@@ -250,6 +261,8 @@ export async function executeCloudOrder(input: {
   target: { market: "spot"; mode: "live" } | { market: "futures"; mode: "futures-demo" | "live" };
   symbol: string;
   now: number;
+  credentialVersion: number;
+  connectionVersion: number;
 }): Promise<"completed" | "deferred"> {
   if (!input.claim.fresh) {
     return settleBlockingCloudOrder({
@@ -278,30 +291,24 @@ export async function executeCloudOrder(input: {
     });
     return finish({ ...input.signal, riskRejected: input.decision.reason });
   }
-  await input.repository.recordOrder({
-    runId: input.run.id,
+  const submission = await input.repository.submitAuthorizedOrder({
+    run: input.run,
+    owner: input.owner,
     candleCloseAt: input.candleCloseAt,
-    status: "unknown",
-    intent: input.intent,
-    errorCode: "submission_in_progress",
     now: input.now,
-  });
-  const outcome = await input.client.submitOrder({
-    target: input.target,
-    clientOrderId: input.claim.clientOrderId,
-    intent: input.intent,
-  });
-  await input.repository.recordOrder({
-    runId: input.run.id,
-    candleCloseAt: input.candleCloseAt,
-    status: outcome.status,
-    intent: input.intent,
-    ...(outcome.status === "acknowledged"
-      ? { exchangeOrderId: outcome.exchangeOrderId }
-      : { errorCode: outcome.reason ?? outcome.status }),
-    now: input.now,
-  });
-  if (outcome.status === "unknown") {
+    credentialVersion: input.credentialVersion,
+    connectionVersion: input.connectionVersion,
+  }, (signal) => input.client.submitOrder({
+      target: input.target,
+      clientOrderId: input.claim.clientOrderId,
+      intent: input.intent,
+    }, signal));
+  if (!submission.authorized) return "deferred";
+  const outcome = submission.outcome;
+  if (outcome.status !== "rejected") {
+    // A successful POST only proves that WEEX accepted the order identity. The
+    // order can still be NEW or partially filled, so keep this candle blocking
+    // until a subsequent authoritative lookup proves a terminal state.
     await input.repository.release(input.run.id, input.owner, input.now);
     return "deferred";
   }
@@ -339,6 +346,9 @@ export async function settleBlockingCloudOrder(input: {
   });
   if (existing) {
     const partiallyFilled = decimalCompare(existing.cumulativeFilledQuantity, "0") > 0;
+    const terminal = existing.status === "FILLED"
+      || existing.status === "CANCELED"
+      || existing.status === "REJECTED";
     const exchangeState = existing.status === "FILLED"
       ? { status: "acknowledged" as const, errorCode: "exchange_order_filled" }
       : existing.status === "CANCELED" && partiallyFilled
@@ -359,25 +369,33 @@ export async function settleBlockingCloudOrder(input: {
       errorCode: exchangeState.errorCode,
       now: input.now,
     });
+    if (!terminal) {
+      await input.repository.release(input.run.id, input.owner, input.now);
+      return "deferred";
+    }
     return finish(input.order.signal);
   }
   if (input.order.status === "acknowledged") {
     await input.repository.release(input.run.id, input.owner, input.now);
     return "deferred";
   }
-  if (input.now - input.order.createdAt < ORDER_RECONCILIATION_GRACE_MS) {
-    await input.repository.release(input.run.id, input.owner, input.now);
-    return "deferred";
+  // A missing lookup is not proof that an order was never dispatched: WEEX may
+  // expose it late, or the process/database transaction may have failed after
+  // the request crossed the network boundary. Keep the oldest candle blocking
+  // until the exchange returns an authoritative terminal state.
+  if (input.order.status === "claimed"
+    && input.now - input.order.createdAt >= ORDER_RECONCILIATION_GRACE_MS) {
+    await input.repository.recordOrder({
+      runId: input.run.id,
+      candleCloseAt: input.order.candleCloseAt,
+      status: "unknown",
+      ...(input.order.intent ? { intent: input.order.intent } : {}),
+      errorCode: "order_reconciliation_required",
+      now: input.now,
+    });
   }
-  await input.repository.recordOrder({
-    runId: input.run.id,
-    candleCloseAt: input.order.candleCloseAt,
-    status: "rejected",
-    ...(input.order.intent ? { intent: input.order.intent } : {}),
-    errorCode: "stale_claim_no_exchange_order",
-    now: input.now,
-  });
-  return finish({ ...input.order.signal, orderSkipped: "stale_claim_no_exchange_order" });
+  await input.repository.release(input.run.id, input.owner, input.now);
+  return "deferred";
 }
 const trackedSpotPosition = (
   storedPositions: readonly unknown[],
@@ -448,7 +466,7 @@ export class CloudStrategyRuntime {
   readonly #public = new WeexPublicClient(this.#transport);
   readonly #market = new CloudMarketDataCache(this.#public, () => (this.options.now ?? Date.now)());
   readonly #privateClients = new Map<string, CachedPrivateClient>();
-  readonly #privateClientRequests = new Map<string, Promise<CachedPrivateClient>>();
+  readonly #privateClientRequests = new Map<string, PendingPrivateClient>();
   #clockSample: TimedRequest<{ sentAt: number; receivedAt: number; serverTime: number }> | null = null;
   #active = false;
   #timer: ReturnType<typeof setTimeout> | null = null;
@@ -641,29 +659,49 @@ export class CloudStrategyRuntime {
     return clock;
   }
 
-  async #privateClient(connectionId: string, userId: string): Promise<CachedPrivateClient> {
-    const cacheKey = `${connectionId}:${userId}`;
+  async #privateClient(
+    connectionId: string,
+    userId: string,
+    target?: LiveTarget,
+  ): Promise<CachedPrivateClient> {
+    const cacheKey = `${connectionId}:${userId}:${target ? `${target.market}:${target.mode}` : "account-sync"}`;
     const now = (this.options.now ?? Date.now)();
+    const stored = await this.options.repository.credential(connectionId, userId, target);
     const existing = this.#privateClients.get(cacheKey);
-    if (existing && existing.expiresAt > now) return existing;
+    if (existing && existing.expiresAt > now
+      && existing.credentialVersion === stored.credentialVersion
+      && existing.connectionVersion === stored.connectionVersion) return existing;
     const pending = this.#privateClientRequests.get(cacheKey);
-    if (pending) return pending;
-    const request = this.#createPrivateClient(cacheKey, connectionId, userId, now);
-    this.#privateClientRequests.set(cacheKey, request);
+    if (pending && pending.credentialVersion === stored.credentialVersion
+      && pending.connectionVersion === stored.connectionVersion) return pending.promise;
+    const request = this.#createPrivateClient(stored, now);
+    this.#privateClientRequests.set(cacheKey, {
+      credentialVersion: stored.credentialVersion,
+      connectionVersion: stored.connectionVersion,
+      promise: request,
+    });
     try {
-      return await request;
+      const entry = await request;
+      if (this.#privateClientRequests.get(cacheKey)?.promise === request) {
+        while (this.#privateClients.size >= 256) {
+          const oldest = this.#privateClients.keys().next().value;
+          if (oldest === undefined) break;
+          this.#privateClients.delete(oldest);
+        }
+        this.#privateClients.set(cacheKey, entry);
+      }
+      return entry;
     } finally {
-      this.#privateClientRequests.delete(cacheKey);
+      if (this.#privateClientRequests.get(cacheKey)?.promise === request) {
+        this.#privateClientRequests.delete(cacheKey);
+      }
     }
   }
 
   async #createPrivateClient(
-    cacheKey: string,
-    connectionId: string,
-    userId: string,
+    stored: Awaited<ReturnType<CloudRuntimeRepository["credential"]>>,
     now: number,
   ): Promise<CachedPrivateClient> {
-    const stored = await this.options.repository.credential(connectionId, userId);
     const credentials = await decryptWeexCredentials({
       envelope: stored.envelope,
       context: stored.context,
@@ -672,6 +710,8 @@ export class CloudStrategyRuntime {
     const clock = await this.#clock();
     const entry: CachedPrivateClient = {
       expiresAt: now + PRIVATE_CLIENT_TTL_MS,
+      credentialVersion: stored.credentialVersion,
+      connectionVersion: stored.connectionVersion,
       verifications: new Map(),
       snapshots: new Map(),
       client: new WeexPrivateClient({
@@ -687,13 +727,6 @@ export class CloudStrategyRuntime {
         maximumGetAttempts: SAFE_READ_ATTEMPTS,
       }),
     };
-    this.#privateClients.delete(cacheKey);
-    while (this.#privateClients.size >= 256) {
-      const oldest = this.#privateClients.keys().next().value;
-      if (oldest === undefined) break;
-      this.#privateClients.delete(oldest);
-    }
-    this.#privateClients.set(cacheKey, entry);
     return entry;
   }
 
@@ -746,6 +779,7 @@ export class CloudStrategyRuntime {
           read: spotSummary?.readPermission === true || futuresSummary?.readPermission === true,
           spotTrade: spotReady,
           futuresTrade: futuresReady,
+          futuresDemoTrade: account.permissions.futuresDemoTrade === true,
           withdrawal: !withdrawalAbsent,
           liveVerified: true,
         }, withdrawalAbsent, now);
@@ -827,7 +861,7 @@ export class CloudStrategyRuntime {
     const target = config.market === "spot"
       ? { market: "spot" as const, mode: "live" as const }
       : { market: "futures" as const, mode: run.mode };
-    const cached = await this.#privateClient(run.connectionId, run.userId);
+    const cached = await this.#privateClient(run.connectionId, run.userId, target);
     const client = cached.client;
     const verification = await this.#verifiedAccount(cached, target);
     if (verification.readPermission !== true) {
@@ -846,14 +880,16 @@ export class CloudStrategyRuntime {
       });
       return;
     }
-    if (verification.canTrade !== true) {
-      throw new CloudRunExecutionError("live_api_permission_required", "account", true);
-    }
-    if (verification.withdrawalPermission !== "absent") {
-      throw new CloudRunExecutionError("withdrawal_permission_forbidden", "account", true);
-    }
-    if (config.market === "futures" && run.mode === "live" && verification.positionMode !== "hedge") {
-      throw new CloudRunExecutionError("hedge_mode_required", "account", true);
+    if (run.mode === "live") {
+      if (verification.canTrade !== true) {
+        throw new CloudRunExecutionError("live_api_permission_required", "account", true);
+      }
+      if (verification.withdrawalPermission !== "absent") {
+        throw new CloudRunExecutionError("withdrawal_permission_forbidden", "account", true);
+      }
+      if (config.market === "futures" && verification.positionMode !== "hedge") {
+        throw new CloudRunExecutionError("hedge_mode_required", "account", true);
+      }
     }
     if (!latest || latest.closeTime <= (run.lastCandleAt ?? -1)) {
       await this.options.repository.release(run.id, this.#owner, (this.options.now ?? Date.now)());
@@ -988,6 +1024,8 @@ export class CloudStrategyRuntime {
       target,
       symbol: config.symbol,
       now: account.observedAt,
+      credentialVersion: cached.credentialVersion,
+      connectionVersion: cached.connectionVersion,
     });
   }
 }

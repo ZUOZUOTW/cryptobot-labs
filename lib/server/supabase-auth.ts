@@ -1,5 +1,9 @@
 import { cookies } from "next/headers";
 import { canonicalDisplayName } from "../display-name";
+import {
+  canonicalSupabaseAuthUrl,
+  canonicalSupabasePublishableKey,
+} from "../supabase-auth-environment";
 
 export const AUTH_ACCESS_COOKIE = "__Host-cbl_access";
 export const AUTH_REFRESH_COOKIE = "__Host-cbl_refresh";
@@ -75,27 +79,17 @@ function canonicalOrigin(value: string | undefined): string {
   return parsed.origin;
 }
 
-function canonicalSupabaseUrl(value: string | undefined): string {
-  if (!value) throw new Error("SUPABASE_URL is required");
-  const parsed = new URL(value);
-  const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
-  if ((parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) || parsed.username || parsed.password
-    || (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
-    throw new Error("SUPABASE_URL is invalid");
-  }
-  return parsed.origin;
-}
-
 export function getSupabaseAuthConfig(
   environment: SupabaseAuthEnvironment = process.env as unknown as SupabaseAuthEnvironment,
 ): SupabaseAuthConfig {
-  const publishableKey = environment.SUPABASE_PUBLISHABLE_KEY?.trim() ?? "";
+  const publishableKey = canonicalSupabasePublishableKey(environment.SUPABASE_PUBLISHABLE_KEY);
   const cookieSecret = environment.AUTH_COOKIE_SECRET ?? "";
-  if (publishableKey.length < 20 || /\s/.test(publishableKey)) throw new Error("SUPABASE_PUBLISHABLE_KEY is invalid");
   if (new TextEncoder().encode(cookieSecret).length < 32) throw new Error("AUTH_COOKIE_SECRET must contain at least 32 bytes");
   return {
     origin: canonicalOrigin(environment.PUBLIC_ORIGIN),
-    supabaseUrl: canonicalSupabaseUrl(environment.SUPABASE_URL),
+    supabaseUrl: canonicalSupabaseAuthUrl(environment.SUPABASE_URL, {
+      allowLocalHttp: environment.DEMO_MODE !== "false",
+    }),
     publishableKey,
     cookieSecret,
   };

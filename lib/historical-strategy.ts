@@ -82,6 +82,22 @@ const parameter = (block: Readonly<StrategyBlock>, key: string): number => (
   block.parameters.find((item) => item.key === key)!.value
 );
 
+/**
+ * Risk policy shared by visual and QuickJS historical evaluators. Source
+ * strategies may intentionally have no visual entry/exit blocks, while any
+ * canonical maximum-daily-loss block still remains an external safety policy.
+ */
+export const historicalRiskPolicyForConfig = (
+  config: Pick<BotConfig, "blocks">,
+): Readonly<{ maximumDailyLossRate?: number }> => {
+  const maximumDailyLoss = config.blocks.find((block) => block.id === "maximum-daily-loss");
+  return Object.freeze({
+    ...(maximumDailyLoss
+      ? { maximumDailyLossRate: parameter(maximumDailyLoss, "maximumDailyLoss") / 100 }
+      : {}),
+  });
+};
+
 const closes = (candles: readonly Candle[]): number[] => candles.map((candle) => positiveNumber(candle.close));
 
 const average = (values: readonly number[]): number => values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -552,10 +568,7 @@ export const createVisualHistoricalEvaluator = (candidate: BotConfig): VisualHis
   const validation = validateConfig(candidate);
   if (!validation.valid) throw new TypeError(`Invalid BotConfig: ${validation.errors.join("; ")}`);
   const config = cloneAndFreezeConfig(candidate);
-  const maximumDailyLoss = config.blocks.find((block) => block.id === "maximum-daily-loss");
-  const riskPolicy = Object.freeze({
-    ...(maximumDailyLoss ? { maximumDailyLossRate: parameter(maximumDailyLoss, "maximumDailyLoss") / 100 } : {}),
-  });
+  const riskPolicy = historicalRiskPolicyForConfig(config);
 
   return Object.freeze({
     config,

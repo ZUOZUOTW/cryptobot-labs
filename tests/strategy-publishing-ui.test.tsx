@@ -6,6 +6,7 @@ import { PackagePanel } from "../components/workshop/PackagePanel";
 import { STRATEGY_PRESETS } from "../data/strategies";
 import { runBacktest } from "../lib/backtest";
 import type { BacktestReport, BotConfig } from "../lib/types";
+import { attestHistoricalReportForConfig } from "../lib/historical-evidence";
 
 afterEach(() => {
   cleanup();
@@ -20,9 +21,10 @@ const config: BotConfig = {
   })),
 };
 
-const report: BacktestReport = {
-  ...runBacktest(config),
-  evidence: {
+const report: BacktestReport = attestHistoricalReportForConfig({
+  ...runBacktest(config), seed: "d".repeat(8), generatedAt: new Date(1_700_086_400_000).toISOString(),
+  disclaimer: "WEEX 歷史行情回測，不代表未來績效",
+}, {
     level: "historical",
     provider: "WEEX",
     market: config.market,
@@ -36,12 +38,38 @@ const report: BacktestReport = {
     feeRate: "0.001",
     slippageRate: "0.0005",
     fundingIncluded: false,
+    gapPolicy: "fail",
     datasetDigest: "d".repeat(64),
     engineVersion: "test",
-  },
-};
+}, config);
 
 describe("production strategy publishing UI", () => {
+  it("reuses the exact immutable version and completed formal backtest for publication", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      publication: { slug: "strategy-sourceformal", updatedAt: 1_707_004_800_000 },
+    }), { status: 201 }));
+    const user = userEvent.setup();
+    render(
+      <PlatformAuthProvider
+        initialUser={{ id: "usr_1", email: "member@example.test", displayName: "會員 A" }}
+        mode="production"
+      >
+        <PackagePanel config={config} flowCheckState="passed"
+          formalEvidence={{ strategyVersionId: "version_formal", backtestJobId: "job_formal" }}
+          onImport={() => ({ ok: true })} report={report} />
+      </PlatformAuthProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "發布策略到公開列表" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/strategy-publications");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      strategyVersionId: "version_formal",
+      backtestJobId: "job_formal",
+    });
+  });
+
   it("keeps publication and link sharing as two separate user actions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);

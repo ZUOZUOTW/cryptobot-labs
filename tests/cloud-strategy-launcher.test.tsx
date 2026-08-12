@@ -41,7 +41,7 @@ describe("control-console API automation launcher", () => {
         account: {
           connectionStatus: "active",
           withdrawalAccessAbsent: true,
-          permissions: { read: true, futuresTrade: true, spotTrade: true },
+          permissions: { read: true, futuresTrade: false, futuresDemoTrade: true, liveVerified: false, spotTrade: false },
         }, runs: [], realizedPnl: { asset: "USDT", total: "0", tradeCount: 0, points: [] },
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -58,11 +58,11 @@ describe("control-console API automation launcher", () => {
     const user = userEvent.setup();
     render(<CloudStrategyLauncher templates={[template]} />);
 
-    expect(await screen.findByText("WEEX API 已具備合約真倉交易權限。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
+    expect(await screen.findByText("WEEX API 已具備合約 Demo 交易權限。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" }));
 
-    expect(await screen.findByText(/USDT 真倉自動交易策略已啟動/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "真倉策略已啟動" })).toBeDisabled();
+    expect(await screen.findByText(/SUSDT 合約 Demo 自動交易策略已啟動/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Demo 策略已啟動" })).toBeDisabled();
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/cloud-runs", "/api/strategies", "/api/backtests", "/api/cloud-runs",
@@ -75,10 +75,10 @@ describe("control-console API automation launcher", () => {
     });
     expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
       strategyVersionId: "sv_1", configurationHash: hash,
-      mode: "live",
-      liveConfirmation: { acknowledged: true },
+      mode: "futures-demo",
       riskPolicy: { operationMode: "automatic", maxLeverage: "6", allowedSymbols: ["BTCUSDT"] },
     });
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).not.toHaveProperty("liveConfirmation");
   });
 
   it("does not run a backtest when the user has no active WEEX connection", async () => {
@@ -87,50 +87,55 @@ describe("control-console API automation launcher", () => {
     }), { status: 200 }));
     render(<CloudStrategyLauncher templates={[template]} />);
 
-    expect(await screen.findByText(/尚未完成合約真倉權限驗證/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
+    expect(await screen.findByText(/尚未完成合約 Demo 權限驗證/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "前往連線設定" })).toHaveAttribute("href", "/connections");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   });
 
-  it("launches a spot strategy as live funds with spot evidence and no funding-rate request", async () => {
+  it("does not reinterpret an unverified live-futures flag as Demo capability", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      account: {
+        connectionStatus: "active",
+        withdrawalAccessAbsent: true,
+        permissions: { read: true, futuresTrade: true, spotTrade: false },
+      },
+    }), { status: 200 }));
+    render(<CloudStrategyLauncher templates={[template]} />);
+
+    expect(await screen.findByText(/尚未完成合約 Demo 權限驗證/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" })).toBeDisabled();
+  });
+
+  it("accepts the legacy fallback only when live futures permission was formally verified", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      account: {
+        connectionStatus: "active",
+        withdrawalAccessAbsent: true,
+        permissions: { read: true, futuresTrade: true, liveVerified: true, spotTrade: false },
+      },
+    }), { status: 200 }));
+    render(<CloudStrategyLauncher templates={[template]} />);
+
+    expect(await screen.findByText("WEEX API 已具備合約 Demo 交易權限。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" })).toBeEnabled();
+  });
+
+  it("fails spot cloud execution closed and routes the user to historical backtesting", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({
         account: {
           connectionStatus: "active",
           withdrawalAccessAbsent: true,
-          permissions: { read: true, futuresTrade: true, spotTrade: true },
+          permissions: { read: true, futuresTrade: false, futuresDemoTrade: true, liveVerified: false, spotTrade: false },
         },
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        strategyVersion: { id: "sv_spot", configHash: hash },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        backtest: {
-          strategyVersionId: "sv_spot",
-          status: "succeeded",
-          evidenceLevel: "historical",
-          dataset: { complete: true },
-          result: { configurationHash: hash },
-        },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "crun_spot" } }), { status: 201 }));
-    const user = userEvent.setup();
+      }), { status: 200 }));
     render(<CloudStrategyLauncher templates={[spotTemplate]} />);
 
-    expect(await screen.findByText("WEEX API 已具備現貨真倉交易權限。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
-    expect(await screen.findByText(/USDT 真倉自動交易策略已啟動/)).toBeInTheDocument();
-
-    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
-      market: "spot",
-      fundingMode: "none",
-      leverage: "1",
-    });
-    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
-      mode: "live",
-      strategyVersionId: "sv_spot",
-    });
+    expect(screen.getByRole("heading", { name: "現貨雲端模擬尚未開放" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往歷史回測" })).toHaveAttribute("href", "/workshop?bot=orbit-dca");
+    expect(screen.queryByRole("button", { name: /啟動/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   });
 
   it("uses a fresh backtest workflow when retrying an authoritative failed job", async () => {
@@ -139,7 +144,7 @@ describe("control-console API automation launcher", () => {
         account: {
           connectionStatus: "active",
           withdrawalAccessAbsent: true,
-          permissions: { read: true, futuresTrade: true, spotTrade: true },
+          permissions: { read: true, futuresTrade: false, futuresDemoTrade: true, liveVerified: false, spotTrade: false },
         }, runs: [], realizedPnl: { asset: "USDT", total: "0", tradeCount: 0, points: [] },
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -161,12 +166,12 @@ describe("control-console API automation launcher", () => {
     const user = userEvent.setup();
     render(<CloudStrategyLauncher templates={[template]} />);
 
-    expect(await screen.findByText("WEEX API 已具備合約真倉交易權限。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
+    expect(await screen.findByText("WEEX API 已具備合約 Demo 交易權限。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" }));
     expect(await screen.findByText("歷史回測未能完成，策略尚未啟動。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
+    await user.click(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" }));
 
-    expect(await screen.findByText(/USDT 真倉自動交易策略已啟動/)).toBeInTheDocument();
+    expect(await screen.findByText(/SUSDT 合約 Demo 自動交易策略已啟動/)).toBeInTheDocument();
     const firstBacktestKey = new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("Idempotency-Key");
     const retryBacktestKey = new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get("Idempotency-Key");
     expect(firstBacktestKey).toMatch(/^console-backtest-/);
@@ -180,7 +185,7 @@ describe("control-console API automation launcher", () => {
         account: {
           connectionStatus: "active",
           withdrawalAccessAbsent: true,
-          permissions: { read: true, futuresTrade: true, spotTrade: true },
+          permissions: { read: true, futuresTrade: false, futuresDemoTrade: true, liveVerified: false, spotTrade: false },
         }, runs: [], realizedPnl: { asset: "USDT", total: "0", tradeCount: 0, points: [] },
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -198,8 +203,8 @@ describe("control-console API automation launcher", () => {
     const user = userEvent.setup();
     render(<CloudStrategyLauncher templates={[template]} />);
 
-    expect(await screen.findByText("WEEX API 已具備合約真倉交易權限。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
+    expect(await screen.findByText("WEEX API 已具備合約 Demo 交易權限。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" }));
 
     expect(await screen.findByText("雲端運行服務暫時無法建立策略，請稍後再試。")).toBeInTheDocument();
     expect(screen.queryByText(/確認 WEEX API 已啟用合約交易權限/)).not.toBeInTheDocument();
@@ -211,7 +216,7 @@ describe("control-console API automation launcher", () => {
         account: {
           connectionStatus: "active",
           withdrawalAccessAbsent: true,
-          permissions: { read: true, futuresTrade: true, spotTrade: true },
+          permissions: { read: true, futuresTrade: false, futuresDemoTrade: true, liveVerified: false, spotTrade: false },
         },
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -227,7 +232,7 @@ describe("control-console API automation launcher", () => {
     const user = userEvent.setup();
     render(<CloudStrategyLauncher templates={[template]} />);
 
-    await user.click(await screen.findByRole("button", { name: "同意風險並啟動 USDT 真倉" }));
+    await user.click(await screen.findByRole("button", { name: "啟動 SUSDT 合約 Demo" }));
 
     expect(await screen.findByText("同一個 WEEX 帳戶的此市場與交易對已有未停止策略。請先停止原策略，再啟動新版本。"))
       .toBeInTheDocument();

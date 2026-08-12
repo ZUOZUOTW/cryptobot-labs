@@ -8,6 +8,7 @@ import {
 const WEIGHT_WINDOW_MS = 10_000;
 const ORDER_WINDOW_MS = 10_000;
 const ORDER_MINUTE_MS = 60_000;
+export const ORDER_RATE_LIMIT_WAIT_TIMEOUT_MS = 1_000;
 
 interface RateLimitSnapshot {
   readonly requestCount10s: number;
@@ -65,7 +66,12 @@ export class AdaptiveWeexRateGovernor {
     this.#maximumOrders60s = positiveLimit(options.maximumOrders60s, 90, 100);
   }
 
-  async acquire(order: boolean): Promise<void> {
+  async acquire(order: boolean, maximumWaitMs?: number): Promise<void> {
+    if (maximumWaitMs !== undefined
+      && (!Number.isSafeInteger(maximumWaitMs) || maximumWaitMs < 0 || maximumWaitMs > 60_000)) {
+      throw new TypeError("Invalid WEEX rate limit wait deadline");
+    }
+    const startedAt = this.#now();
     let release!: () => void;
     const previous = this.#turn;
     this.#turn = new Promise<void>((resolve) => { release = resolve; });
@@ -88,6 +94,13 @@ export class AdaptiveWeexRateGovernor {
           this.#requests.push(now);
           if (order) this.#orders.push(now);
           return;
+        }
+        const elapsed = now - startedAt;
+        if (maximumWaitMs !== undefined && elapsed + waitMs > maximumWaitMs) {
+          throw new WeexApiError("WEEX order rate limit queue exceeded its dispatch deadline", {
+            category: "rate-limit",
+            retryable: true,
+          });
         }
         await this.#scheduler(Math.min(waitMs, WEIGHT_WINDOW_MS));
       }
@@ -143,7 +156,8 @@ export class RateLimitedWeexTransport implements HttpTransport {
   ) {}
 
   async send(request: HttpRequest): Promise<HttpResponse> {
-    await this.governor.acquire(isOrderRequest(request));
+    const order = isOrderRequest(request);
+    await this.governor.acquire(order, order ? ORDER_RATE_LIMIT_WAIT_TIMEOUT_MS : undefined);
     try {
       const response = await this.transport.send(request);
       this.governor.observe(response.headers);

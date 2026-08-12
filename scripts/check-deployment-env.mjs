@@ -1,3 +1,8 @@
+import {
+  canonicalSupabaseAuthUrl,
+  canonicalSupabasePublishableKey,
+} from "../lib/supabase-auth-environment.js";
+
 const publicOrigin = process.env.PUBLIC_ORIGIN;
 
 let parsedOrigin;
@@ -44,24 +49,15 @@ if (demoMode === "false") {
     console.error("Deployment environment check failed: SUPABASE_DATABASE_URL must be a PostgreSQL connection URL.");
     process.exit(1);
   }
-  const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY.trim();
-  if (publishableKey.length < 20 || /\s/u.test(publishableKey)) {
+  try {
+    canonicalSupabasePublishableKey(process.env.SUPABASE_PUBLISHABLE_KEY);
+  } catch {
     console.error("Deployment environment check failed: SUPABASE_PUBLISHABLE_KEY is invalid.");
     process.exit(1);
   }
-  let supabaseUrl;
   try {
-    supabaseUrl = new URL(process.env.SUPABASE_URL);
+    canonicalSupabaseAuthUrl(process.env.SUPABASE_URL);
   } catch {
-    console.error("Deployment environment check failed: SUPABASE_URL must be an origin-only HTTPS URL.");
-    process.exit(1);
-  }
-  if (supabaseUrl.protocol !== "https:"
-    || supabaseUrl.username
-    || supabaseUrl.password
-    || supabaseUrl.pathname !== "/"
-    || supabaseUrl.search
-    || supabaseUrl.hash) {
     console.error("Deployment environment check failed: SUPABASE_URL must be an origin-only HTTPS URL.");
     process.exit(1);
   }

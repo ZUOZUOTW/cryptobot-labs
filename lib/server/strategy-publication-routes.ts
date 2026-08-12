@@ -3,8 +3,7 @@ import type {
   StrategyPublicationRecord,
 } from "../../db/repositories";
 import { publicPublisherName } from "../display-name";
-import { validatePublicPublisherName } from "../publication-moderation";
-import { validateStrategyName } from "../strategy-name";
+import { validatePublicPublisherName, validatePublicStrategyName } from "../publication-moderation";
 import { requireApiUser, type ApiAuthDependencies } from "./auth";
 import { errorResponse, HttpProblem, readStrictJson } from "./http";
 import { requireSameOrigin, type OriginPolicy } from "./origin";
@@ -86,7 +85,7 @@ export function createStrategyPublicationRouteHandlers(dependencies: StrategyPub
         let savedConfig: unknown;
         try { savedConfig = JSON.parse(version.configJson) as unknown; }
         catch { throw new HttpProblem(422, "invalid_strategy_configuration"); }
-        const strategyName = validateStrategyName(
+        const strategyName = validatePublicStrategyName(
           savedConfig && typeof savedConfig === "object" && !Array.isArray(savedConfig)
             ? (savedConfig as { name?: unknown }).name
             : undefined,

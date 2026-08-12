@@ -75,6 +75,8 @@ During WEEX review, the formal site uses Supabase Auth with Google OAuth and Ema
 cookies, and server API identity is accepted only after the Supabase Auth `/user` endpoint validates the access token.
 Copy `.env.example` into the deployment secret manager and set `DEMO_MODE=false`; missing or malformed values fail
 closed. Only the Supabase publishable key may be used for this flow—never expose a secret or `service_role` key.
+The deployment gate requires the current `sb_publishable_...` format; legacy JWT `anon` keys must be rotated rather
+than relabelled, and `sb_secret_...` keys are rejected.
 
 Before enabling Google, add the site's exact `/auth/callback` URL to the Supabase redirect allow-list and configure
 the Google provider in Supabase. Live trading remains hard-disabled independently of successful member login.

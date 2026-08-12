@@ -38,7 +38,7 @@ describe("cloud strategy launch prerequisites", () => {
     expect(parseCloudRisk({ ...risk, allowedSymbols: ["ALL"] })).toBeNull();
   });
 
-  it("requires futures permissions and complete matching historical evidence", async () => {
+  it("requires mode-specific futures permissions and complete matching historical evidence", async () => {
     let sql = "";
     let bindings: unknown[] = [];
     const first = vi.fn().mockResolvedValue(null);
@@ -53,13 +53,19 @@ describe("cloud strategy launch prerequisites", () => {
     };
     await createCloudRunRepository(database as never).create({
       id: "crun_1", userId: "user_1", strategyVersionId: "sv_1",
-      name: "突破獵手", configurationHash: "a".repeat(64), mode: "live", risk, now: 100,
+      name: "突破獵手", configurationHash: "a".repeat(64), mode: "futures-demo", risk, now: 100,
     });
 
     expect(sql).toMatch(/permissions_json\s+@>\s+'\\?{"read":true}/);
     expect(sql).toMatch(/spotTrade/);
     expect(sql).toMatch(/futuresTrade/);
-    expect(sql).toMatch(/'live','running'/);
+    expect(sql).toMatch(/futuresDemoTrade/);
+    expect(sql).toMatch(/liveVerified/);
+    expect(sql).toMatch(/\?='futures-demo'[\s\S]*futuresDemoTrade/);
+    expect(sql).toMatch(/\?='live'[\s\S]*spotTrade/);
+    expect(sql).toMatch(/select \?,s\.user_id,c\.id,c\.executor_shard_id,s\.id,\?,\?,'running'/);
+    expect(sql).toMatch(/\?='futures-demo' and t\.market='futures'/);
+    expect(sql).toMatch(/s\.source_code is null and s\.source_hash is null/);
     expect(sql).toMatch(/exists\s*\(\s*select 1 from backtest_jobs/i);
     expect(sql).toMatch(/j\.status='succeeded'/);
     expect(sql).toMatch(/d\.complete=1/);
@@ -75,8 +81,12 @@ describe("cloud strategy launch prerequisites", () => {
     expect(sql).toMatch(/active\.state<>'stopped'/);
     expect(sql).toMatch(/on conflict do nothing/i);
     expect(sql).not.toMatch(/insert\s+or\s+ignore/i);
-    expect(JSON.parse(String(bindings[2]))).toEqual(risk);
-    expect(JSON.parse(String(bindings.at(-1)))).toEqual(risk);
+    expect(bindings[2]).toBe("futures-demo");
+    expect(JSON.parse(String(bindings[3]))).toEqual(risk);
+    expect(JSON.parse(String(bindings[13]))).toEqual(risk);
+    expect(bindings).toHaveLength(16);
+    expect(sql.match(/\?/g)).toHaveLength(bindings.length);
+    expect(bindings.slice(-2)).toEqual(["futures-demo", "futures-demo"]);
     expect(first).toHaveBeenCalledOnce();
   });
 
@@ -146,11 +156,13 @@ describe("cloud strategy launch prerequisites", () => {
       id: "crun_1",
       state: "running",
       expectedVersion: 4,
+      allowLiveResume: false,
       now: 1_700_000_000_000,
     });
 
     expect(sql).toMatch(/consecutive_failures=case when \?='running' then 0/);
     expect(sql).toMatch(/lease_owner=null,lease_expires_at=null/);
+    expect(sql).toMatch(/\?<>'running' or target\.mode<>'live' or \?/);
     expect(sql).toMatch(/\?<>'running' or not exists/);
     expect(sql).toMatch(/active\.connection_id=target\.connection_id/);
     expect(sql).toMatch(/active\.config_json->>'market'=target\.config_json->>'market'/);
@@ -168,6 +180,8 @@ describe("cloud strategy launch prerequisites", () => {
       "user_1",
       "crun_1",
       4,
+      "running",
+      false,
       "running",
     ]);
   });

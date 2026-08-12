@@ -10,6 +10,7 @@ import { resolvedTradeDirection } from "../trade-direction";
 import {
   validatePublicPublicationDescription,
   validatePublicPublisherName,
+  validatePublicStrategyName,
 } from "../publication-moderation";
 import { HttpProblem, errorResponse } from "./http";
 
@@ -28,7 +29,7 @@ export const PUBLICATION_LIST_DEFAULT_LIMIT = 12;
 export const PUBLICATION_LIST_MAX_LIMIT = 24;
 export const PUBLICATION_LIST_MAX_EQUITY_POINTS = 120;
 export const PUBLICATION_LIST_MAX_SCAN_PAGES = 5;
-export const PUBLIC_STRATEGY_CACHE_VERSION = "v2";
+export const PUBLIC_STRATEGY_CACHE_VERSION = "v3";
 
 export class InvalidPublicStrategyTrustMetadataError extends Error {
   constructor() {
@@ -221,9 +222,10 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord, o
   maxEquityPoints?: number;
 } = {}): PublicStrategyPublication {
   const config = configOf(record.configJson);
+  const strategyName = validatePublicStrategyName(config.name);
   const description = validatePublicPublicationDescription(record.description);
   const publisherName = validatePublicPublisherName(record.publisherName);
-  if (!description.valid || !publisherName.valid) {
+  if (!strategyName.valid || !description.valid || !publisherName.valid) {
     throw new InvalidPublicStrategyTrustMetadataError();
   }
   if (config.name !== record.name || config.market !== record.market || config.symbol !== record.symbol) {
@@ -241,7 +243,7 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord, o
     : equityCurve;
   return {
     slug: record.slug,
-    name: record.name,
+    name: strategyName.value,
     description: description.value,
     publisherName: publisherName.value,
     weexReferralUrl: record.weexReferralUrl === null ? null : parseWeexReferralUrl(record.weexReferralUrl),

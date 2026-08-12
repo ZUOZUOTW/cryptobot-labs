@@ -1,7 +1,8 @@
 import { createControlPlaneDatabase } from "@/db";
 import { createUserRepository } from "@/db/repositories";
 import { deriveWorkspaceUserId, platformIdentityProvider, requireApiUser } from "@/lib/server/auth";
-import { CLOUD_RUN_TARGET_CONFLICT, createCloudRunRepository } from "@/lib/server/cloud-runs";
+import { CLOUD_RUN_TARGET_CONFLICT, createCloudRunRepository, isRecentLiveConfirmation } from "@/lib/server/cloud-runs";
+import { productionLiveReady } from "@/lib/server/demo-mode";
 import { env } from "@/lib/server/platform-env";
 
 export const runtime = "nodejs";
@@ -29,15 +30,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const identity = await requireApiUser(request, { identityProvider: platformIdentityProvider,
     userRepository: createUserRepository(database), deriveUserId: deriveWorkspaceUserId, now: Date.now });
   if (!identity.ok) return identity.response;
-  const body = await request.json().catch(() => null) as { state?: unknown; expectedVersion?: unknown } | null;
+  const body = await request.json().catch(() => null) as {
+    state?: unknown; expectedVersion?: unknown; liveConfirmation?: unknown;
+  } | null;
   const state = body?.state;
   if ((state !== "running" && state !== "paused" && state !== "stopped")
     || !Number.isSafeInteger(body?.expectedVersion)) return Response.json({ error: "invalid_request" }, { status: 400 });
   const repository = createCloudRunRepository(database);
   const id = (await context.params).id;
+  const now = Date.now();
   try {
+    let allowLiveResume = false;
+    if (state === "running") {
+      const mode = await repository.modeForUser({ userId: identity.user.id, id });
+      if (mode === "live") {
+        if (!productionLiveReady()) return response(503, { error: "live_trading_disabled" });
+        if (!isRecentLiveConfirmation(body?.liveConfirmation, now)) {
+          return response(400, { error: "live_confirmation_required" });
+        }
+        allowLiveResume = true;
+      } else if (body?.liveConfirmation !== undefined) {
+        return response(400, { error: "invalid_request" });
+      }
+    }
     const run = await repository.transition({ userId: identity.user.id,
-      id, state, expectedVersion: body!.expectedVersion as number, now: Date.now() });
+      id, state, expectedVersion: body!.expectedVersion as number, allowLiveResume, now });
     if (run) return response(200, { run });
     if (state === "running" && await repository.hasTransitionTargetConflict({ userId: identity.user.id, id })) {
       return response(409, CLOUD_RUN_TARGET_CONFLICT);

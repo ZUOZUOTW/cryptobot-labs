@@ -8,7 +8,7 @@ import type {
 } from "@cryptobot-labs/trading-core";
 
 export interface WeexExecutionClient {
-  submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome>;
+  submitOrder(request: ExchangeSubmitRequest, signal?: AbortSignal): Promise<SubmitOutcome>;
   findOrderByClientOrderId(query: ExchangeOrderQuery): Promise<ExchangeOrderSnapshot | null>;
   cancelOrder(query: ExchangeOrderQuery): Promise<CancelOutcome>;
 }

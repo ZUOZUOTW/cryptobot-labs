@@ -1,6 +1,6 @@
 import { HttpProblem, readStrictJson } from "../../../../lib/server/http";
 import { runWeexHistoricalPerformance } from "../../../../lib/server/weex-historical-performance";
-import { hasBotConfigShape, validateConfig } from "../../../../lib/strategy-validation";
+import { hasStrictBotConfigShape, validateConfig } from "../../../../lib/strategy-validation";
 import type { BacktestReport, BotConfig } from "../../../../lib/types";
 import { backtestConfigFingerprint } from "../../../../lib/backtest";
 import type { PublicHistoricalBacktestAssumptions } from "../../../../lib/weex-historical-client";
@@ -40,7 +40,8 @@ const parseRequest = (value: unknown): PublicBacktestRequest => {
   if (value === null || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value as object).some((key) => key !== "config" && key !== "assumptions") || !("config" in value)) throw new Error("invalid_request");
   const config = (value as { config?: unknown }).config;
-  if (!hasBotConfigShape(config) || config.exchange !== "WEEX") throw new Error("invalid_strategy");
+  if (!hasStrictBotConfigShape(config) || config.exchange !== "WEEX") throw new Error("invalid_strategy");
+  if (config.source !== undefined) throw new HttpProblem(403, "source_backtest_requires_auth");
   const validation = validateConfig(config);
   if (!validation.valid) throw new Error("invalid_strategy");
   const supplied = (value as { assumptions?: unknown }).assumptions;

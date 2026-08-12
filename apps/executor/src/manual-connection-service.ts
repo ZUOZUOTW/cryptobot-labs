@@ -33,6 +33,22 @@ export interface ManualConnectionFailureLog {
   status?: number;
 }
 
+interface ManualConnectionVerificationClient {
+  verifyAccount: WeexPrivateClient["verifyAccount"];
+}
+
+export interface ManualConnectionCapabilities {
+  readonly liveReady: boolean;
+  readonly permissions: Readonly<{
+    read: true;
+    spotTrade: boolean;
+    futuresTrade: boolean;
+    futuresDemoTrade: boolean;
+    withdrawal: false;
+    liveVerified: boolean;
+  }>;
+}
+
 class ManualConnectionPolicyError extends Error {
   constructor(readonly reason: ManualConnectionFailureReason, message: string) {
     super(message);
@@ -72,6 +88,56 @@ export function manualConnectionFailureLog(error: unknown): ManualConnectionFail
   };
 }
 
+export async function verifyManualConnectionCapabilities(
+  client: ManualConnectionVerificationClient,
+  liveTradingEnabled: boolean,
+): Promise<ManualConnectionCapabilities> {
+  const demo = await Promise.allSettled([
+    client.verifyAccount({ market: "futures", mode: "futures-demo" }),
+  ]).then(([result]) => result!);
+  const [spot, futures] = liveTradingEnabled
+    ? await Promise.allSettled([
+        client.verifyAccount({ market: "spot", mode: "live" }),
+        client.verifyAccount({ market: "futures", mode: "live" }),
+      ])
+    : [null, null] as const;
+  const demoSummary = demo.status === "fulfilled" ? demo.value : null;
+  const spotSummary = spot?.status === "fulfilled" ? spot.value : null;
+  const futuresSummary = futures?.status === "fulfilled" ? futures.value : null;
+  const futuresDemoTrade = demoSummary?.readPermission === true;
+  const spotTrade = spotSummary?.readPermission === true && spotSummary.canTrade === true
+    && spotSummary.withdrawalPermission === "absent";
+  const futuresTrade = futuresSummary?.readPermission === true && futuresSummary.canTrade === true
+    && futuresSummary.withdrawalPermission === "absent" && futuresSummary.positionMode === "hedge";
+  const liveVerified = liveTradingEnabled && (spotSummary !== null || futuresSummary !== null);
+  if ([spotSummary, futuresSummary].some((summary) => summary?.withdrawalPermission === "present")) {
+    throw new ManualConnectionPolicyError("permission_denied",
+      "The configured WEEX API capability surface is unsafe");
+  }
+  if (!futuresDemoTrade && !spotTrade && !futuresTrade) {
+    if (futuresSummary?.readPermission === true && futuresSummary.canTrade === true
+      && futuresSummary.positionMode === "one-way") {
+      throw new ManualConnectionPolicyError("hedge_mode_required",
+        "WEEX futures hedge mode is required");
+    }
+    const rejected = [spot, futures, demo].find((result) => result?.status === "rejected");
+    if (rejected?.status === "rejected") throw rejected.reason;
+    throw new ManualConnectionPolicyError("permission_denied",
+      "WEEX Futures Demo, Spot, or Futures trading capability is required");
+  }
+  return Object.freeze({
+    liveReady: spotTrade || futuresTrade,
+    permissions: Object.freeze({
+      read: true,
+      spotTrade,
+      futuresTrade,
+      futuresDemoTrade,
+      withdrawal: false,
+      liveVerified,
+    }),
+  });
+}
+
 const id = (): string => {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
   return `conn_${Buffer.from(bytes).toString("base64url")}`;
@@ -92,7 +158,7 @@ export class ManualWeexConnectionService {
     apiKey: string;
     secretKey: string;
     passphrase: string;
-  }): Promise<{ connectionId: string; maskedApiKeySuffix: string; liveReady: boolean }> {
+  }): Promise<{ connectionId: string; maskedApiKeySuffix: string; futuresDemoReady: boolean; liveReady: boolean }> {
     const now = (this.options.now ?? Date.now)();
     const handoff = await verifyExecutorOAuthHandoff(handoffToken, this.options.handoffSecret, now);
     await this.options.repository.reserveHandoff({
@@ -100,7 +166,7 @@ export class ManualWeexConnectionService {
       nonceHash: await sha256Base64Url(handoff.nonce),
       now,
     });
-    const connectionId = await this.options.repository.prepareConnection({
+    const connection = await this.options.repository.prepareConnection({
       candidateId: id(),
       userId: handoff.userId,
       shardId: this.options.shardId,
@@ -120,57 +186,27 @@ export class ManualWeexConnectionService {
       const client = new WeexPrivateClient({ transport, credentials, clock, brokerId: this.options.brokerId,
         now: () => Math.floor(clock.now()),
         maximumGetAttempts: 1 });
-      if (!this.options.liveTradingEnabled) throw new Error("WEEX live trading is unavailable");
-      const [spot, futures] = await Promise.allSettled([
-        client.verifyAccount({ market: "spot", mode: "live" }),
-        client.verifyAccount({ market: "futures", mode: "live" }),
-      ]);
-      const spotSummary = spot.status === "fulfilled" ? spot.value : null;
-      const futuresSummary = futures.status === "fulfilled" ? futures.value : null;
-      const spotReady = spotSummary?.readPermission === true && spotSummary.canTrade === true
-        && spotSummary.withdrawalPermission === "absent";
-      const futuresReady = futuresSummary?.readPermission === true && futuresSummary.canTrade === true
-        && futuresSummary.withdrawalPermission === "absent" && futuresSummary.positionMode === "hedge";
-      const withdrawalAbsent = (spotSummary?.withdrawalPermission ?? futuresSummary?.withdrawalPermission) === "absent"
-        && spotSummary?.withdrawalPermission !== "present" && futuresSummary?.withdrawalPermission !== "present";
-      if (!withdrawalAbsent) {
-        throw new ManualConnectionPolicyError("permission_denied",
-          "The configured WEEX API capability surface is unsafe");
-      }
-      if (!spotReady && !futuresReady) {
-        if (futuresSummary?.readPermission === true && futuresSummary.canTrade === true
-          && futuresSummary.positionMode === "one-way") {
-          throw new ManualConnectionPolicyError("hedge_mode_required",
-            "WEEX futures hedge mode is required");
-        }
-        const rejected = [spot, futures].find((result) => result.status === "rejected");
-        if (rejected?.status === "rejected") throw rejected.reason;
-        throw new ManualConnectionPolicyError("permission_denied",
-          "WEEX Spot or Futures trading permission is required");
-      }
-      const liveReady = spotReady || futuresReady;
-      const context = Object.freeze({ purpose: "weex_api_credentials", connection_id: connectionId,
-        user_id: handoff.userId, version: "1" });
+      const capabilities = await verifyManualConnectionCapabilities(client, this.options.liveTradingEnabled);
+      const context = Object.freeze({ purpose: "weex_api_credentials", connection_id: connection.id,
+        connection_version: String(connection.version), user_id: handoff.userId, version: "1" });
       const envelope = await encryptWeexCredentials({ credentials, context, kms: this.options.kms });
       const suffix = input.apiKey.slice(-4);
       await this.options.repository.completeManualConnection({
-        connectionId,
+        connectionId: connection.id,
+        expectedConnectionVersion: connection.version,
         userId: handoff.userId,
         credentialEnvelope: envelope,
         credentialContext: context,
         maskedApiKeySuffix: suffix,
-        permissions: Object.freeze({
-          read: true,
-          spotTrade: spotReady,
-          futuresTrade: futuresReady,
-          withdrawal: false,
-          liveVerified: true,
-        }),
+        permissions: capabilities.permissions,
         now: (this.options.now ?? Date.now)(),
       });
-      return { connectionId, maskedApiKeySuffix: suffix, liveReady };
+      return { connectionId: connection.id, maskedApiKeySuffix: suffix,
+        futuresDemoReady: capabilities.permissions.futuresDemoTrade,
+        liveReady: capabilities.liveReady };
     } catch (error) {
-      await this.options.repository.failConnection({ connectionId, userId: handoff.userId,
+      await this.options.repository.failConnection({ connectionId: connection.id,
+        expectedConnectionVersion: connection.version, userId: handoff.userId,
         credentialSource: "manual",
         now: (this.options.now ?? Date.now)() }).catch(() => undefined);
       throw error;

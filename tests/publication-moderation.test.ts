@@ -3,6 +3,7 @@ import { canonicalDisplayName } from "../lib/display-name";
 import {
   validatePublicPublicationDescription,
   validatePublicPublisherName,
+  validatePublicStrategyName,
 } from "../lib/publication-moderation";
 
 describe("public strategy trust moderation", () => {
@@ -28,6 +29,7 @@ describe("public strategy trust moderation", () => {
     "WEEΧ Official",
     "CryptоBot Labs Support",
     "CryptoBοt Labs Official",
+    "ᏔЕЕХ Official",
   ])("blocks reserved or official-looking publisher identity %s", (publisher) => {
     expect(validatePublicPublisherName(publisher).valid).toBe(false);
   });
@@ -43,6 +45,24 @@ describe("public strategy trust moderation", () => {
     "Supportive Trading Research",
   ])("keeps legitimate multilingual publisher identity %s", (publisher) => {
     expect(validatePublicPublisherName(publisher)).toEqual({ valid: true, value: publisher });
+  });
+
+  it.each([
+    "WΕΕX Official",
+    "WЕЕX Official",
+    "WEEX 公式",
+    "WEEX официальный",
+    "ᏔЕЕХ Official",
+  ])("blocks confusable or multilingual official claims in public strategy names: %s", (name) => {
+    expect(validatePublicStrategyName(name).valid).toBe(false);
+  });
+
+  it.each([
+    "BTC 多空趨勢 v2",
+    "WEEX BTCUSDT Volatility Research",
+    "Алексей Quant Research",
+  ])("keeps legitimate professional public strategy names: %s", (name) => {
+    expect(validatePublicStrategyName(name)).toEqual({ valid: true, value: name });
   });
 
   it.each([
@@ -102,6 +122,7 @@ describe("public strategy trust moderation", () => {
     "CryptoBot Labs 公式認定の戦略として公開されています。",
     "Официальная стратегия WEEX опубликована для всех участников сообщества.",
     "هذه استراتيجية WEEX الرسمية والمعتمدة لجميع المستخدمين في المنصة.",
+    "This is the official ᏔЕЕХ strategy authorized for all community members.",
   ])("blocks platform or exchange impersonation in public descriptions", (description) => {
     expect(validatePublicPublicationDescription(description).valid).toBe(false);
   });

@@ -3,17 +3,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const database = vi.hoisted(() => ({
   unsafe: vi.fn(),
   json: vi.fn((value: unknown) => ({ json: value })),
+  begin: vi.fn(),
 }));
 
 vi.mock("postgres", () => ({
   default: vi.fn(() => database),
 }));
 
-import { CloudRuntimeRepository } from "../src/cloud-repository";
+import {
+  CloudRuntimeRepository,
+  ORDER_SUBMISSION_TIMEOUT_MS,
+  ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS,
+} from "../src/cloud-repository";
 
 describe("CloudRuntimeRepository run scheduling", () => {
   beforeEach(() => {
     database.unsafe.mockReset().mockResolvedValue([]);
+    database.begin.mockReset();
   });
 
   it("claims only runs with a newly closed candle or unresolved order evidence", async () => {
@@ -23,6 +29,14 @@ describe("CloudRuntimeRepository run scheduling", () => {
 
     const query = String(database.unsafe.mock.calls[0]?.[0]);
     expect(query).toContain("r.config_json->>'timeframe'");
+    expect(query).toContain("join public.weex_connections c");
+    expect(query).toContain("c.id=r.connection_id and c.user_id=r.user_id");
+    expect(query).toContain("c.status='active'");
+    expect(query).toContain("c.withdrawal_access_absent=true");
+    expect(query).toContain("c.permissions_json @> '{\"read\":true}'::jsonb");
+    expect(query).toContain("{\"futuresDemoTrade\":true}");
+    expect(query).toContain("{\"futuresTrade\":true,\"liveVerified\":true}");
+    expect(query).toContain("{\"spotTrade\":true,\"liveVerified\":true}");
     expect(query).toContain("schedule.interval_ms");
     expect(query).toContain("r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1");
     expect(query).toContain("exists (select 1 from private.cloud_order_intents");
@@ -55,6 +69,268 @@ describe("CloudRuntimeRepository run scheduling", () => {
         risk: { allowedSymbols: ["BTCUSDT"] },
       }),
     ]);
+  });
+});
+
+describe("CloudRuntimeRepository credential authorization", () => {
+  beforeEach(() => {
+    database.unsafe.mockReset();
+    database.begin.mockReset();
+  });
+
+  it("loads an encrypted credential only through an active, read-enabled, withdrawal-safe target", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      kms_key_id: "kms-key",
+      encrypted_data_key: Uint8Array.of(1),
+      initialization_vector: Uint8Array.of(2),
+      credential_ciphertext: Uint8Array.of(3),
+      encryption_context_json: { connectionId: "wc_1" },
+      credential_version: 3,
+      connection_version: 5,
+    }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.credential("wc_1", "usr_1", {
+      market: "futures",
+      mode: "futures-demo",
+    })).resolves.toMatchObject({
+      context: { connectionId: "wc_1" },
+      credentialVersion: 3,
+      connectionVersion: 5,
+    });
+
+    const query = String(database.unsafe.mock.calls[0]?.[0]);
+    expect(query).toContain("join public.weex_connections c");
+    expect(query).toContain("c.status='active'");
+    expect(query).toContain("c.withdrawal_access_absent=true");
+    expect(query).toContain("{\"read\":true}");
+    expect(query).toContain("{\"futuresDemoTrade\":true}");
+    expect(query).toContain("{\"spotTrade\":true,\"liveVerified\":true}");
+    expect(database.unsafe.mock.calls[0]?.[1]).toEqual(["wc_1", "usr_1", "futures-demo", "futures"]);
+  });
+
+  it("fails closed when no currently authorized connection owns the encrypted credential", async () => {
+    database.unsafe.mockResolvedValueOnce([]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.credential("wc_1", "usr_1", {
+      market: "spot",
+      mode: "live",
+    })).rejects.toThrow("Cloud credential is unavailable");
+  });
+});
+
+describe("CloudRuntimeRepository atomic order authorization", () => {
+  const run = {
+    id: "run_1",
+    userId: "usr_1",
+    connectionId: "wc_1",
+    mode: "futures-demo" as const,
+    version: 1,
+    configurationHash: "a".repeat(64),
+    config: { market: "futures", symbol: "BTCUSDT" },
+    risk: { allowedSymbols: ["BTCUSDT"] },
+    lastCandleAt: null,
+    lastEvaluatedAt: null,
+    consecutiveFailures: 0,
+    positions: [],
+  };
+
+  beforeEach(() => {
+    database.unsafe.mockReset();
+    database.begin.mockReset();
+  });
+
+  it("holds connection, run, and order locks while authorizing and submitting", async () => {
+    const transaction = {
+      unsafe: vi.fn()
+        .mockResolvedValueOnce(Object.assign([], { count: 0 }))
+        .mockResolvedValueOnce([{
+          status: "active",
+          permissions_json: { read: true, futuresDemoTrade: true },
+          withdrawal_access_absent: true,
+          credential_version: 3,
+          connection_version: 5,
+        }])
+        .mockResolvedValueOnce([{
+          mode: "futures-demo",
+          market: "futures",
+          state: "running",
+          lease_owner: "owner-1",
+          order_status: "claimed",
+        }])
+        .mockResolvedValueOnce(Object.assign([], { count: 1 }))
+        .mockResolvedValueOnce(Object.assign([], { count: 1 })),
+    };
+    database.begin.mockImplementationOnce(async (callback: (sql: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const submit = vi.fn(async (signal: AbortSignal) => {
+      expect(signal.aborted).toBe(false);
+      expect(transaction.unsafe).toHaveBeenCalledTimes(4);
+      return { status: "acknowledged" as const, exchangeOrderId: "exchange-1" };
+    });
+
+    await expect(repository.submitAuthorizedOrder({
+      run,
+      owner: "owner-1",
+      candleCloseAt: 1_700_000_000_000,
+      now: 1_700_000_000_001,
+      credentialVersion: 3,
+      connectionVersion: 5,
+    }, submit)).resolves.toEqual({
+      authorized: true,
+      outcome: { status: "acknowledged", exchangeOrderId: "exchange-1" },
+    });
+
+    expect(String(transaction.unsafe.mock.calls[0]?.[0])).toContain("set local lock_timeout='5s'");
+    expect(String(transaction.unsafe.mock.calls[0]?.[0])).toContain(
+      `statement_timeout='${ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS}ms'`,
+    );
+    expect(ORDER_SUBMISSION_TIMEOUT_MS).toBeLessThan(ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS);
+    expect(String(transaction.unsafe.mock.calls[1]?.[0])).toContain("join private.weex_credential_blobs b");
+    expect(String(transaction.unsafe.mock.calls[1]?.[0])).toContain("for update of c,b");
+    expect(String(transaction.unsafe.mock.calls[2]?.[0])).toContain("for update of r,o");
+    expect(String(transaction.unsafe.mock.calls[3]?.[0])).toContain("status='unknown'");
+    expect(String(transaction.unsafe.mock.calls[4]?.[0])).toContain("set status=$3");
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["pending", { status: "pending", permissions_json: { read: true, futuresDemoTrade: true },
+      withdrawal_access_absent: true }],
+    ["error", { status: "error", permissions_json: { read: true, futuresDemoTrade: true },
+      withdrawal_access_absent: true }],
+    ["revoked", { status: "revoked", permissions_json: { read: true, futuresDemoTrade: true },
+      withdrawal_access_absent: true }],
+    ["missing mode permission", { status: "active", permissions_json: { read: true },
+      withdrawal_access_absent: true }],
+    ["unverified legacy permission", { status: "active",
+      permissions_json: { read: true, futuresTrade: true, liveVerified: false },
+      withdrawal_access_absent: true }],
+    ["withdrawal permission", { status: "active", permissions_json: { read: true, futuresDemoTrade: true },
+      withdrawal_access_absent: false }],
+  ] as const)("atomically pauses the run when authorization is %s", async (_reason, connection) => {
+    const transaction = {
+      unsafe: vi.fn()
+        .mockResolvedValueOnce(Object.assign([], { count: 0 }))
+        .mockResolvedValueOnce([{
+          ...connection,
+          credential_version: 3,
+          connection_version: 5,
+        }])
+        .mockResolvedValueOnce([{
+          mode: "futures-demo",
+          market: "futures",
+          state: "running",
+          lease_owner: "owner-1",
+          order_status: "claimed",
+        }])
+        .mockResolvedValueOnce(Object.assign([], { count: 1 }))
+        .mockResolvedValueOnce(Object.assign([], { count: 1 })),
+    };
+    database.begin.mockImplementationOnce(async (callback: (sql: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const submit = vi.fn();
+
+    await expect(repository.submitAuthorizedOrder({
+      run,
+      owner: "owner-1",
+      candleCloseAt: 1_700_000_000_000,
+      now: 1_700_000_000_001,
+      credentialVersion: 3,
+      connectionVersion: 5,
+    }, submit)).resolves.toEqual({ authorized: false });
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(String(transaction.unsafe.mock.calls[3]?.[0])).toContain("state='paused'");
+    expect(String(transaction.unsafe.mock.calls[3]?.[0])).toContain("lease_owner=null");
+    expect(transaction.unsafe.mock.calls[3]?.[1]).toContain("connection_authorization_required");
+    expect(String(transaction.unsafe.mock.calls[4]?.[0])).toContain("status='rejected'");
+  });
+
+  it.each([
+    ["credential", { credentialVersion: 2, connectionVersion: 5 }],
+    ["connection", { credentialVersion: 3, connectionVersion: 4 }],
+  ] as const)("defers a client whose cached %s version predates a completed rotation", async (_kind, version) => {
+    const transaction = {
+      unsafe: vi.fn()
+        .mockResolvedValueOnce(Object.assign([], { count: 0 }))
+        .mockResolvedValueOnce([{
+          status: "active",
+          permissions_json: { read: true, futuresDemoTrade: true },
+          withdrawal_access_absent: true,
+          credential_version: 3,
+          connection_version: 5,
+        }])
+        .mockResolvedValueOnce([{
+          mode: "futures-demo",
+          market: "futures",
+          state: "running",
+          lease_owner: "owner-1",
+          order_status: "claimed",
+        }])
+        .mockResolvedValueOnce(Object.assign([], { count: 1 }))
+        .mockResolvedValueOnce(Object.assign([], { count: 1 })),
+    };
+    database.begin.mockImplementationOnce(async (callback: (sql: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const submit = vi.fn();
+
+    await expect(repository.submitAuthorizedOrder({
+      run,
+      owner: "owner-1",
+      candleCloseAt: 1_700_000_000_000,
+      now: 1_700_000_000_001,
+      ...version,
+    }, submit)).resolves.toEqual({ authorized: false });
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(transaction.unsafe).toHaveBeenCalledTimes(4);
+    expect(String(transaction.unsafe.mock.calls[3]?.[0])).toContain("lease_owner=null");
+    expect(transaction.unsafe.mock.calls[3]?.[1]).toEqual([
+      run.id, run.userId, 1_700_000_000_001, "owner-1",
+    ]);
+  });
+
+  it("commits durable unknown evidence before surfacing an ambiguous submission failure", async () => {
+    const transaction = {
+      unsafe: vi.fn()
+        .mockResolvedValueOnce(Object.assign([], { count: 0 }))
+        .mockResolvedValueOnce([{
+          status: "active",
+          permissions_json: { read: true, futuresTrade: true, liveVerified: true },
+          withdrawal_access_absent: true,
+          credential_version: 3,
+          connection_version: 5,
+        }])
+        .mockResolvedValueOnce([{
+          mode: "live",
+          market: "futures",
+          state: "running",
+          lease_owner: "owner-1",
+          order_status: "claimed",
+        }])
+        .mockResolvedValueOnce(Object.assign([], { count: 1 })),
+    };
+    database.begin.mockImplementationOnce(async (callback: (sql: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const failure = new Error("network unavailable");
+
+    await expect(repository.submitAuthorizedOrder({
+      run: { ...run, mode: "live" },
+      owner: "owner-1",
+      candleCloseAt: 1_700_000_000_000,
+      now: 1_700_000_000_001,
+      credentialVersion: 3,
+      connectionVersion: 5,
+    }, async () => { throw failure; })).rejects.toBe(failure);
+
+    expect(String(transaction.unsafe.mock.calls[3]?.[0])).toContain("submission_in_progress");
+    expect(transaction.unsafe).toHaveBeenCalledTimes(4);
   });
 });
 

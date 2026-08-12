@@ -343,6 +343,38 @@ describe("control center product experience", () => {
     expect(screen.getByText("2 個需注意")).toBeInTheDocument();
   });
 
+  it("prioritizes danger alerts and reports the full alert count beyond the two-card summary", () => {
+    const dashboard = payload([
+      run("risk", "Risk Near Limit", "BTCUSDT", "running"),
+      run("danger", "Critical Failure", "ETHUSDT", "error"),
+    ], [{
+      symbol: "BTCUSDT",
+      side: "long",
+      leverage: "2",
+      size: "1",
+      openValue: "90",
+      unrealizedPnl: "4",
+      updatedAt: observedAt,
+    }]);
+    dashboard.account!.lastErrorCode = "account_sync_unavailable";
+    render(<RunPortfolioDashboard autoRefresh={false} initialPayload={dashboard} />);
+
+    const alertPanel = screen.getByRole("heading", { name: "需要處理" }).closest("aside");
+    expect(alertPanel).not.toBeNull();
+    const alertView = within(alertPanel!);
+    expect(alertView.getByText("3")).toBeInTheDocument();
+    const visibleAlerts = alertView.getAllByRole("listitem");
+    expect(visibleAlerts).toHaveLength(2);
+    expect(visibleAlerts[0]).toHaveAttribute("data-tone", "danger");
+    expect(within(visibleAlerts[0]!).getByText("Critical Failure 需要處理")).toBeInTheDocument();
+    expect(alertView.queryByText("Risk Near Limit 曝險接近上限")).not.toBeInTheDocument();
+
+    fireEvent.click(alertView.getByRole("button", { name: "查看全部提醒" }));
+    expect(alertView.getAllByRole("listitem")).toHaveLength(3);
+    expect(alertView.getByText("Risk Near Limit 曝險接近上限")).toBeInTheDocument();
+    expect(alertView.getByRole("button", { name: "收合提醒" })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("requires the persisted market and symbol target in dashboard API payloads", () => {
     const persisted = run("target", "Persisted target", "BTCUSDT", "running", {
       allowedSymbols: ["BTCUSDT", "ETHUSDT"],

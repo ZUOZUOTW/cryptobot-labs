@@ -31,6 +31,7 @@ describe("mobile layout safeguards", () => {
       /@media \(max-width: 44rem\)[\s\S]*?\.workshop-toolbar\s*\{[\s\S]*?flex-direction:\s*column;/,
     );
     expect(workshop).toMatch(/\.workshop-mode \.workshop-clear\s*\{[\s\S]*?grid-column:\s*1 \/ -1;/);
+    expect(workshop).toMatch(/\.workshop-clear\s*\{[\s\S]*?min-height:\s*2\.75rem;/);
   });
 
   it("reserves vertical scrolling while enabling workshop swipe navigation", () => {

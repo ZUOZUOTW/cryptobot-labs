@@ -29,6 +29,7 @@ describe("historical backtest to Agent run", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       strategyVersionId: "sv_1", botName: config.name, configurationHash: "a".repeat(64),
+      mode: "futures-demo",
       riskPolicy: { allowedSymbols: ["BTCUSDT"], maxLeverage: String(config.leverage), operationMode: "automatic" } });
     expect(await screen.findByText(/雲端運行已啟動/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "前往雲端運行控制中心" })).toHaveAttribute("href", "/runs");
@@ -36,6 +37,14 @@ describe("historical backtest to Agent run", () => {
 
   it("never renders deployment controls for a failed or incomplete backtest", () => {
     const { container } = render(<CreateRunPanel backtest={{ ...backtest, status: "failed", result: null }} config={config} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("never offers the visual cloud executor for spot or custom JavaScript strategies", () => {
+    const { container, rerender } = render(<CreateRunPanel backtest={backtest} config={{ ...config, market: "spot" }} />);
+    expect(container).toBeEmptyDOMElement();
+
+    rerender(<CreateRunPanel backtest={backtest} config={{ ...config, source: "export default () => ({ action: 'hold', reason: 'wait' })" }} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

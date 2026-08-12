@@ -5,6 +5,8 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
+import type { FillInput, OrderInput } from "../db/repositories/activity";
+import type { OrderStatus } from "../packages/trading-core/src/orders/types";
 import { createActivityRepository } from "../db/repositories";
 
 class Statement implements ControlPlaneStatement {
@@ -21,10 +23,10 @@ class Database implements ControlPlaneDatabase {
   prepare(sql:string):ControlPlaneStatement{return new Statement(this.raw.prepare(sql));}
   async batch<T extends readonly ControlPlaneStatement[]>(items:T):Promise<ControlPlaneRunResult[]>{this.raw.exec("BEGIN IMMEDIATE");try{const rows=[];for(const item of items)rows.push(await item.run());this.raw.exec("COMMIT");return rows;}catch(error){this.raw.exec("ROLLBACK");throw error;}}
 }
-const order=(state="acknowledged")=>({id:"order_a",deploymentId:"dep_a",clientOrderId:"client_a",exchangeOrderId:"exchange_a",
+const order=(state: OrderStatus="acknowledged"): OrderInput=>({id:"order_a",deploymentId:"dep_a",clientOrderId:"client_a",exchangeOrderId:"exchange_a",
   market:"spot",symbol:"BTCUSDT",side:"buy",positionSide:"net",orderType:"market",state,price:null,quantity:"1",
   filledQuantity:state==="filled"?"1":"0",averageFillPrice:state==="filled"?"100":null,notional:"100",correlationId:"corr_a",createdAt:100,updatedAt:200});
-const fill=()=>({id:"fill_a",exchangeFillId:"exchange_fill_a",price:"100",quantity:"1",fee:"0.1",feeCurrency:"USDT",realizedPnl:null,filledAt:210});
+const fill=(): FillInput=>({id:"fill_a",exchangeFillId:"exchange_fill_a",price:"100",quantity:"1",fee:"0.1",feeCurrency:"USDT",realizedPnl:null,filledAt:210});
 
 describe("order activity repository",()=>{
   let database:Database; let activity:ReturnType<typeof createActivityRepository>;

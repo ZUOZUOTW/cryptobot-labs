@@ -3,18 +3,25 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { POST as publicHistoricalBacktestPost } from "../app/api/weex/historical-backtest/route";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
 import { createBacktestRepository, createStrategyVersionRepository } from "../db/repositories";
 import { cloneStrategyBlock } from "../data/strategies";
 import { safeCanonicalJsonStringify } from "../lib/control-plane/schemas";
+import type { BacktestJobCreateDto } from "../lib/control-plane/types";
 import {
   createHistoricalBacktestHandlers,
   createHistoricalBacktestService,
   type HistoricalBacktestService,
 } from "../lib/server/backtests";
 import type { BotConfig } from "../lib/types";
-import type { Candle, HistoricalDataset } from "../packages/trading-core/src";
+import {
+  SandboxExecutionError,
+  type Candle,
+  type HistoricalDataset,
+  type SandboxEvaluation,
+} from "../packages/trading-core/src";
 import {
   DEFAULT_FUNDING_MARK_MAX_AGE_MS, FUNDING_HISTORY_LIMIT, MAX_FUNDING_MARK_PAGES,
   WeexPublicClient, type HistoricalFundingDataset, type HttpTransport,
@@ -105,11 +112,24 @@ const funding = (complete = true): HistoricalFundingDataset => ({
     fundingLimit: 100, markMaxAgeMs: 14_400_000, markPages: 1, markCandles: 3, truncated: false },
 });
 
+const installSourceStrategy = async (
+  database: SqliteDatabase,
+  source: string,
+  overrides: Partial<BotConfig> = {},
+): Promise<{ config: BotConfig; scriptHash: string }> => {
+  const custom = config({ blocks: [], source, ...overrides });
+  const scriptHash = await digestText(source);
+  database.raw.prepare("UPDATE strategy_versions SET config_hash=?,config_json=?,source_hash=?,source_code=? WHERE id='version_a'")
+    .run(await digest(custom), JSON.stringify(custom), scriptHash, source);
+  return { config: custom, scriptHash };
+};
+
 describe("historical backtest API", () => {
   let database: SqliteDatabase;
   let service: HistoricalBacktestService;
-  let collectCandles: ReturnType<typeof vi.fn>;
-  let collectFunding: ReturnType<typeof vi.fn>;
+  let collectCandles: Mock<(request: BacktestJobCreateDto, signal?: AbortSignal) => Promise<HistoricalDataset>>;
+  let collectFunding: Mock<(request: { market: "futures"; symbol: string; startTime: number; endTime: number;
+    strict: true }, signal?: AbortSignal) => Promise<HistoricalFundingDataset>>;
   let ids: number;
   let clock: number;
 
@@ -317,7 +337,7 @@ describe("historical backtest API", () => {
 
   it("runs custom source in QuickJS and persists its verified script hash", async () => {
     const source = `export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"test-hold"});`;
-    const custom = config({ source });
+    const custom = config({ blocks: [], source });
     const hash = await digest(custom);
     database.raw.prepare("UPDATE strategy_versions SET config_hash=?,config_json=?,source_hash=?,source_code=? WHERE id='version_a'")
       .run(hash, JSON.stringify(custom), await digestText(source), source);
@@ -328,6 +348,71 @@ describe("historical backtest API", () => {
     database.raw.prepare("UPDATE strategy_versions SET source_hash=? WHERE id='version_a'").run("a".repeat(64));
     await expect(service.create("usr_a","custom-tampered",request())).rejects.toMatchObject({status:500,code:"strategy_integrity_failed"});
     expect(collectCandles).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies long-only direction policy to source signals before historical matching", async () => {
+    const source = `export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"sell",reason:"attempt-short"});`;
+    const { scriptHash } = await installSourceStrategy(database, source, { tradeDirection: "long" });
+
+    await expect(service.create("usr_a", "source-long-only", request()))
+      .resolves.toMatchObject({ job: { status: "succeeded" } });
+    const stored = database.raw.prepare("SELECT metrics_json AS metrics,script_hash AS scriptHash FROM backtest_results").get() as {
+      metrics: string;
+      scriptHash: string;
+    };
+    expect(JSON.parse(stored.metrics)).toMatchObject({ trades: 0 });
+    expect(stored.scriptHash).toBe(scriptHash);
+  });
+
+  it.each(["deadline-exceeded", "resource-exhausted"] as const)(
+    "fails source evidence on the first sandbox %s error",
+    async (code) => {
+      const source = `export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"never"});`;
+      await installSourceStrategy(database, source);
+      const evaluate = vi.fn(async () => {
+        throw new SandboxExecutionError(code, "sandbox budget exceeded");
+      });
+      const dispose = vi.fn(async () => undefined);
+      let localIds = 0;
+      const guarded = createHistoricalBacktestService({
+        backtests: createBacktestRepository(database), strategies: createStrategyVersionRepository(database),
+        marketData: { collectHistoricalCandles: collectCandles, collectHistoricalFunding: collectFunding },
+        now: () => clock, newId: (prefix) => `${prefix}_fatal_${++localIds}`,
+        createSandbox: async () => ({ evaluate, dispose }),
+      });
+
+      await expect(guarded.create("usr_a", `source-${code}`, request()))
+        .rejects.toMatchObject({ status: 422, code: "backtest_execution_failed" });
+      expect(evaluate).toHaveBeenCalledTimes(1);
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(database.raw.prepare("SELECT status,error_code FROM backtest_jobs").get())
+        .toEqual({ status: "failed", error_code: "backtest_execution_failed" });
+      expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_results").get()).toEqual({ count: 0 });
+    },
+  );
+
+  it("caps cumulative sandbox execution across candles and never records success", async () => {
+    const source = `export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"slow"});`;
+    const { scriptHash } = await installSourceStrategy(database, source);
+    const evaluate = vi.fn(async ({ input }: SandboxEvaluation) => ({
+      signal: { id: `slow-${input.now}`, action: "hold" as const, reason: "slow", createdAt: input.now },
+      scriptHash,
+      durationMs: 3_000,
+    }));
+    const dispose = vi.fn(async () => undefined);
+    let localIds = 0;
+    const guarded = createHistoricalBacktestService({
+      backtests: createBacktestRepository(database), strategies: createStrategyVersionRepository(database),
+      marketData: { collectHistoricalCandles: collectCandles, collectHistoricalFunding: collectFunding },
+      now: () => clock, newId: (prefix) => `${prefix}_cumulative_${++localIds}`,
+      createSandbox: async () => ({ evaluate, dispose }),
+    });
+
+    await expect(guarded.create("usr_a", "source-cumulative-budget", request()))
+      .rejects.toMatchObject({ status: 422, code: "backtest_execution_failed" });
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM backtest_results").get()).toEqual({ count: 0 });
   });
 
   it("enforces authenticated same-origin POST and exact JSON at the handler boundary", async () => {
@@ -384,5 +469,20 @@ describe("historical backtest API", () => {
       expect(response.status).toBe(200);
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
+  });
+
+  it("rejects source code at the unauthenticated quick-backtest boundary", async () => {
+    const source = `export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"test"});`;
+    const response = await publicHistoricalBacktestPost(new Request("https://labs.example/api/weex/historical-backtest", {
+      method: "POST",
+      headers: { host: "labs.example", origin: "https://labs.example", "content-type": "application/json" },
+      body: JSON.stringify({
+        config: config({ blocks: [], source }),
+        assumptions: { feeRate: "0.001", slippageRate: "0.0005", fundingMode: "none", gapPolicy: "fail" },
+      }),
+    }));
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: { code: "source_backtest_requires_auth" } });
   });
 });

@@ -7,15 +7,18 @@ import { benchmarkSeries } from "../lib/benchmark-series";
 import BotsPage from "../app/bots/page";
 import FavoritesPage from "../app/favorites/page";
 import { PlatformAuthProvider } from "../components/PlatformAuthProvider";
+import { I18nProvider } from "../components/I18nProvider";
 import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
 import { StrategyShareActions } from "../components/StrategyShareActions";
+import { BotDownloadButton } from "../components/BotCard";
 import { BOT_CATALOG } from "../data/bots";
 import { STRATEGY_PRESETS } from "../data/strategies";
 import { signInDemo } from "../lib/demo-auth";
 import type { PublicStrategyPublication } from "../lib/strategy-publications";
 import type { WeexHistoricalPerformance } from "../lib/types";
 import { clearWeexBotPerformanceCache } from "../lib/weex-historical-client";
+import { verifiedHistoricalPerformance } from "./fixtures/verified-historical-performance";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -34,18 +37,15 @@ const REAL_RETURNS: Record<string, number> = {
 };
 const historicalReturn = (botId: string) => REAL_RETURNS[botId] ?? 1;
 
-const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id, {
-  metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
-  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)) })),
-  generatedAt: "2026-07-13T12:00:00.000Z",
-  disclaimer: "WEEX 歷史行情回測，不代表未來績效",
-  evidence: {
-    level: "historical", provider: "WEEX", market: bot.market, symbol: bot.symbol, interval: bot.timeframe,
-    startTime: 1_751_846_400_000, endTime: 1_754_438_400_000, collectedAt: 1_754_438_400_000,
-    candleCount: bot.market === "spot" ? 180 : 720, complete: true, feeRate: "0.001", slippageRate: "0.0005",
-    fundingIncluded: false, datasetDigest: "d".repeat(64), engineVersion: "test",
-  },
-}]));
+const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id,
+  verifiedHistoricalPerformance(bot, {
+    metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
+    equityCurve: bot.equityCurve.map((point, index) => ({
+      ...point,
+      value: 100 + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)),
+    })),
+  }),
+]));
 
 const ownedPublication: PublicStrategyPublication = {
   slug: "strategy-ownedrelease",
@@ -145,8 +145,53 @@ describe("landing page", () => {
     expect(within(featured).getAllByRole("link", { name: /查看策略/ })).toHaveLength(3);
     expect(within(featured).getAllByRole("link", { name: /直接套用/ })).toHaveLength(3);
     expect(within(featured).getAllByRole("button", { name: /啟動策略/ })).toHaveLength(3);
-    expect(within(featured).queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
+    expect(within(featured).getAllByRole("button", { name: /下載策略/ })).toHaveLength(3);
     expect(within(featured).getAllByText("公開歷史行情回測，不代表未來績效")).toHaveLength(3);
+  });
+
+  it("downloads an importable official package only after verified historical evidence and confirmation", async () => {
+    const bot = BOT_CATALOG[0]!;
+    const performance = performanceFixture()[bot.id]!;
+    const objectUrl = "blob:verified-official-package";
+    let downloadedBlob: Blob | undefined;
+    let filename = "";
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn((blob: Blob) => {
+      downloadedBlob = blob;
+      return objectUrl;
+    }) });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filename = this.download; });
+    const user = userEvent.setup();
+    render(<BotDownloadButton bot={bot} historicalPerformance={performance} />);
+
+    const trigger = screen.getByRole("button", { name: `下載策略：${bot.name}` });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
+    expect(dialog).toHaveTextContent("已驗證的 WEEX 歷史行情回測證據");
+    await user.click(within(dialog).getByRole("button", { name: "確認下載" }));
+
+    await waitFor(() => expect(downloadedBlob).toBeDefined());
+    expect(filename).toBe(`${bot.id}-weex-strategy.zip`);
+    const imported = await import("../lib/bot-package").then(({ importBotPackage }) =>
+      importBotPackage(new File([downloadedBlob!], filename, { type: "application/zip" })));
+    expect(imported.config.id).toBe(bot.id);
+    expect(imported.report).toBeNull();
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith(objectUrl));
+    expect(trigger).toHaveFocus();
+  });
+
+  it("does not expose an official package download without verified performance", () => {
+    const { container } = render(<BotDownloadButton bot={BOT_CATALOG[0]!} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("does not expose an official download for the same market identity with a different exact config hash", () => {
+    const bot = BOT_CATALOG[0]!;
+    const performance = verifiedHistoricalPerformance(bot);
+    const changed = { ...bot, leverage: bot.leverage + 1 };
+    const { container } = render(<BotDownloadButton bot={changed} historicalPerformance={performance} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("keeps the removed ranking preview off the homepage", async () => {
@@ -248,7 +293,8 @@ describe("bot catalog route", () => {
     expect(screen.getAllByRole("article")).toHaveLength(20);
     expect(screen.queryByRole("heading", { name: "登入後，繼續探索完整策略庫" })).not.toBeInTheDocument();
     expect(screen.getByText("顯示 20 / 20 組符合策略")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /啟動策略/ })).toHaveLength(20);
+    expect(screen.getAllByRole("button", { name: /啟動策略/ }))
+      .toHaveLength(BOT_CATALOG.filter(({ market }) => market === "futures").length);
   });
 
   it("shows newly published community strategies with an uncached index request", async () => {
@@ -544,10 +590,21 @@ describe("bot detail route", () => {
       const { unmount } = render(view);
       expect(screen.getByRole("heading", { level: 1, name: bot.name })).toBeInTheDocument();
       expect(screen.getAllByRole("link", { name: "直接套用" }).every((link) => link.getAttribute("href") === `/workshop?bot=${bot.id}&version=1`)).toBe(true);
-      expect(screen.getAllByRole("button", { name: `啟動策略：${bot.name}` })).toHaveLength(2);
-      expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
+      expect(screen.queryAllByRole("button", { name: `啟動策略：${bot.name}` }))
+        .toHaveLength(bot.market === "futures" ? 2 : 0);
+      expect(screen.queryByRole("button", { name: /下載策略/ })).not.toBeInTheDocument();
       unmount();
     }
+  });
+
+  it("localizes each label in an official strategy parameter summary", async () => {
+    localStorage.setItem("cryptobot-locale", "en");
+    const view = await BotDetailPage({ params: Promise.resolve({ id: "breakout-hunter" }) });
+    render(<I18nProvider initialLocale="en">{view}</I18nProvider>);
+
+    expect(await screen.findByText("Fast line period 5 · Slow line period 13 · Signal period 4"))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/快線週期 5|慢線週期 13/u)).not.toBeInTheDocument();
   });
 
   it("opens the safe cloud launcher from a futures strategy detail page", async () => {
@@ -558,22 +615,17 @@ describe("bot detail route", () => {
     await user.click(screen.getAllByRole("button", { name: "啟動策略：動能鍛造者" })[0]!);
 
     expect(await screen.findByRole("dialog", { name: "啟動 動能鍛造者" })).toBeInTheDocument();
-    expect(screen.getByText("WEEX LIVE / USDT")).toBeInTheDocument();
-    expect(await screen.findByText(/尚未完成合約真倉權限驗證/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
+    expect(screen.getByText("WEEX FUTURES DEMO / SUSDT")).toBeInTheDocument();
+    expect(await screen.findByText(/尚未完成合約 Demo 權限驗證/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" })).toBeDisabled();
   });
 
-  it("opens the real-funds spot cloud launcher without misrouting it to futures execution", async () => {
-    const user = userEvent.setup();
+  it("does not expose unsupported spot cloud execution", async () => {
     const view = await BotDetailPage({ params: Promise.resolve({ id: "orbit-dca" }) });
     render(view);
 
-    await user.click(screen.getAllByRole("button", { name: "啟動策略：軌道定投" })[0]!);
-
-    expect(screen.getByRole("dialog", { name: "啟動 軌道定投" })).toBeInTheDocument();
-    expect(screen.getByText("WEEX LIVE / USDT")).toBeInTheDocument();
-    expect(await screen.findByText(/尚未完成現貨真倉權限驗證/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "啟動策略：軌道定投" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "直接套用" })).toHaveLength(2);
   });
 
   it("renders full metrics, equity, monthly performance, and strategy guidance", async () => {

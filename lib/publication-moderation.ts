@@ -1,4 +1,5 @@
 import { canonicalPublicDisplayName } from "./display-name";
+import { validateStrategyName } from "./strategy-name";
 
 export type PublicTextValidation =
   | { valid: true; value: string }
@@ -19,6 +20,8 @@ const canonicalPublicText = (value: unknown): string | null => {
 // reserved brands and English trust/performance claims. This is intentionally
 // not a general transliterator for supported non-Latin languages.
 const CONFUSABLE_ASCII: Readonly<Record<string, string>> = Object.freeze({
+  // Cherokee small letter NA visually spoofs a Latin W after locale folding.
+  "Ꮤ": "w", "ꮤ": "w",
   "α": "a", "а": "a",
   "β": "b", "в": "b",
   "ϲ": "c", "с": "c",
@@ -128,6 +131,19 @@ export function validatePublicPublisherName(value: unknown): PublicTextValidatio
   return hasPatternMatch(RESERVED_PUBLISHER_PATTERNS, nativeSkeleton, skeleton)
     ? { valid: false }
     : { valid: true, value: canonical };
+}
+
+export function validatePublicStrategyName(value: unknown): PublicTextValidation {
+  const strategyName = validateStrategyName(value);
+  if (!strategyName.valid) return { valid: false };
+  const nativeSkeleton = nativeModerationSkeleton(strategyName.value);
+  const skeleton = moderationSkeleton(strategyName.value);
+  if (hasPatternMatch(FRAUDULENT_CLAIM_PATTERNS, nativeSkeleton, skeleton)) return { valid: false };
+  const mentionsBrand = hasPatternMatch(BRAND_PATTERNS, nativeSkeleton, skeleton);
+  if (mentionsBrand && hasPatternMatch(OFFICIAL_CLAIM_PATTERNS, nativeSkeleton, skeleton)) {
+    return { valid: false };
+  }
+  return { valid: true, value: strategyName.value };
 }
 
 export function validatePublicPublicationDescription(value: unknown): PublicTextValidation {

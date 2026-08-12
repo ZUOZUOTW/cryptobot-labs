@@ -1,6 +1,10 @@
 import { BOT_CATALOG } from "../../data/bots";
-import { createVisualHistoricalEvaluator } from "../historical-strategy";
-import { safeCanonicalJsonStringify } from "../control-plane/schemas";
+import { createVisualHistoricalEvaluator, historicalRiskPolicyForConfig } from "../historical-strategy";
+import {
+  attestHistoricalReport,
+  historicalConfigurationHash,
+  historicalScriptHash,
+} from "../historical-evidence";
 import type {
   BacktestReport, BotConfig, BotMetrics, EquityPoint, WeexHistoricalPerformance,
 } from "../types";
@@ -48,11 +52,6 @@ const DEFAULT_ASSUMPTIONS: PublicHistoricalBacktestAssumptions = {
 };
 
 const round = (value: number): number => Number(value.toFixed(2));
-const sha256 = async (value: string): Promise<string> => {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-};
-
 function exactDataset(dataset: HistoricalDataset, config: BotConfig, startTime: number, endTime: number, gapPolicy: "fail" | "disclose"): HistoricalDataset {
   const intervalMs = parseIntervalMs(config.timeframe);
   const candles = dataset.candles
@@ -146,17 +145,16 @@ function chartPoints(result: HistoricalBacktestResult, initialCapital: number): 
 async function evaluatorFor(config: BotConfig, createSandbox?: () => Promise<StrategySandbox>): Promise<{
   evaluator: StrategyEvaluator; sandbox: StrategySandbox | null; strategyHash: string;
 }> {
-  const configHash = await sha256(safeCanonicalJsonStringify(config, "public historical config", 262_144));
+  const configHash = historicalConfigurationHash(config);
   if (config.source === undefined) return { evaluator: createVisualHistoricalEvaluator(config), sandbox: null, strategyHash: configHash };
-  const visualPolicy = createVisualHistoricalEvaluator({ ...config, source: undefined });
-  const sourceHash = await sha256(config.source);
+  const sourceHash = historicalScriptHash(config)!;
   const sandbox = await (createSandbox ?? (() => createQuickJsStrategySandbox(BACKTEST_SANDBOX_BUDGET)))();
   return {
     sandbox,
     strategyHash: sourceHash,
     evaluator: {
       maximumLookback: 1024,
-      riskPolicy: visualPolicy.riskPolicy,
+      riskPolicy: historicalRiskPolicyForConfig(config),
       evaluate: async (input) => {
         const evaluated = await sandbox.evaluate({ source: config.source!, input, now: input.now, randomSeed: `${sourceHash}:${input.now}` });
         if (evaluated.scriptHash !== sourceHash) throw new Error("JavaScript 策略完整性驗證失敗");
@@ -201,7 +199,7 @@ export async function runWeexHistoricalPerformance(
       strict: true,
     })
     : null;
-  const configHash = await sha256(safeCanonicalJsonStringify(normalizedConfig, "public historical config", 262_144));
+  const configHash = historicalConfigurationHash(normalizedConfig);
   const prepared = await evaluatorFor(normalizedConfig, dependencies.createSandbox);
   const initialCapital = 10_000;
   const maintenanceMarginRate = normalizedConfig.market === "spot" ? undefined : String(Math.min(0.02, 0.5 / normalizedConfig.leverage));
@@ -238,18 +236,21 @@ export async function runWeexHistoricalPerformance(
     feeRate: normalizedAssumptions.feeRate,
     slippageRate: normalizedAssumptions.slippageRate,
     fundingIncluded: fundingDataset !== null,
+    gapPolicy: normalizedAssumptions.gapPolicy,
     datasetDigest: result.provenance.datasetDigest,
     engineVersion: PUBLIC_HISTORICAL_ENGINE_VERSION,
+    configurationHash: configHash,
+    strategyHash: configHash,
+    scriptHash: normalizedConfig.source === undefined ? null : prepared.strategyHash,
   };
-  return {
+  return attestHistoricalReport({
     seed: result.provenance.datasetDigest.slice(0, 8),
     generatedAt: new Date(evidence.collectedAt).toISOString(),
     metrics: metrics(result, window.startTime, window.endTime),
     equityCurve: chartPoints(result, initialCapital),
     directionalMetrics: directionalMetrics(result),
     disclaimer: WEEX_HISTORICAL_DISCLAIMER,
-    evidence,
-  };
+  }, evidence);
 }
 
 export async function runWeexBotCatalogPerformance(
@@ -285,6 +286,7 @@ export async function runWeexBotCatalogPerformance(
       return [bot.id, {
         metrics: report.metrics,
         equityCurve: report.equityCurve,
+        directionalMetrics: report.directionalMetrics,
         generatedAt: report.generatedAt,
         disclaimer: WEEX_HISTORICAL_DISCLAIMER,
         evidence: report.evidence!,

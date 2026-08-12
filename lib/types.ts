@@ -81,12 +81,24 @@ export interface WeexHistoricalEvidence {
   feeRate: string;
   slippageRate: string;
   fundingIncluded: boolean;
+  gapPolicy: "fail" | "disclose";
   datasetDigest: string;
   engineVersion: string;
+  /** SHA-256 of the canonical BotConfig used by the server-side run. */
+  configurationHash: string;
+  /** Hash of the immutable strategy configuration; source identity is recorded separately in scriptHash. */
+  strategyHash: string;
+  scriptHash: string | null;
+  /** Content binding only. This digest is not a server signature or proof of origin. */
+  attestation: {
+    scheme: "sha256-content-binding-v1";
+    digest: string;
+  };
 }
 export interface WeexHistoricalPerformance {
   metrics: BotMetrics;
   equityCurve: EquityPoint[];
+  directionalMetrics?: DirectionalBacktestMetrics;
   generatedAt: string;
   disclaimer: "WEEX 歷史行情回測，不代表未來績效";
   evidence: WeexHistoricalEvidence;

@@ -70,9 +70,21 @@ describe("public strategy loader trust boundary", () => {
     mocks.record = record({ publisherName: "WΕΕX Official" });
 
     await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toBeNull();
-    expect(mocks.keyParts).toEqual(["public-strategy-publication", "v2", "strategy-memberlegacy"]);
-    expect(mocks.tags).toEqual(["public-strategy-publication:v2:strategy-memberlegacy"]);
+    expect(mocks.keyParts).toEqual(["public-strategy-publication", "v3", "strategy-memberlegacy"]);
+    expect(mocks.tags).toEqual(["public-strategy-publication:v3:strategy-memberlegacy"]);
   });
+
+  it.each(["WΕΕX Official", "WEEX официальный"])(
+    "maps a legacy official-looking strategy name to not-found: %s",
+    async (name) => {
+      mocks.record = record({
+        name,
+        configJson: JSON.stringify({ ...config, name }),
+      });
+
+      await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toBeNull();
+    },
+  );
 
   it("still surfaces non-moderation data corruption instead of caching it as not-found", async () => {
     mocks.record = record({ configJson: "{" });

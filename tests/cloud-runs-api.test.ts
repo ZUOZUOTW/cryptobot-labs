@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     create: vi.fn(),
     findMatching: vi.fn(),
     hasActiveTargetConflict: vi.fn(),
+    modeForUser: vi.fn(),
     transition: vi.fn(),
     hasTransitionTargetConflict: vi.fn(),
   },
@@ -49,7 +50,7 @@ const conflict = {
   error: "cloud_run_target_conflict",
   message: "Another non-stopped cloud strategy already controls this WEEX account, market, and symbol. Stop it before starting this strategy.",
 };
-const launchRequest = () => new Request("https://cryptobot.example/api/cloud-runs", {
+const launchRequest = (overrides: Record<string, unknown> = {}) => new Request("https://cryptobot.example/api/cloud-runs", {
   method: "POST",
   headers: {
     "content-type": "application/json",
@@ -60,9 +61,9 @@ const launchRequest = () => new Request("https://cryptobot.example/api/cloud-run
     strategyVersionId: "strategy_version_1",
     botName: "BTC breakout",
     configurationHash: "a".repeat(64),
-    mode: "live",
-    liveConfirmation: { acknowledged: true, acceptedAt: Date.now() },
+    mode: "futures-demo",
     riskPolicy,
+    ...overrides,
   }),
 });
 const resumeRequest = () => new Request("https://cryptobot.example/api/cloud-runs/crun_1", {
@@ -74,6 +75,7 @@ const resumeRequest = () => new Request("https://cryptobot.example/api/cloud-run
 beforeEach(() => {
   for (const method of Object.values(mocks.repository)) method.mockReset();
   mocks.requireApiUser.mockReset().mockResolvedValue({ ok: true, user: { id: "user_1" } });
+  mocks.repository.modeForUser.mockResolvedValue("futures-demo");
 });
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -155,7 +157,30 @@ describe("cloud run target conflict API", () => {
     expect(mocks.repository.hasActiveTargetConflict).toHaveBeenCalledWith(expect.objectContaining({
       userId: "user_1",
       strategyVersionId: "strategy_version_1",
+      mode: "futures-demo",
     }));
+  });
+
+  it("fails live launch closed before persistence while the formal release gate is disabled", async () => {
+    const response = await POST(launchRequest({
+      mode: "live",
+      liveConfirmation: { acknowledged: true, acceptedAt: Date.now() },
+    }));
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "live_trading_disabled" });
+    expect(mocks.repository.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a live-funds confirmation on a Futures Demo request", async () => {
+    const response = await POST(launchRequest({
+      liveConfirmation: { acknowledged: true, acceptedAt: Date.now() },
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_request" });
+    expect(mocks.repository.create).not.toHaveBeenCalled();
   });
 
   it("keeps an exact idempotent replay ahead of target conflict classification", async () => {
@@ -183,6 +208,21 @@ describe("cloud run target conflict API", () => {
       userId: "user_1",
       id: "crun_1",
     });
+    expect(mocks.repository.transition).toHaveBeenCalledWith(expect.objectContaining({
+      allowLiveResume: false,
+    }));
+  });
+
+  it("fails a legacy live run resume closed before any state transition", async () => {
+    mocks.repository.modeForUser.mockResolvedValue("live");
+
+    const response = await PATCH(resumeRequest(), { params: Promise.resolve({ id: "crun_1" }) });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "live_trading_disabled" });
+    expect(mocks.repository.transition).not.toHaveBeenCalled();
+    expect(mocks.repository.hasTransitionTargetConflict).not.toHaveBeenCalled();
   });
 
   it("maps a raced target unique violation to the fixed 409 without logging tenant data", async () => {

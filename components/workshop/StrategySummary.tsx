@@ -22,9 +22,10 @@ export function StrategySummary({ config, onFlowCheck, validation }: StrategySum
   const flowCheck = checkedFlow?.fingerprint === configFingerprint ? checkedFlow.state : "idle";
   const positionBlock = config.blocks.find((block) => block.group === "position");
   const riskBlocks = config.blocks.filter((block) => block.group === "risk");
+  const usesJavaScript = config.source !== undefined;
 
   const testSignalFlow = () => {
-    const state = validation.valid && config.blocks.length > 0 ? "passed" : "failed";
+    const state = validation.valid && (usesJavaScript || config.blocks.length > 0) ? "passed" : "failed";
     setCheckedFlow({ fingerprint: configFingerprint, state });
     onFlowCheck?.(state);
   };
@@ -75,10 +76,14 @@ export function StrategySummary({ config, onFlowCheck, validation }: StrategySum
         <button className="button button--secondary" onClick={testSignalFlow} type="button">快速測試訊號流程</button>
         <p aria-live="polite" role={flowCheck === "idle" ? undefined : "status"}>
           {flowCheck === "passed"
-            ? `流程測試通過：${config.blocks.length} 個模組的連接、順序與參數皆可執行。`
+            ? usesJavaScript
+              ? "程式碼靜態合約通過；仍需完成隔離沙箱歷史回測，才能證明實際輸出可執行。"
+              : `流程測試通過：${config.blocks.length} 個模組的連接、順序與參數皆可執行。`
             : flowCheck === "failed"
               ? `流程尚未就緒：${validation.errors[0] ?? "請先加入策略模組"}`
-              : "手動檢查模組連接、順序與參數；不呼叫行情 API。"}
+              : usesJavaScript
+                ? "手動檢查程式碼的靜態合約；此步驟不執行程式碼或呼叫行情 API。"
+                : "手動檢查模組連接、順序與參數；不呼叫行情 API。"}
         </p>
       </div>
     </section>

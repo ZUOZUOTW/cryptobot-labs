@@ -31,6 +31,14 @@ jobs:
       - run: pnpm audit --prod --audit-level high
       - run: pnpm licenses:check
       - run: pnpm test
+      - run: pnpm --filter @cryptobot-labs/executor test
+      - run: pnpm --filter @cryptobot-labs/executor typecheck
+      - run: pnpm --filter @cryptobot-labs/executor build
+      - run: pnpm --filter @cryptobot-labs/weex-client test
+      - run: pnpm --filter @cryptobot-labs/weex-client typecheck
+      - run: pnpm --filter @cryptobot-labs/trading-core test
+      - run: pnpm --filter @cryptobot-labs/trading-core typecheck
+      - run: pnpm exec tsc --noEmit --incremental false
       - run: pnpm lint
       - run: pnpm build
         env:

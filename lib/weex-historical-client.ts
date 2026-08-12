@@ -1,5 +1,11 @@
 import type { BacktestReport, BotConfig, WeexHistoricalPerformance } from "./types";
 import { backtestConfigFingerprint } from "./backtest";
+import { BOT_CATALOG } from "../data/bots";
+import {
+  isVerifiedHistoricalReport,
+  isVerifiedHistoricalReportForConfig,
+  performanceAsReport,
+} from "./historical-evidence";
 
 interface HistoricalBacktestResponse { report?: BacktestReport; demo?: boolean; error?: { code?: string; message?: string } }
 export interface PublicHistoricalBacktestAssumptions {
@@ -29,16 +35,21 @@ export function clearWeexBotPerformanceCache(): void {
 
 const errorMessage = (body: HistoricalBacktestResponse | null): string => {
   if (body?.error?.code === "weex_history_incomplete") return "WEEX 歷史行情尚未完整覆蓋此區間，請稍後重試或更換時間週期。";
+  if (body?.error?.code === "source_backtest_requires_auth") return "JavaScript 策略必須登入並使用進階歷史回測。";
   if (body?.error?.code === "invalid_strategy") return "目前策略設定無法執行歷史行情回測。";
   return body?.error?.message || "暫時無法取得 WEEX 歷史行情，請稍後重試。";
 };
 
-export const isVerifiedWeexPerformance = (performance: WeexHistoricalPerformance | undefined): performance is WeexHistoricalPerformance => Boolean(
-  performance
-  && performance.evidence.provider === "WEEX"
-  && performance.evidence.level === "historical"
-  && performance.evidence.complete
-  && /^[a-f0-9]{64}$/i.test(performance.evidence.datasetDigest),
+export const isVerifiedWeexPerformance = (performance: WeexHistoricalPerformance | undefined): performance is WeexHistoricalPerformance => (
+  performance !== undefined && isVerifiedHistoricalReport(performanceAsReport(performance))
+);
+
+export const isVerifiedWeexPerformanceForStrategy = (
+  performance: WeexHistoricalPerformance | undefined,
+  strategy: BotConfig,
+): performance is WeexHistoricalPerformance => Boolean(
+  isVerifiedWeexPerformance(performance)
+  && isVerifiedHistoricalReportForConfig(performanceAsReport(performance), strategy)
 );
 
 export async function runWeexHistoricalBacktest(
@@ -58,7 +69,8 @@ export async function runWeexHistoricalBacktest(
     try { body = await response.json() as HistoricalBacktestResponse; } catch { body = null; }
     const evidence = body?.report?.evidence;
     if (!response.ok || !body?.report || body.demo === true || evidence?.provider !== "WEEX"
-      || evidence.level !== "historical" || !evidence.complete) throw new Error(errorMessage(body));
+      || evidence.level !== "historical" || !evidence.complete
+      || !isVerifiedHistoricalReportForConfig(body.report, config)) throw new Error(errorMessage(body));
     return body.report;
   })().finally(() => { backtestRequests.delete(key); });
   backtestRequests.set(key, pending);
@@ -76,7 +88,11 @@ export async function loadWeexBotPerformance(options: { forceRefresh?: boolean }
     if (!response.ok) throw new Error("WEEX 歷史績效暫時無法載入");
     const body = await response.json() as BotPerformanceResponse;
     if (!body.performances || typeof body.updatedAt !== "string") throw new Error("WEEX 歷史績效格式無效");
-    const value = { performances: body.performances, updatedAt: body.updatedAt, demo: body.demo === true };
+    const performances = Object.fromEntries(BOT_CATALOG.flatMap((bot) => {
+      const performance = body.performances?.[bot.id];
+      return isVerifiedWeexPerformanceForStrategy(performance, bot) ? [[bot.id, performance] as const] : [];
+    }));
+    const value = { performances, updatedAt: body.updatedAt, demo: body.demo === true };
     if (!value.demo) botPerformanceCache = { value, expiresAt: Date.now() + BOT_PERFORMANCE_CACHE_TTL_MS };
     return value;
   })().finally(() => {

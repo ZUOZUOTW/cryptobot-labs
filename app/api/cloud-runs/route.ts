@@ -5,7 +5,9 @@ import {
   createCloudRunRepository,
   isRecentLiveConfirmation,
   parseCloudRisk,
+  type CloudRunMode,
 } from "@/lib/server/cloud-runs";
+import { productionLiveReady } from "@/lib/server/demo-mode";
 import { env } from "@/lib/server/platform-env";
 import { requireApiUser, platformIdentityProvider, deriveWorkspaceUserId } from "@/lib/server/auth";
 
@@ -73,16 +75,22 @@ export async function POST(request: Request): Promise<Response> {
   const value = body as Record<string, unknown>;
   const risk = parseCloudRisk(value.riskPolicy);
   const now = Date.now();
+  const mode: CloudRunMode | null = value.mode === "futures-demo" || value.mode === "live" ? value.mode : null;
   if (typeof value.strategyVersionId !== "string" || typeof value.botName !== "string"
-    || typeof value.configurationHash !== "string" || value.mode !== "live" || !risk
-    || !isRecentLiveConfirmation(value.liveConfirmation, now)) {
-    return response(400, { error: "live_confirmation_required" });
+    || typeof value.configurationHash !== "string" || !mode || !risk) {
+    return response(400, { error: "invalid_request" });
+  }
+  if (mode === "live" && (!productionLiveReady() || !isRecentLiveConfirmation(value.liveConfirmation, now))) {
+    return response(503, { error: "live_trading_disabled" });
+  }
+  if (mode === "futures-demo" && value.liveConfirmation !== undefined) {
+    return response(400, { error: "invalid_request" });
   }
   const repository = createCloudRunRepository(database);
   const input = {
     id: await runId(identity.user.id, key),
     userId: identity.user.id, strategyVersionId: value.strategyVersionId, name: value.botName,
-    configurationHash: value.configurationHash, mode: "live" as const, risk, now,
+    configurationHash: value.configurationHash, mode, risk, now,
   };
   let run;
   try {

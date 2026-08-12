@@ -15,6 +15,7 @@ import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "..
 import { validateConfig } from "../../lib/strategy-validation";
 import { captureAttribution } from "../../lib/attribution";
 import { resolvedTradeDirection } from "../../lib/trade-direction";
+import type { FormalBacktestEvidence } from "../../lib/formal-backtest-report";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -88,6 +89,7 @@ const MOBILE_WORKSHOP_STEPS = [
 interface AssociatedReport {
   fingerprint: string;
   report: BacktestReport;
+  formal?: Pick<FormalBacktestEvidence, "strategyVersionId" | "backtestJobId">;
 }
 
 interface AssociatedFlowCheck {
@@ -104,6 +106,7 @@ export default function WorkshopPage() {
   const [mobileMessage, setMobileMessage] = useState("");
   const [mobileStep, setMobileStep] = useState<MobileWorkshopStep>("build");
   const mobileSwipeStart = useRef<{ x: number; y: number } | null>(null);
+  const configFingerprintRef = useRef("");
 
   useEffect(() => {
     let active = true;
@@ -167,10 +170,16 @@ export default function WorkshopPage() {
 
   const validation = useMemo(() => validateConfig(config), [config]);
   const configFingerprint = useMemo(() => backtestConfigFingerprint(config), [config]);
+  useEffect(() => { configFingerprintRef.current = configFingerprint; }, [configFingerprint]);
   const currentReport = associatedReport?.fingerprint === configFingerprint ? associatedReport.report : null;
+  const currentFormalEvidence = associatedReport?.fingerprint === configFingerprint ? associatedReport.formal : undefined;
   const currentFlowCheck: SignalFlowCheckState = associatedFlowCheck?.fingerprint === configFingerprint
     ? associatedFlowCheck.state
     : "untested";
+  const beginFormalReport = () => {
+    setAssociatedReport(null);
+    setMobileMessage("正在固定策略版本並建立正式歷史回測證據…");
+  };
   const mobileStepIndex = MOBILE_WORKSHOP_STEPS.findIndex((step) => step.id === mobileStep);
 
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
@@ -235,13 +244,22 @@ export default function WorkshopPage() {
     setAssociatedReport({ fingerprint: configFingerprint, report });
     setMobileMessage("回測完成，可保存或發布策略");
   };
-  const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
+  const acceptFormalReport = (evidence: FormalBacktestEvidence) => {
+    if (configFingerprintRef.current !== configFingerprint) return;
+    setAssociatedReport({
+      fingerprint: configFingerprint,
+      report: evidence.report,
+      formal: { strategyVersionId: evidence.strategyVersionId, backtestJobId: evidence.backtestJobId },
+    });
+    setMobileMessage("正式歷史回測完成，可匯出或發布策略");
+  };
+  const acceptImport = (importedConfig: BotConfig, report: BacktestReport | null) => {
     const next = cloneConfig(importedConfig);
     const saved = saveDraft(next);
     setDraftError(saved.ok ? "" : draftSaveWarning("無法儲存匯入策略草稿"));
     setConfig(next);
     setMode(next.source === undefined ? "visual" : "javascript");
-    setAssociatedReport({ fingerprint: backtestConfigFingerprint(next), report });
+    setAssociatedReport(report ? { fingerprint: backtestConfigFingerprint(next), report } : null);
     return { ok: true } as const;
   };
 
@@ -367,11 +385,16 @@ export default function WorkshopPage() {
             validation={validation}
           />
           <div className="backtest-track">
-            <p className="backtest-track__label">快速驗證 · 公開歷史 K 線 · 無需登入</p>
+            <p className="backtest-track__label">{config.source === undefined
+              ? "快速驗證 · 公開歷史 K 線 · 無需登入"
+              : "進階歷史回測"}</p>
             <BacktestPanel
               config={config}
+              onRun={config.source === undefined
+                ? () => setMobileMessage("正在取得公開歷史行情並執行回測…")
+                : beginFormalReport}
+              onFormalReport={acceptFormalReport}
               onReport={acceptReport}
-              onRun={() => setMobileMessage("正在取得公開歷史行情並執行回測…")}
               restoredReport={currentReport}
               validation={validation}
             />
@@ -383,6 +406,7 @@ export default function WorkshopPage() {
             flowCheckState={currentFlowCheck}
             onImport={acceptImport}
             report={currentReport}
+            formalEvidence={currentFormalEvidence}
           />
         </div>
       </div>
@@ -395,7 +419,12 @@ export default function WorkshopPage() {
             <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行歷史行情回測。" : validation.errors.join("；"))} type="button">檢查</button>
           )}
           {mobileStep === "test" && (
-            <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => document.querySelector<HTMLButtonElement>(".backtest-run")?.click()} type="button">回測</button>
+            <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => {
+              setMobileMessage(config.source === undefined
+                ? "正在取得公開歷史行情並執行回測…"
+                : "正在固定策略版本並建立正式歷史回測證據…");
+              document.querySelector<HTMLButtonElement>(config.source === undefined ? ".backtest-run" : ".historical-submit")?.click();
+            }} type="button">回測</button>
           )}
           {mobileStepIndex < MOBILE_WORKSHOP_STEPS.length - 1 && (
             <button className="workshop-mobile-actions__next" aria-label="行動列：下一步" onClick={() => moveToMobileStep(mobileStepIndex + 1)} type="button">下一步</button>

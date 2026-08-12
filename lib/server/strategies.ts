@@ -1,7 +1,11 @@
 import type { SavedStrategyVersionRecord } from "../../db/repositories";
 import { STRATEGY_BLOCKS } from "../../data/strategies";
 import type { BotConfig } from "../types";
-import { canonicalizeBotConfig, validateConfig } from "../strategy-validation";
+import {
+  canonicalizeBotConfig,
+  hasStrictBotConfigShape,
+  validateConfig,
+} from "../strategy-validation";
 import { validateStrategyName } from "../strategy-name";
 import { safeCanonicalJsonStringify } from "../control-plane/schemas";
 import { createVisualHistoricalEvaluator } from "../historical-strategy";
@@ -34,19 +38,30 @@ const parseBody = (value: unknown): { config: BotConfig } => {
   if (config === null || typeof config !== "object" || Array.isArray(config)) throw new HttpProblem(400, "invalid_request");
   const strategyName = validateStrategyName((config as { name?: unknown }).name);
   if (!strategyName.valid) throw new HttpProblem(422, "invalid_strategy_name");
-  let evaluator: ReturnType<typeof createVisualHistoricalEvaluator>;
   const source = Object.hasOwn(config, "source") ? (config as { source?: unknown }).source : undefined;
-  if (source !== undefined && (typeof source !== "string" || source.length < 1 || source.length > 262_144)) {
+  if (source !== undefined && typeof source !== "string") {
     throw new HttpProblem(422, "invalid_strategy_configuration");
   }
-  try { evaluator = createVisualHistoricalEvaluator({ ...(config as BotConfig), source: undefined }); }
-  catch { throw new HttpProblem(422, "invalid_strategy_configuration"); }
   const order = new Map(STRATEGY_BLOCKS.map((block, index) => [block.id, index]));
-  const canonical = canonicalizeBotConfig({ ...evaluator.config, ...(source === undefined ? {} : { source }) } as BotConfig);
-  if (!validateConfig(canonical).valid) throw new HttpProblem(422, "invalid_strategy_configuration");
-  return { config: { ...canonical,
-    blocks: [...evaluator.config.blocks].sort((left, right) => order.get(left.id)! - order.get(right.id)!),
-  } as BotConfig };
+  if (source === undefined) {
+    let evaluator: ReturnType<typeof createVisualHistoricalEvaluator>;
+    try { evaluator = createVisualHistoricalEvaluator({ ...(config as BotConfig), source: undefined }); }
+    catch { throw new HttpProblem(422, "invalid_strategy_configuration"); }
+    const canonical = canonicalizeBotConfig(evaluator.config as BotConfig);
+    if (!validateConfig(canonical).valid) throw new HttpProblem(422, "invalid_strategy_configuration");
+    return { config: { ...canonical,
+      blocks: [...evaluator.config.blocks].sort((left, right) => order.get(left.id)! - order.get(right.id)!),
+    } as BotConfig };
+  }
+
+  if (!hasStrictBotConfigShape(config) || !validateConfig(config).valid) {
+    throw new HttpProblem(422, "invalid_strategy_configuration");
+  }
+  const canonical = canonicalizeBotConfig(config as BotConfig);
+  return { config: {
+    ...canonical,
+    blocks: [...canonical.blocks].sort((left, right) => order.get(left.id)! - order.get(right.id)!),
+  } };
 };
 
 export function createStrategySaveService(dependencies: {

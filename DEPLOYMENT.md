@@ -31,3 +31,24 @@ migration.
 4. Smoke-test both an old-writer insert (without explicit `market`/`symbol`)
    and rejection of equivalent aliases such as `BTC_USDT` and `CMT_BTCUSDT`
    before releasing traffic.
+
+## Formal member-authentication gate
+
+The current runtime accepts only Supabase's low-privilege
+`sb_publishable_...` key format. A legacy JWT `anon` key, a `sb_secret_...`
+key, or a malformed Auth origin fails the production build and all formal Auth
+routes fail closed.
+
+1. In Supabase, copy the current publishable key from the project's API keys
+   page. Do not substitute the secret/service-role key or a legacy JWT `anon`
+   key.
+2. Set `SUPABASE_URL` to the origin-only HTTPS project URL and
+   `SUPABASE_PUBLISHABLE_KEY` to that publishable key in Netlify's production
+   environment. Keep both values out of committed files.
+3. Run the deployment environment check with the production bindings, then
+   smoke-test Google sign-in, Email Magic Link, `/api/auth/session`, strategy
+   save, publication, Explore visibility, My Strategies, and sign-out on the
+   staging deployment.
+4. Stop the release if the project still exposes only a legacy `anon` JWT.
+   Rotate to the publishable-key format first; never weaken the checker to make
+   a stale credential pass.

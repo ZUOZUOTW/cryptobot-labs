@@ -9,7 +9,8 @@ export interface SafeWeexOAuthConnection {
   status: WeexOAuthConnectionStatus;
   credentialSource: WeexCredentialSource;
   maskedApiKeySuffix: string | null;
-  permissions: { read: boolean; spotTrade: boolean; futuresTrade: boolean; withdrawal: false };
+  permissions: { read: boolean; spotTrade: boolean; futuresTrade: boolean; futuresDemoTrade: boolean;
+    withdrawal: false; liveVerified: boolean };
   withdrawalAccessAbsent: boolean;
   verifiedAt: number | null;
   revokedAt: number | null;
@@ -41,7 +42,8 @@ const parse = (row: Row): SafeWeexOAuthConnection => {
   if (!permissions || typeof permissions !== "object" || Array.isArray(permissions)) throw new Error("stored permissions are invalid");
   const value = permissions as Record<string, unknown>;
   const safePermissions = { read: value.read === true, spotTrade: value.spotTrade === true,
-    futuresTrade: value.futuresTrade === true, withdrawal: false as const };
+    futuresTrade: value.futuresTrade === true, futuresDemoTrade: value.futuresDemoTrade === true,
+    withdrawal: false as const, liveVerified: value.liveVerified === true };
   return { id: row.id, status: row.status as WeexOAuthConnectionStatus,
     credentialSource: row.credentialSource, maskedApiKeySuffix: row.maskedApiKeySuffix,
     permissions: safePermissions, withdrawalAccessAbsent: Boolean(row.withdrawalAccessAbsent),

@@ -14,6 +14,8 @@ export type BotConfigCandidate = Omit<BotConfig, "exchange"> & { exchange: strin
 
 const STRATEGY_GROUPS = ["entry", "confirm", "exit", "position", "risk"] as const;
 const LONG_ONLY_ENTRY_BLOCKS = new Set(["dca"]);
+export const MAX_JAVASCRIPT_SOURCE_BYTES = 128 * 1024;
+const UTF8_ENCODER = new TextEncoder();
 const NETWORK_URL_CANDIDATE_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/.*?(?=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/|[\s"'`<>]|$)/g;
 const SUPPORTED_NETWORK_SCHEMES = new Set(["http", "https", "ws", "wss"]);
 const FORBIDDEN_EXCHANGES = [
@@ -22,6 +24,26 @@ const FORBIDDEN_EXCHANGES = [
 ] as const;
 const HTTP_SCHEMES = new Set(["http", "https"]);
 const WEBSOCKET_SCHEMES = new Set(["ws", "wss"]);
+const FORBIDDEN_SOURCE_GLOBALS = new Set([
+  "Bun",
+  "Buffer",
+  "Deno",
+  "EventSource",
+  "Request",
+  "SharedWorker",
+  "WebSocket",
+  "WebTransport",
+  "Worker",
+  "XMLHttpRequest",
+  "document",
+  "fetch",
+  "global",
+  "localStorage",
+  "module",
+  "navigator",
+  "process",
+  "require",
+]);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -76,6 +98,26 @@ export const hasBotConfigShape = (value: unknown): value is BotConfigCandidate =
   && Array.isArray(value.blocks)
   && value.blocks.every(isStrategyBlock)
   && (value.source === undefined || isString(value.source))
+);
+
+const BOT_CONFIG_KEYS = new Set([
+  "blocks", "exchange", "id", "leverage", "logicMode", "market", "name", "source", "symbol", "timeframe", "tradeDirection",
+]);
+const STRATEGY_BLOCK_KEYS = new Set(["description", "group", "id", "name", "parameters"]);
+const STRATEGY_PARAMETER_KEYS = new Set(["key", "label", "max", "min", "step", "suffix", "value"]);
+
+const usesOnlyKeys = (value: UnknownRecord, allowed: ReadonlySet<string>): boolean => (
+  Object.keys(value).every((key) => allowed.has(key))
+);
+
+/** Strict transport/storage shape. Semantic validity is still decided by validateConfig. */
+export const hasStrictBotConfigShape = (value: unknown): value is BotConfigCandidate => (
+  hasBotConfigShape(value)
+  && usesOnlyKeys(value as UnknownRecord, BOT_CONFIG_KEYS)
+  && value.blocks.every((block) => (
+    usesOnlyKeys(block as unknown as UnknownRecord, STRATEGY_BLOCK_KEYS)
+    && block.parameters.every((parameter) => usesOnlyKeys(parameter as unknown as UnknownRecord, STRATEGY_PARAMETER_KEYS))
+  ))
 );
 
 type AstRecord = Record<string, unknown> & { type?: string };
@@ -248,6 +290,29 @@ const validateUrl = (candidate: string, schemes: Set<string>): string | null => 
   return null;
 };
 
+const importsModule = (node: AstRecord): boolean => (
+  node.type === "ImportDeclaration"
+  || node.type === "ImportExpression"
+  || node.type === "ExportAllDeclaration"
+  || ((node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration")
+    && node.source !== null && node.source !== undefined)
+);
+
+const hasDefaultExport = (syntaxTree: unknown): boolean => {
+  const program = astRecord(syntaxTree);
+  if (!program || !Array.isArray(program.body)) return false;
+  return program.body.some((candidate) => {
+    const node = astRecord(candidate);
+    if (!node) return false;
+    if (node.type === "ExportDefaultDeclaration") return true;
+    if (node.type !== "ExportNamedDeclaration" || node.source !== null || !Array.isArray(node.specifiers)) return false;
+    return node.specifiers.some((candidateSpecifier) => {
+      const specifier = astRecord(candidateSpecifier);
+      return specifier?.type === "ExportSpecifier" && astName(specifier.exported) === "default";
+    });
+  });
+};
+
 const canonicalBlockErrors = (config: BotConfig, validateValues: boolean): string[] => {
   const errors: string[] = [];
   const seen = new Set<string>();
@@ -297,6 +362,13 @@ const canonicalBlockErrors = (config: BotConfig, validateValues: boolean): strin
 };
 
 export const validateJavaScript = (source: string): SourceValidationResult => {
+  if (source.trim().length === 0) {
+    return { valid: false, errors: ["JavaScript 原始碼不得為空"] };
+  }
+  if (source.length > MAX_JAVASCRIPT_SOURCE_BYTES
+    || UTF8_ENCODER.encode(source).byteLength > MAX_JAVASCRIPT_SOURCE_BYTES) {
+    return { valid: false, errors: [`JavaScript 原始碼不得超過 ${MAX_JAVASCRIPT_SOURCE_BYTES} 位元組`] };
+  }
   let syntaxTree: unknown;
   try {
     syntaxTree = parse(source, {
@@ -317,6 +389,8 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
   const compoundChildren = new Set<AstRecord>();
   let explicitlyWeex = false;
 
+  if (!hasDefaultExport(syntaxTree)) errors.push("JavaScript 策略必須提供 default export 評估函式");
+
   walkAst(syntaxTree, (node) => {
     if (node.type === "BinaryExpression") {
       const left = astRecord(node.left);
@@ -331,6 +405,11 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
   });
 
   walkAst(syntaxTree, (node) => {
+    if (importsModule(node)) errors.push("JavaScript 策略不得匯入或轉匯出外部模組");
+    if (node.type === "Identifier" && typeof node.name === "string" && FORBIDDEN_SOURCE_GLOBALS.has(node.name)) {
+      errors.push(`JavaScript 策略不得使用網路或主機 API：${node.name}`);
+    }
+
     const assignedExchange = exchangeValue(node, bindings);
     if (assignedExchange !== undefined) {
       if (assignedExchange?.toUpperCase() === "WEEX") {
@@ -353,7 +432,6 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
       } else {
         const urlError = validateUrl(resolved, destination.schemes);
         if (urlError) errors.push(urlError);
-        else explicitlyWeex = true;
       }
     }
 
@@ -389,7 +467,8 @@ export const validateJavaScript = (source: string): SourceValidationResult => {
         continue;
       }
       if (hostname === "weex.com" || hostname.endsWith(".weex.com")) {
-        explicitlyWeex = true;
+        // URLs do not prove the configured exchange. A dedicated exchange field
+        // remains required even though the isolated runtime exposes no network.
       } else {
         errors.push(`偵測到非 WEEX 網域：${hostname}`);
       }
@@ -459,10 +538,18 @@ export const canonicalizeBotConfig = (config: BotConfig): BotConfig => ({
     const canonical = STRATEGY_BLOCKS.find((item) => item.id === block.id)!;
     const values = new Map(block.parameters.map((parameter) => [parameter.key, parameter.value]));
     return {
-      ...canonical,
+      id: canonical.id,
+      name: canonical.name,
+      group: canonical.group,
+      description: canonical.description,
       parameters: canonical.parameters.map((parameter) => ({
-        ...parameter,
+        key: parameter.key,
+        label: parameter.label,
         value: values.get(parameter.key) ?? parameter.value,
+        min: parameter.min,
+        max: parameter.max,
+        step: parameter.step,
+        ...(parameter.suffix === undefined ? {} : { suffix: parameter.suffix }),
       })),
     };
   }),
@@ -490,9 +577,11 @@ export const validateConfig = (value: unknown): ValidationResult => {
     errors.push(`${config.symbol} 不在 WEEX API 公告支援的${config.market === "spot" ? "現貨" : "合約"}交易對中`);
   }
   errors.push(...canonicalBlockErrors(config as BotConfig, true));
-  if (!config.blocks.some((block) => block.group === "entry")) errors.push("至少需要一個進場訊號");
-  if (!config.blocks.some((block) => block.group === "exit" || block.group === "risk")) {
-    errors.push("至少需要一個出場或風控規則");
+  if (config.source === undefined) {
+    if (!config.blocks.some((block) => block.group === "entry")) errors.push("至少需要一個進場訊號");
+    if (!config.blocks.some((block) => block.group === "exit" || block.group === "risk")) {
+      errors.push("至少需要一個出場或風控規則");
+    }
   }
 
   if (config.market === "spot" && config.leverage !== 1) errors.push("現貨交易槓桿必須為 1");

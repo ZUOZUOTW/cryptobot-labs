@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { BotDetailPerformance } from "../../../components/BotDetailPerformance";
 import { StrategyLaunchButton } from "../../../components/StrategyLaunchButton";
+import { StrategyParameterSummary } from "../../../components/StrategyParameterSummary";
 import { StrategyShareActions } from "../../../components/StrategyShareActions";
 import { BOT_CATALOG } from "../../../data/bots";
 import type { BotDefinition, StrategyGroup } from "../../../lib/types";
@@ -45,9 +46,6 @@ export function generateStaticParams() {
 
 const marketLabel = (bot: BotDefinition) => bot.market === "spot" ? "現貨" : "USDT-M 合約";
 const groupLabel: Record<StrategyGroup, string> = { entry: "進場", confirm: "確認", exit: "離場", position: "倉位", risk: "風控" };
-const parameterSummary = (bot: BotDefinition["blocks"][number]) => bot.parameters
-  .map((parameter) => `${parameter.label} ${parameter.value}${parameter.suffix ?? ""}`)
-  .join(" · ");
 
 export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const { id } = await params;
@@ -81,7 +79,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
             <p className="bot-detail-hero__lead">{bot.description}</p>
             <div className="tag-row">{bot.tags.map((tag) => <span className="strategy-tag" key={tag}>{tag}</span>)}</div>
             <div className="bot-detail-hero__actions">
-              <StrategyLaunchButton bot={bot} />
+              {bot.market === "futures" && <StrategyLaunchButton bot={bot} />}
               <Link className="button button--primary" href={workshopHref}>直接套用</Link>
               <StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} />
             </div>
@@ -112,7 +110,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
             <li className="bot-detail-flow__item glass-panel" key={`${block.id}-${index}`}>
               <span>{String(index + 1).padStart(2, "0")}</span>
               <div><small>{groupLabel[block.group]}</small><h3>{block.name}</h3><p>{block.description}</p></div>
-              <strong>{parameterSummary(block) || "無額外參數"}</strong>
+              <strong><StrategyParameterSummary parameters={block.parameters} /></strong>
             </li>
           ))}
         </ol>
@@ -130,7 +128,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
 
       <section className="detail-section detail-cta site-container glass-panel">
         <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始模擬運行；原分享版本不會因後續修改而改變。</p></div>
-        <div className="button-row"><StrategyLaunchButton bot={bot} /><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} /></div>
+        <div className="button-row">{bot.market === "futures" && <StrategyLaunchButton bot={bot} />}<Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} /></div>
       </section>
     </article>
   );

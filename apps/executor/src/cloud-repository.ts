@@ -1,6 +1,7 @@
 import postgres, { type Sql } from "postgres";
 import type { EncryptedWeexCredentials } from "@cryptobot-labs/weex-client";
-import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client/symbol";
+import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client";
+import type { SubmitOutcome } from "@cryptobot-labs/trading-core";
 
 type Database = Sql<Record<string, never>>;
 type Row = Record<string, unknown>;
@@ -14,7 +15,15 @@ export interface CloudRun {
 export interface StoredCredential {
   envelope: EncryptedWeexCredentials;
   context: Readonly<Record<string, string>>;
+  credentialVersion: number;
+  connectionVersion: number;
 }
+export type CloudRunTarget =
+  | { readonly market: "spot"; readonly mode: "live" }
+  | { readonly market: "futures"; readonly mode: "futures-demo" | "live" };
+export type AuthorizedOrderSubmission =
+  | { readonly authorized: false }
+  | { readonly authorized: true; readonly outcome: SubmitOutcome };
 export interface ClaimedOrder {
   status: "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
   exchangeOrderId: string | null;
@@ -96,6 +105,25 @@ const signedDecimal = (value: unknown): string => {
 };
 const CONFIGURATION_HASH = /^[a-f0-9]{64}$/;
 const LEASE_DURATION_MS = 180_000;
+export const ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS = 12_000;
+export const ORDER_SUBMISSION_TIMEOUT_MS = 10_500;
+const CONNECTION_AUTHORIZATION_REQUIRED = "connection_authorization_required";
+
+const connectionAuthorizesTarget = (
+  connection: Row | undefined,
+  target: CloudRunTarget,
+): boolean => {
+  if (!connection || connection.status !== "active" || connection.withdrawal_access_absent !== true) return false;
+  const permissions = object(connection.permissions_json, "connection permissions");
+  if (permissions.read !== true) return false;
+  if (target.mode === "futures-demo") {
+    return target.market === "futures" && (permissions.futuresDemoTrade === true
+      || (permissions.futuresTrade === true && permissions.liveVerified === true));
+  }
+  return permissions.liveVerified === true && (target.market === "spot"
+    ? permissions.spotTrade === true
+    : permissions.futuresTrade === true);
+};
 
 const canonicalRunTarget = (
   configValue: unknown,
@@ -205,12 +233,31 @@ export class CloudRuntimeRepository {
     const rows = await this.#sql.unsafe(`update public.cloud_strategy_runs set lease_owner=$1,
       lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
       where id in (select r.id from public.cloud_strategy_runs r
+        join public.weex_connections c
+          on c.id=r.connection_id and c.user_id=r.user_id and c.provider='weex'
+          and c.executor_shard_id=r.executor_shard_id
         cross join lateral (values (case r.config_json->>'timeframe'
           when '1m' then 60000::bigint when '5m' then 300000::bigint
           when '15m' then 900000::bigint when '30m' then 1800000::bigint
           when '1h' then 3600000::bigint when '4h' then 14400000::bigint
           when '1d' then 86400000::bigint else 60000::bigint end)) schedule(interval_ms)
         where r.executor_shard_id=$3 and r.state='running'
+          and c.status='active' and c.withdrawal_access_absent=true
+          and c.permissions_json @> '{"read":true}'::jsonb
+          and (
+            (r.mode='futures-demo' and r.config_json->>'market'='futures' and (
+              c.permissions_json @> '{"futuresDemoTrade":true}'::jsonb
+              or c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb
+            ))
+            or
+            (r.mode='live' and (
+              (r.config_json->>'market'='spot'
+                and c.permissions_json @> '{"spotTrade":true,"liveVerified":true}'::jsonb)
+              or
+              (r.config_json->>'market'='futures'
+                and c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb)
+            ))
+          )
           and (r.lease_expires_at is null or r.lease_expires_at<$2::bigint or r.lease_owner=$1)
           and (r.last_candle_at is null
             or r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1
@@ -249,17 +296,35 @@ export class CloudRuntimeRepository {
     return (result.count ?? 0) > 0;
   }
 
-  async credential(connectionId: string, userId: string): Promise<StoredCredential> {
-    const rows = await this.#sql.unsafe(`select kms_key_id,encrypted_data_key,initialization_vector,
-      credential_ciphertext,encryption_context_json from private.weex_credential_blobs
-      where connection_id=$1 and user_id=$2`, [connectionId, userId]);
+  async credential(connectionId: string, userId: string, target?: CloudRunTarget): Promise<StoredCredential> {
+    const rows = await this.#sql.unsafe(`select b.kms_key_id,b.encrypted_data_key,b.initialization_vector,
+      b.credential_ciphertext,b.encryption_context_json,b.credential_version,c.version as connection_version
+      from private.weex_credential_blobs b
+      join public.weex_connections c on c.id=b.connection_id and c.user_id=b.user_id
+      where b.connection_id=$1 and b.user_id=$2 and c.provider='weex' and c.status='active'
+        and c.withdrawal_access_absent=true and c.permissions_json @> '{"read":true}'::jsonb
+        and (
+          ($3::text is null and $4::text is null)
+          or
+          ($3::text='futures-demo' and $4::text='futures' and (
+            c.permissions_json @> '{"futuresDemoTrade":true}'::jsonb
+            or c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb
+          ))
+          or
+          ($3::text='live' and $4::text='spot'
+            and c.permissions_json @> '{"spotTrade":true,"liveVerified":true}'::jsonb)
+          or
+          ($3::text='live' and $4::text='futures'
+            and c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb)
+        )`, [connectionId, userId, target?.mode ?? null, target?.market ?? null]);
     const row = rows[0] as Row | undefined;
     if (!row || typeof row.kms_key_id !== "string") throw new Error("Cloud credential is unavailable");
     const rawContext = object(row.encryption_context_json, "credential context");
     if (Object.values(rawContext).some((value) => typeof value !== "string")) throw new Error("Credential context is invalid");
     return { envelope: { version: 1, keyId: row.kms_key_id, encryptedDataKey: bytes(row.encrypted_data_key),
       initializationVector: bytes(row.initialization_vector), ciphertext: bytes(row.credential_ciphertext) },
-      context: rawContext as Record<string, string> };
+      context: rawContext as Record<string, string>, credentialVersion: integer(row.credential_version),
+      connectionVersion: integer(row.connection_version) };
   }
 
   async realizedPnl(userId: string, connectionId: string, startAt: number, endAt: number): Promise<string> {
@@ -339,6 +404,103 @@ export class CloudRuntimeRepository {
     const row = rows[0] as Row | undefined;
     if (!row) throw new Error("Cloud order claim conflict");
     return this.#claimedOrder(row);
+  }
+
+  async submitAuthorizedOrder(
+    input: { run: CloudRun; owner: string; candleCloseAt: number; now: number;
+      credentialVersion: number; connectionVersion: number },
+    operation: (signal: AbortSignal) => Promise<SubmitOutcome>,
+  ): Promise<AuthorizedOrderSubmission> {
+    const transactionResult = await this.#sql.begin(async (transaction) => {
+      await transaction.unsafe(`set local lock_timeout='5s';
+        set local statement_timeout='${ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS}ms';
+        set local idle_in_transaction_session_timeout='${ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS}ms'`);
+      const connections = await transaction.unsafe(`select c.status,c.permissions_json,c.withdrawal_access_absent,
+        c.version as connection_version,b.credential_version
+        from public.weex_connections c
+        join private.weex_credential_blobs b on b.connection_id=c.id and b.user_id=c.user_id
+        where c.id=$1 and c.user_id=$2 and c.provider='weex' for update of c,b`,
+      [input.run.connectionId, input.run.userId]);
+      const runOrders = await transaction.unsafe(`select r.mode,r.config_json->>'market' as market,
+        r.state,r.lease_owner,o.status as order_status
+        from public.cloud_strategy_runs r
+        join private.cloud_order_intents o on o.run_id=r.id and o.candle_close_at=$4
+        where r.id=$1 and r.user_id=$2 and r.connection_id=$3
+        for update of r,o`,
+      [input.run.id, input.run.userId, input.run.connectionId, input.candleCloseAt]);
+      const runOrder = runOrders[0] as Row | undefined;
+      if (!runOrder || runOrder.order_status !== "claimed") return { authorized: false } as const;
+      const connection = connections[0] as Row | undefined;
+      const target = (runOrder.market === "spot" && runOrder.mode === "live")
+        ? { market: "spot", mode: "live" } as const
+        : (runOrder.market === "futures"
+          && (runOrder.mode === "futures-demo" || runOrder.mode === "live"))
+          ? { market: "futures", mode: runOrder.mode } as const
+          : null;
+      const versionsMatch = connection
+        ? integer(connection.credential_version) === input.credentialVersion
+          && integer(connection.connection_version) === input.connectionVersion
+        : false;
+      const connectionAuthorized = target ? connectionAuthorizesTarget(connection, target) : false;
+      if (!target || !connectionAuthorized) {
+        await transaction.unsafe(`update public.cloud_strategy_runs set state='paused',version=version+1,
+          last_error_code=$4,lease_owner=null,lease_expires_at=null,updated_at=greatest(updated_at,$5)
+          where id=$1 and user_id=$2 and connection_id=$3 and state<>'stopped'`,
+        [input.run.id, input.run.userId, input.run.connectionId, CONNECTION_AUTHORIZATION_REQUIRED, input.now]);
+        await transaction.unsafe(`update private.cloud_order_intents set status='rejected',error_code=$3,updated_at=$4
+          where run_id=$1 and candle_close_at=$2 and status='claimed'`,
+        [input.run.id, input.candleCloseAt, CONNECTION_AUTHORIZATION_REQUIRED, input.now]);
+        return { authorized: false } as const;
+      }
+      if (!versionsMatch) {
+        await transaction.unsafe(`update public.cloud_strategy_runs set lease_owner=null,lease_expires_at=null,
+          updated_at=greatest(updated_at,$3) where id=$1 and user_id=$2 and lease_owner=$4`,
+        [input.run.id, input.run.userId, input.now, input.owner]);
+        return { authorized: false } as const;
+      }
+      if (runOrder.state !== "running" || runOrder.lease_owner !== input.owner) {
+        return { authorized: false } as const;
+      }
+      const marked = await transaction.unsafe(`update private.cloud_order_intents set status='unknown',
+        exchange_order_id=null,error_code='submission_in_progress',updated_at=$3
+        where run_id=$1 and candle_close_at=$2 and status='claimed'`,
+      [input.run.id, input.candleCloseAt, input.now]);
+      if (marked.count !== 1) throw new Error("Cloud order authorization conflict");
+      try {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timedOut = false;
+        const controller = new AbortController();
+        const submissionTimeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort(new Error("WEEX order submission exceeded its transaction deadline"));
+            reject(new Error("WEEX order submission exceeded its transaction deadline"));
+          }, ORDER_SUBMISSION_TIMEOUT_MS);
+          timer.unref?.();
+        });
+        const operationPromise = operation(controller.signal);
+        const outcome = await Promise.race([operationPromise, submissionTimeout]).finally(() => {
+          if (timer) clearTimeout(timer);
+        });
+        if (timedOut) throw new Error("WEEX order submission exceeded its transaction deadline");
+        if (!outcome || !["acknowledged", "rejected", "unknown"].includes(outcome.status)
+          || (outcome.status === "acknowledged" && typeof outcome.exchangeOrderId !== "string")) {
+          throw new Error("Cloud order submission outcome is invalid");
+        }
+        const unsafeReason = outcome.status === "acknowledged" ? null : outcome.reason ?? outcome.status;
+        const reason = unsafeReason && /^[a-z0-9_-]{1,64}$/.test(unsafeReason)
+          ? unsafeReason : outcome.status === "acknowledged" ? null : "submission_failed";
+        await transaction.unsafe(`update private.cloud_order_intents set status=$3,
+          exchange_order_id=$4,error_code=$5,updated_at=$6 where run_id=$1 and candle_close_at=$2`,
+        [input.run.id, input.candleCloseAt, outcome.status,
+          outcome.status === "acknowledged" ? outcome.exchangeOrderId : null, reason, input.now]);
+        return { authorized: true, outcome } as const;
+      } catch (error) {
+        return { authorized: true, submissionError: error } as const;
+      }
+    });
+    if ("submissionError" in transactionResult) throw transactionResult.submissionError;
+    return transactionResult;
   }
 
   async recordOrder(input: { runId: string; candleCloseAt: number; status: ClaimedOrder["status"];

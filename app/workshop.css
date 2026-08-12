@@ -78,7 +78,7 @@
 }
 
 .workshop-clear {
-  min-height: auto;
+  min-height: 2.75rem;
   padding: 0.58rem 0.9rem;
   border: 1px solid rgb(255 154 112 / 32%);
   border-radius: 999px;
@@ -231,6 +231,14 @@
 .package-panel__grid p { min-height: 3.5rem; }
 .package-panel__grid .button { width: 100%; }
 .package-panel__grid small { display: block; margin-top: 0.5rem; color: var(--muted); font-size: 0.58rem; }
+.workshop-portable-package { display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, 18rem); gap: 0.85rem 1.2rem; align-items: center; margin-top: 1rem; padding: 1rem; border: 1px solid rgb(76 221 255 / 18%); border-radius: 0.9rem; background: linear-gradient(135deg, rgb(76 221 255 / 5%), rgb(139 99 255 / 5%)); }
+.workshop-portable-package h3 { margin: 0; font-size: 0.9rem; }
+.workshop-portable-package p { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.7rem; line-height: 1.65; }
+.workshop-portable-package__notes { grid-column: 1 / -1; }
+.workshop-portable-package__notes small { display: block; color: var(--muted); font-size: 0.6rem; line-height: 1.55; }
+.workshop-portable-package__notes small + small { margin-top: 0.25rem; }
+.package-export-actions { display: grid; gap: 0.5rem; }
+.package-export-actions .button { width: 100%; }
 
 .package-file {
   display: flex;
@@ -273,7 +281,15 @@
 .package-confirmation__card { width: min(100%, 29rem); padding: 1.25rem; border-radius: 1rem; }
 .package-confirmation__card h3 { margin-top: 0.45rem; font-size: 1.25rem; }
 .package-confirmation__card > p:not(.eyebrow) { color: var(--muted); font-size: 0.76rem; line-height: 1.7; }
+.package-confirmation__card .package-confirmation__warning { padding: 0.7rem 0.8rem; border: 1px solid rgb(255 181 71 / 28%); border-radius: 0.68rem; background: rgb(255 181 71 / 6%); color: #ffd394; }
 .package-confirmation__card .button-row { justify-content: flex-end; }
+
+.package-fallback { width: 100%; margin-top: 0.75rem; padding: 0.75rem; border: 1px solid rgb(255 107 98 / 30%); border-radius: 0.8rem; background: rgb(255 107 98 / 6%); }
+.package-fallback p { margin: 0 0 0.6rem; font-size: 0.75rem; }
+.package-fallback__files { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.package-fallback__files button { min-height: 2.75rem; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 0.55rem; background: var(--panel); color: var(--text); font-size: 0.68rem; cursor: pointer; }
+.package-fallback__files button:hover,
+.package-fallback__files button:focus-visible { border-color: var(--cyan); color: var(--cyan); }
 
 .workshop-count,
 .backtest-state,
@@ -1035,6 +1051,7 @@
   .directional-backtest-metrics { grid-template-columns: 1fr; }
   .backtest-metrics { grid-template-columns: 1fr; }
   .package-panel__grid { grid-template-columns: 1fr; }
+  .workshop-portable-package { grid-template-columns: 1fr; }
   .workshop-mobile-actions {
     position: fixed;
     z-index: 45;
@@ -1718,6 +1735,7 @@ html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
 html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
   :is(.workshop-mode button, .workshop-clear, .parameter-reset,
       .strategy-flow-check .button, .backtest-run) {
+  min-height: 2.75rem;
   height: auto;
   white-space: normal;
   line-height: 1.3;
@@ -2453,6 +2471,21 @@ html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
   border-radius: 0.45rem;
   color: var(--text);
   font-size: 0.58rem;
+}
+.control-center-alerts__toggle {
+  min-height: 2.75rem;
+  margin: 0 0.75rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: rgb(255 255 255 / 3%);
+  color: var(--text);
+  font: 650 0.62rem/1.2 var(--font-geist-sans), sans-serif;
+  cursor: pointer;
+}
+.control-center-alerts__toggle:hover,
+.control-center-alerts__toggle:focus-visible {
+  border-color: rgb(94 231 255 / 42%);
+  background: rgb(94 231 255 / 7%);
 }
 .control-center-alerts__clear {
   min-height: 13rem;

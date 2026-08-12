@@ -4,7 +4,7 @@
 
 ## Completed foundations
 
-- Netlify production `PUBLIC_ORIGIN=https://www.cryptobotlabs.app`, Supabase URL/publishable key, signed Auth cookie secret, and the remote Functions/Runtime `DEMO_MODE=false` binding are configured.
+- Netlify production `PUBLIC_ORIGIN=https://www.cryptobotlabs.app`, origin-only HTTPS Supabase URL, current `sb_publishable_...` key, signed Auth cookie secret, and the remote Functions/Runtime `DEMO_MODE=false` binding are configured. A legacy JWT `anon` key or `sb_secret_...` key is not an accepted substitute.
 - Supabase Auth routes use PKCE and short-lived signed state.
 - Supabase Data API access is deny-all for the server-owned control plane.
 - WEEX OAuth signing, PKCE generation, exact-body token exchange, create-api parsing, and secret-safe containers have tests.

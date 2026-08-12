@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FiCopy, FiDownload, FiExternalLink, FiImage, FiLink, FiShare2, FiX } from "react-icons/fi";
+import { downloadBlob } from "../lib/browser-download";
 import {
   buildStrategyShareText,
   localizeStrategyPosterPath,
@@ -252,19 +253,13 @@ export function StrategyShareActions({
 
   const downloadPoster = async () => {
     setIsBusy(true);
-    let objectUrl: string | null = null;
     try {
       const poster = preparedPosterRef.current ?? await fetchPosterFile();
-      objectUrl = URL.createObjectURL(poster);
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = strategyPosterFilename(botId);
-      anchor.click();
+      downloadBlob(poster, strategyPosterFilename(botId));
       setMessage(t("1200 × 630 海報已下載。"));
     } catch {
       setMessage(t("海報暫時無法下載，請稍後再試或開啟原圖儲存。"));
     } finally {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
       setIsBusy(false);
     }
   };

@@ -539,6 +539,7 @@ export class WeexPrivateClient {
     queryEntries: readonly QueryEntry[] = [],
     bodyValue?: unknown,
     preDispatch?: () => void,
+    signal?: AbortSignal,
   ): Promise<HttpResponse> {
     const query = canonicalQuery(queryEntries);
     const body = bodyValue === undefined ? "" : canonicalJson(bodyValue);
@@ -557,6 +558,7 @@ export class WeexPrivateClient {
           url: `${route.origin}${route.path}${query ? `?${query}` : ""}`,
           headers: buildPrivateHeaders({ apiKey, passphrase, timestamp, signature }),
           ...(body ? { body } : {}),
+          ...(signal ? { signal } : {}),
         });
         if (!Number.isSafeInteger(response.status) || response.status < 100 || response.status > 599) {
           throw schema("Invalid HTTP response status");
@@ -830,7 +832,7 @@ export class WeexPrivateClient {
     return parseRealizedTrades(response.body, limit);
   }
 
-  async submitOrder(request: ExchangeSubmitRequest): Promise<SubmitOutcome> {
+  async submitOrder(request: ExchangeSubmitRequest, signal?: AbortSignal): Promise<SubmitOutcome> {
     const { identity, authorization } = await this.#validateOrder(request);
     const { intent, target, clientOrderId } = request;
     const commonBody = {
@@ -850,7 +852,7 @@ export class WeexPrivateClient {
     const identityKey = `${target.market}:${target.mode}:${clientOrderId}`;
     const claimed = this.#claimSubmission(identityKey, identity);
     if ("existing" in claimed) return await claimed.existing;
-    const submission = this.#performSubmit(target, clientOrderId, body, identityKey, identity, authorization);
+    const submission = this.#performSubmit(target, clientOrderId, body, identityKey, identity, authorization, signal);
     claimed.claim.promise = submission;
     try {
       const outcome = await submission;
@@ -871,6 +873,7 @@ export class WeexPrivateClient {
     identityKey: string,
     identity: ExpectedOrderIdentity,
     authorization: AuthorizationSnapshot | undefined,
+    signal?: AbortSignal,
   ): Promise<SubmitOutcome> {
     this.#rememberIdentity(identityKey, identity);
     let responseReceived = false;
@@ -881,6 +884,7 @@ export class WeexPrivateClient {
         [],
         body,
         () => this.#assertAuthorization(authorization),
+        signal,
       );
       responseReceived = true;
       const parsed = parseAcknowledgedOrder(response.body, clientOrderId);

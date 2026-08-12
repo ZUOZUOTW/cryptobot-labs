@@ -13,7 +13,7 @@ import generatedZhHant from "./generated/zh-Hant.json";
  */
 const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
   "zh-Hant": {
-    "AUTOMATION LAUNCHER": "自動交易啟動器", "WEEX FUTURES DEMO": "WEEX 合約模擬",
+    "AUTOMATION LAUNCHER": "自動交易啟動器", "WEEX FUTURES DEMO": "WEEX 合約模擬", "WEEX FUTURES DEMO / SUSDT": "WEEX 合約模擬 / SUSDT",
     "VIP code": "VIP 代碼", "RISK": "風險", "Profit Factor": "獲利因子", "Sharpe": "夏普比率",
     "0 ERRORS": "0 個錯誤", "01 / SAVE": "01 / 儲存", "01 SIGNAL": "01 訊號", "02 MODEL": "02 模型", "03 RISK": "03 風險", "ASSEMBLY BUS / 03 MODULES": "組裝匯流排 / 03 模組", "Client": "用戶端", "Correlation": "相關性", "IMPORT PREVIEW": "匯入預覽", "KLINES /": "K 線 /", "LIVE BUILD": "即時建置", "STATIC CHECK PASSED": "靜態檢查通過", "STRATEGY READY": "策略已就緒", "VERIFIED MARKET DATA /": "已驗證市場資料 /", "VISUAL STRATEGY ASSEMBLY": "視覺化策略組裝",
     "RUN /": "運行 /", "BOTS": "機器人", "02 / PARAMETERS": "02 / 參數", "04 / SAVE & SHARE": "04 / 保存與分享", "03 / HISTORICAL TEST": "03 / 歷史測試", "01 / INERT SOURCE": "01 / 隔離原始碼", "01 / STRATEGY BLOCKS": "01 / 策略模組", "ORBITAL BOT LEAGUE / SEASON 01": "軌道機器人聯賽 / 第 01 季", "PUBLIC STRATEGY /": "公開策略 /", "/ V1": "/ 版本 1",
@@ -63,7 +63,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自動生成文案", "SHARE TO SOCIAL": "分享至社群", "WEEX /": "WEEX 市場 /",
   },
   "zh-Hans": {
-    "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟",
+    "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟", "WEEX FUTURES DEMO / SUSDT": "WEEX 合约模拟 / SUSDT",
     "VIP code": "VIP 代码", "RISK": "风险", "Profit Factor": "盈利因子", "Sharpe": "夏普比率",
     "0 ERRORS": "0 个错误", "01 / SAVE": "01 / 保存", "01 SIGNAL": "01 信号", "02 MODEL": "02 模型", "03 RISK": "03 风险", "ASSEMBLY BUS / 03 MODULES": "组装总线 / 03 模块", "Client": "客户端", "Correlation": "相关性", "IMPORT PREVIEW": "导入预览", "KLINES /": "K 线 /", "LIVE BUILD": "实时构建", "STATIC CHECK PASSED": "静态检查通过", "STRATEGY READY": "策略已就绪", "VERIFIED MARKET DATA /": "已验证市场数据 /", "VISUAL STRATEGY ASSEMBLY": "可视化策略组装",
     "RUN /": "运行 /", "BOTS": "机器人", "02 / PARAMETERS": "02 / 参数", "04 / SAVE & SHARE": "04 / 保存与分享", "03 / HISTORICAL TEST": "03 / 历史测试", "01 / INERT SOURCE": "01 / 隔离源代码", "01 / STRATEGY BLOCKS": "01 / 策略模块", "ORBITAL BOT LEAGUE / SEASON 01": "轨道机器人联赛 / 第 01 季", "PUBLIC STRATEGY /": "公开策略 /", "/ V1": "/ 版本 1",
@@ -113,7 +113,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自动生成文案", "SHARE TO SOCIAL": "分享到社交平台", "WEEX /": "WEEX 市场 /",
   },
   en: {
-    "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO",
+    "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO", "WEEX FUTURES DEMO / SUSDT": "WEEX FUTURES DEMO / SUSDT",
     "VIP code": "VIP code", "RISK": "RISK", "Profit Factor": "Profit Factor", "Sharpe": "Sharpe",
     "0 ERRORS": "0 ERRORS", "01 / SAVE": "01 / SAVE", "01 SIGNAL": "01 SIGNAL", "02 MODEL": "02 MODEL", "03 RISK": "03 RISK", "ASSEMBLY BUS / 03 MODULES": "ASSEMBLY BUS / 03 MODULES", "Client": "Client", "Correlation": "Correlation", "IMPORT PREVIEW": "IMPORT PREVIEW", "KLINES /": "KLINES /", "LIVE BUILD": "LIVE BUILD", "STATIC CHECK PASSED": "STATIC CHECK PASSED", "STRATEGY READY": "STRATEGY READY", "VERIFIED MARKET DATA /": "VERIFIED MARKET DATA /", "VISUAL STRATEGY ASSEMBLY": "VISUAL STRATEGY ASSEMBLY",
     "RUN /": "RUN /", "BOTS": "BOTS", "02 / PARAMETERS": "02 / PARAMETERS", "04 / SAVE & SHARE": "04 / SAVE & SHARE", "03 / HISTORICAL TEST": "03 / HISTORICAL TEST", "01 / INERT SOURCE": "01 / INERT SOURCE", "01 / STRATEGY BLOCKS": "01 / STRATEGY BLOCKS", "ORBITAL BOT LEAGUE / SEASON 01": "ORBITAL BOT LEAGUE / SEASON 01", "PUBLIC STRATEGY /": "PUBLIC STRATEGY /", "/ V1": "/ V1",
@@ -163,7 +163,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "STRATEGY SHARE STUDIO": "STRATEGY SHARE STUDIO", "AUTO-GENERATED CAPTION": "AUTO-GENERATED CAPTION", "SHARE TO SOCIAL": "SHARE TO SOCIAL", "WEEX /": "WEEX /",
   },
   ar: {
-    "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة",
+    "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة", "WEEX FUTURES DEMO / SUSDT": "محاكاة عقود WEEX الآجلة / SUSDT",
     "VIP code": "رمز VIP", "RISK": "المخاطر", "Profit Factor": "معامل الربح", "Sharpe": "نسبة شارب",
     "0 ERRORS": "0 أخطاء", "01 / SAVE": "01 / حفظ", "01 SIGNAL": "01 إشارة", "02 MODEL": "02 النموذج", "03 RISK": "03 المخاطر", "ASSEMBLY BUS / 03 MODULES": "مسار التجميع / 03 وحدات", "Client": "العميل", "Correlation": "الارتباط", "IMPORT PREVIEW": "معاينة الاستيراد", "KLINES /": "شموع K /", "LIVE BUILD": "البناء المباشر", "STATIC CHECK PASSED": "نجح الفحص الثابت", "STRATEGY READY": "الاستراتيجية جاهزة", "VERIFIED MARKET DATA /": "بيانات سوق موثقة /", "VISUAL STRATEGY ASSEMBLY": "التجميع المرئي للاستراتيجية",
     "RUN /": "تشغيل /", "BOTS": "روبوتات", "02 / PARAMETERS": "02 / المعلمات", "04 / SAVE & SHARE": "04 / الحفظ والمشاركة", "03 / HISTORICAL TEST": "03 / الاختبار التاريخي", "01 / INERT SOURCE": "01 / شفرة مصدر معزولة", "01 / STRATEGY BLOCKS": "01 / وحدات الاستراتيجية", "ORBITAL BOT LEAGUE / SEASON 01": "دوري الروبوتات المداري / الموسم 01", "PUBLIC STRATEGY /": "استراتيجية عامة /", "/ V1": "/ الإصدار 1",
@@ -214,7 +214,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "STRATEGY SHARE STUDIO": "استوديو مشاركة الاستراتيجية", "AUTO-GENERATED CAPTION": "نص مُنشأ تلقائيًا", "SHARE TO SOCIAL": "المشاركة على الشبكات الاجتماعية", "WEEX /": "سوق WEEX /",
   },
   ru: {
-    "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX",
+    "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX", "WEEX FUTURES DEMO / SUSDT": "ДЕМО ФЬЮЧЕРСОВ WEEX / SUSDT",
     "VIP code": "VIP-код", "RISK": "РИСК", "Profit Factor": "Фактор прибыли", "Sharpe": "Коэффициент Шарпа",
     "0 ERRORS": "0 ОШИБОК", "01 / SAVE": "01 / СОХРАНИТЬ", "01 SIGNAL": "01 СИГНАЛ", "02 MODEL": "02 МОДЕЛЬ", "03 RISK": "03 РИСК", "ASSEMBLY BUS / 03 MODULES": "ШИНА СБОРКИ / 03 МОДУЛЯ", "Client": "Клиент", "Correlation": "Корреляция", "IMPORT PREVIEW": "ПРЕДПРОСМОТР ИМПОРТА", "KLINES /": "СВЕЧИ /", "LIVE BUILD": "АКТУАЛЬНАЯ СБОРКА", "STATIC CHECK PASSED": "СТАТИЧЕСКАЯ ПРОВЕРКА ПРОЙДЕНА", "STRATEGY READY": "СТРАТЕГИЯ ГОТОВА", "VERIFIED MARKET DATA /": "ПРОВЕРЕННЫЕ РЫНОЧНЫЕ ДАННЫЕ /", "VISUAL STRATEGY ASSEMBLY": "ВИЗУАЛЬНАЯ СБОРКА СТРАТЕГИИ",
     "RUN /": "ЗАПУСК /", "BOTS": "БОТЫ", "02 / PARAMETERS": "02 / ПАРАМЕТРЫ", "04 / SAVE & SHARE": "04 / СОХРАНЕНИЕ И ПУБЛИКАЦИЯ", "03 / HISTORICAL TEST": "03 / ИСТОРИЧЕСКИЙ ТЕСТ", "01 / INERT SOURCE": "01 / ИЗОЛИРОВАННЫЙ ИСХОДНЫЙ КОД", "01 / STRATEGY BLOCKS": "01 / БЛОКИ СТРАТЕГИИ", "ORBITAL BOT LEAGUE / SEASON 01": "ОРБИТАЛЬНАЯ ЛИГА БОТОВ / СЕЗОН 01", "PUBLIC STRATEGY /": "ПУБЛИЧНАЯ СТРАТЕГИЯ /", "/ V1": "/ ВЕРСИЯ 1",
@@ -265,7 +265,7 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "STRATEGY SHARE STUDIO": "СТУДИЯ ПУБЛИКАЦИИ СТРАТЕГИИ", "AUTO-GENERATED CAPTION": "АВТОМАТИЧЕСКИ СОЗДАННЫЙ ТЕКСТ", "SHARE TO SOCIAL": "ПОДЕЛИТЬСЯ В СОЦСЕТЯХ", "WEEX /": "РЫНОК WEEX /",
   },
   ja: {
-    "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ",
+    "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ", "WEEX FUTURES DEMO / SUSDT": "WEEX先物デモ / SUSDT",
     "VIP code": "VIPコード", "RISK": "リスク", "Profit Factor": "プロフィットファクター", "Sharpe": "シャープレシオ",
     "0 ERRORS": "エラー 0 件", "01 / SAVE": "01 / 保存", "01 SIGNAL": "01 シグナル", "02 MODEL": "02 モデル", "03 RISK": "03 リスク", "ASSEMBLY BUS / 03 MODULES": "アセンブリバス / 03 モジュール", "Client": "クライアント", "Correlation": "相関", "IMPORT PREVIEW": "インポートプレビュー", "KLINES /": "Kライン /", "LIVE BUILD": "ライブビルド", "STATIC CHECK PASSED": "静的チェック合格", "STRATEGY READY": "戦略の準備完了", "VERIFIED MARKET DATA /": "検証済み市場データ /", "VISUAL STRATEGY ASSEMBLY": "ビジュアル戦略ビルダー",
     "RUN /": "運用 /", "BOTS": "ボット", "02 / PARAMETERS": "02 / パラメーター", "04 / SAVE & SHARE": "04 / 保存・共有", "03 / HISTORICAL TEST": "03 / 過去データテスト", "01 / INERT SOURCE": "01 / 隔離ソースコード", "01 / STRATEGY BLOCKS": "01 / 戦略ブロック", "ORBITAL BOT LEAGUE / SEASON 01": "オービタル・ボットリーグ / シーズン 01", "PUBLIC STRATEGY /": "公開戦略 /", "/ V1": "/ バージョン 1",

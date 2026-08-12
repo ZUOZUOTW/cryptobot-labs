@@ -27,10 +27,27 @@ describe("Supabase production auth boundary", () => {
   it("fails closed until every server-side auth setting is valid", () => {
     expect(productionAuthReady({ ...environment, DEMO_MODE: "true" })).toBe(false);
     expect(productionAuthReady({ ...environment, AUTH_COOKIE_SECRET: "short" })).toBe(false);
+    expect(productionAuthReady({
+      ...environment,
+      SUPABASE_PUBLISHABLE_KEY: "sb_secret_elevated_server_credential",
+    })).toBe(false);
+    expect(productionAuthReady({ ...environment, SUPABASE_URL: "http://localhost:54321" })).toBe(false);
     expect(productionAuthReady(environment)).toBe(true);
     expect(getSupabaseAuthConfig(environment)).toMatchObject({
       origin: "https://app.example.test", supabaseUrl: "https://project.supabase.co",
     });
+  });
+
+  it("allows a local Supabase Auth origin only outside formal production", () => {
+    expect(getSupabaseAuthConfig({
+      ...environment,
+      DEMO_MODE: "true",
+      SUPABASE_URL: "http://127.0.0.1:54321",
+    }).supabaseUrl).toBe("http://127.0.0.1:54321");
+    expect(() => getSupabaseAuthConfig({
+      ...environment,
+      SUPABASE_URL: "http://127.0.0.1:54321",
+    })).toThrow("SUPABASE_URL is invalid");
   });
 
   it("signs a short-lived PKCE transaction and rejects tampering, expiry, and open redirects", async () => {

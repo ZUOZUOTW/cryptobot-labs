@@ -1,8 +1,18 @@
 "use client";
 
 import Image from "next/image";
-import { useRef, useState, type ChangeEvent } from "react";
-import { importBotPackage } from "../../lib/bot-package";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+import {
+  buildBotPackageFiles,
+  exportBotPackage,
+  importBotPackage,
+  type BotPackageFile,
+} from "../../lib/bot-package";
 import { validateConfig } from "../../lib/strategy-validation";
 import type { BacktestReport, BotConfig } from "../../lib/types";
 import { demoAuthPath } from "../../lib/demo-auth";
@@ -11,12 +21,16 @@ import { backtestConfigFingerprint } from "../../lib/backtest";
 import { saveDemoStrategy } from "../../lib/demo-strategies";
 import type { SignalFlowCheckState } from "./StrategySummary";
 import { validateStrategyName } from "../../lib/strategy-name";
+import { downloadBlob } from "../../lib/browser-download";
+import { DownloadConfirmationDialog } from "../DownloadConfirmationDialog";
+import { PackageFallbackFiles } from "../PackageFallbackFiles";
 
 interface PackagePanelProps {
   config: BotConfig;
   flowCheckState?: SignalFlowCheckState;
+  formalEvidence?: { strategyVersionId: string; backtestJobId: string };
   report: BacktestReport | null;
-  onImport: (config: BotConfig, report: BacktestReport) => { ok: true } | { ok: false; reason: string };
+  onImport: (config: BotConfig, report: BacktestReport | null) => { ok: true } | { ok: false; reason: string };
 }
 
 type WorkState = "idle" | "working" | "complete" | "error";
@@ -37,8 +51,16 @@ function ActionVisual({ type }: { type: keyof typeof ACTION_MASCOTS }) {
   );
 }
 
-export function PackagePanel({ config, flowCheckState = "untested", report, onImport }: PackagePanelProps) {
+const safeFilenameStem = (config: BotConfig): string => (
+  config.id.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "weex-strategy"
+);
+
+export function PackagePanel({ config, flowCheckState = "untested", formalEvidence, report, onImport }: PackagePanelProps) {
   const { mode: authMode, user } = usePlatformAuth();
+  const fingerprint = backtestConfigFingerprint(config);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [exportState, setExportState] = useState<WorkState>("idle");
+  const [backupState, setBackupState] = useState<WorkState>("idle");
   const [actionState, setActionState] = useState<WorkState>("idle");
   const [publishState, setPublishState] = useState<WorkState>("idle");
   const [shareState, setShareState] = useState<WorkState>("idle");
@@ -46,14 +68,84 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
   const [message, setMessage] = useState("");
   const [description, setDescription] = useState("");
   const [weexReferralUrl, setWeexReferralUrl] = useState("");
+  const [fallback, setFallback] = useState<{ fingerprint: string; files: BotPackageFile[] } | null>(null);
   const [publication, setPublication] = useState<{ fingerprint: string; slug: string; url: string } | null>(null);
+  const exportTriggerRef = useRef<HTMLButtonElement>(null);
+  const exportInFlightRef = useRef(false);
+  const restoreAfterExportRef = useRef(false);
+  const latestFingerprintRef = useRef(fingerprint);
   const saveAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const savedVersionRef = useRef<{ fingerprint: string; version: SavedVersion } | null>(null);
   const configurationReady = validateConfig(config).valid;
   const strategyName = validateStrategyName(config.name);
-  const fingerprint = backtestConfigFingerprint(config);
+  const exportableReport = report;
+  const canExport = exportableReport !== null && configurationReady && exportState !== "working";
   const publishedUrl = publication?.fingerprint === fingerprint ? publication.url : "";
   const flowCheckLabel = flowCheckState === "passed" ? "通過測試" : flowCheckState === "failed" ? "未通過測試" : "未測試";
+
+  useEffect(() => {
+    if (confirmationOpen || exportState === "working" || !restoreAfterExportRef.current) return;
+    restoreAfterExportRef.current = false;
+    exportTriggerRef.current?.focus();
+  }, [confirmationOpen, exportState]);
+
+  useEffect(() => {
+    latestFingerprintRef.current = fingerprint;
+  }, [fingerprint]);
+
+  const confirmExport = async () => {
+    if (!exportableReport || !canExport || exportInFlightRef.current) return;
+    exportInFlightRef.current = true;
+    const exportFingerprint = fingerprint;
+    const exportConfig = config;
+    const packageReport = exportableReport;
+    restoreAfterExportRef.current = true;
+    setConfirmationOpen(false);
+    setExportState("working");
+    setImportState((current) => current === "error" ? "idle" : current);
+    setBackupState((current) => current === "error" ? "idle" : current);
+    setMessage("");
+    try {
+      const blob = await exportBotPackage(exportConfig, packageReport);
+      if (latestFingerprintRef.current !== exportFingerprint) {
+        throw new Error("策略設定已變更，請以目前設定重新完成回測後再匯出。");
+      }
+      downloadBlob(blob, `${safeFilenameStem(exportConfig)}-package.zip`);
+      setFallback(null);
+      setExportState("complete");
+      setMessage("完整策略包已開始下載。");
+    } catch (error) {
+      let nextFallback: BotPackageFile[] = [];
+      if (latestFingerprintRef.current !== exportFingerprint) {
+        setFallback(null);
+      } else {
+        try {
+          nextFallback = await buildBotPackageFiles(exportConfig, packageReport);
+        } catch {
+          nextFallback = [];
+        }
+        setFallback(nextFallback.length > 0 ? { fingerprint: exportFingerprint, files: nextFallback } : null);
+      }
+      setExportState("error");
+      setMessage(error instanceof Error ? error.message : "無法產生策略套件，請重試。");
+    } finally {
+      exportInFlightRef.current = false;
+    }
+  };
+
+  const downloadDraftBackup = () => {
+    setMessage("");
+    setBackupState("working");
+    try {
+      const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: "application/json" });
+      downloadBlob(blob, `${safeFilenameStem(config)}-draft-backup.json`);
+      setBackupState("complete");
+      setMessage("草稿備份 JSON 已開始下載；此檔案不是可執行策略套件。");
+    } catch (error) {
+      setBackupState("error");
+      setMessage(error instanceof Error ? error.message : "草稿備份 JSON 下載失敗");
+    }
+  };
 
   const importPackage = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
@@ -74,14 +166,16 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       const accepted = onImport(imported.config, imported.report);
       if (!accepted.ok) throw new Error(accepted.reason);
       setImportState("complete");
-      setMessage(`已匯入 ${file.name}，策略設定與回測報告已還原。`);
+      setMessage(imported.report
+        ? `已匯入 ${file.name}，策略設定與可重現的模擬報告已還原。`
+        : `已匯入 ${file.name} 的策略設定；跨裝置歷史證據不作為驗證依據，請重新執行行情回測。`);
     } catch (error) {
       setImportState("error");
       setMessage(error instanceof Error ? error.message : "策略套件匯入失敗");
     }
   };
 
-  const hasError = actionState === "error" || publishState === "error"
+  const hasError = exportState === "error" || backupState === "error" || actionState === "error" || publishState === "error"
     || shareState === "error" || importState === "error";
   const requireLogin = () => { window.location.assign(demoAuthPath(`${window.location.pathname}${window.location.search}`)); };
   const parseSavedVersion = (value: unknown): SavedVersion | null => {
@@ -194,37 +288,46 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     setPublishState("working");
     setMessage("正在固定策略版本並建立正式歷史回測證據…");
     try {
-      const version = await saveStrategy(false);
-      if (!version) throw new Error("save_failed");
-      const backtestKey = `publish-backtest-${crypto.randomUUID()}`;
-      const backtestResponse = await fetch("/api/backtests", {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": backtestKey },
-        body: JSON.stringify({
-          strategyVersionId: version.id,
-          market: config.market,
-          symbol: config.symbol,
-          interval: config.timeframe,
-          startTime: report.evidence.startTime,
-          endTime: report.evidence.endTime,
-          initialCapital: "10000",
-          feeRate: report.evidence.feeRate,
-          slippageRate: report.evidence.slippageRate,
-          leverage: String(config.leverage),
-          fundingMode: config.market === "futures" && report.evidence.fundingIncluded ? "historical" : "none",
-          gapPolicy: "fail",
-        }),
-      });
-      if (backtestResponse.status === 401) { requireLogin(); return; }
-      const backtestBody = await backtestResponse.json().catch(() => null) as {
-        backtest?: { id?: unknown; status?: unknown };
-        error?: { code?: unknown };
-      } | null;
-      if (!backtestResponse.ok || typeof backtestBody?.backtest?.id !== "string"
-        || backtestBody.backtest.status !== "succeeded") {
-        throw new Error(typeof backtestBody?.error?.code === "string"
-          ? backtestBody.error.code : "verified_backtest_failed");
+      let strategyVersionId: string;
+      let backtestJobId: string;
+      if (formalEvidence) {
+        strategyVersionId = formalEvidence.strategyVersionId;
+        backtestJobId = formalEvidence.backtestJobId;
+      } else {
+        const version = await saveStrategy(false);
+        if (!version) throw new Error("save_failed");
+        const backtestKey = `publish-backtest-${crypto.randomUUID()}`;
+        const backtestResponse = await fetch("/api/backtests", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": backtestKey },
+          body: JSON.stringify({
+            strategyVersionId: version.id,
+            market: config.market,
+            symbol: config.symbol,
+            interval: config.timeframe,
+            startTime: report.evidence.startTime,
+            endTime: report.evidence.endTime,
+            initialCapital: "10000",
+            feeRate: report.evidence.feeRate,
+            slippageRate: report.evidence.slippageRate,
+            leverage: String(config.leverage),
+            fundingMode: config.market === "futures" && report.evidence.fundingIncluded ? "historical" : "none",
+            gapPolicy: "fail",
+          }),
+        });
+        if (backtestResponse.status === 401) { requireLogin(); return; }
+        const backtestBody = await backtestResponse.json().catch(() => null) as {
+          backtest?: { id?: unknown; status?: unknown };
+          error?: { code?: unknown };
+        } | null;
+        if (!backtestResponse.ok || typeof backtestBody?.backtest?.id !== "string"
+          || backtestBody.backtest.status !== "succeeded") {
+          throw new Error(typeof backtestBody?.error?.code === "string"
+            ? backtestBody.error.code : "verified_backtest_failed");
+        }
+        strategyVersionId = version.id;
+        backtestJobId = backtestBody.backtest.id;
       }
       setMessage("歷史證據完成，正在發布至策略列表並建立社群分享頁…");
       const publicationResponse = await fetch("/api/strategy-publications", {
@@ -232,8 +335,8 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          strategyVersionId: version.id,
-          backtestJobId: backtestBody.backtest.id,
+          strategyVersionId,
+          backtestJobId,
           description: publicDescription,
         }),
       });
@@ -427,6 +530,41 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
         </div>
       </section>
 
+      <section className="workshop-portable-package" aria-labelledby="package-export-title">
+        <div>
+          <h3 id="package-export-title">匯出與備份</h3>
+          <p>完整策略包會綁定目前設定與對應回測；草稿備份 JSON 則可隨時保存尚未完成或未通過驗證的內容。</p>
+        </div>
+        <div className="package-export-actions">
+          <button
+            className="button button--primary"
+            data-package-export-trigger="true"
+            disabled={!canExport}
+            onClick={() => {
+              restoreAfterExportRef.current = false;
+              setConfirmationOpen(true);
+            }}
+            ref={exportTriggerRef}
+            type="button"
+          >
+            {exportState === "working" ? "產生套件中…" : "下載完整策略包"}
+          </button>
+          <button
+            className="button button--secondary"
+            disabled={backupState === "working"}
+            onClick={downloadDraftBackup}
+            type="button"
+          >
+            {backupState === "working" ? "準備草稿備份中…" : "下載草稿備份 JSON"}
+          </button>
+        </div>
+        <div className="workshop-portable-package__notes">
+          {!exportableReport && <small>完整策略包需要先完成目前設定的歷史行情回測；草稿備份不受此限制。</small>}
+          {exportableReport && !configurationReady && <small>設定已變更或尚未通過驗證，請修正並重新回測後再匯出完整策略包。</small>}
+          <small>草稿備份不是可執行策略套件，也不含交易憑證。</small>
+        </div>
+      </section>
+
       <details className="legacy-package workshop-legacy-package"><summary>匯入策略檔案（進階）</summary><div className="package-panel__grid package-panel__grid--single">
         <section aria-labelledby="package-import-title">
           <h3 id="package-import-title">匯入</h3>
@@ -445,6 +583,19 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       </div></details>
 
       {message && <p className="package-message" data-tone={hasError ? "danger" : "success"} role={hasError ? "alert" : "status"}>{message}</p>}
+      {fallback?.fingerprint === fingerprint && <PackageFallbackFiles files={fallback.files} />}
+
+      {confirmationOpen && (
+        <DownloadConfirmationDialog
+          description="策略包包含目前設定、JavaScript 原始碼、歷史行情回測資料、說明與版本資訊。"
+          id="package-confirmation-title"
+          onCancel={() => setConfirmationOpen(false)}
+          onConfirm={() => void confirmExport()}
+          restoreFocusOnConfirm={false}
+          title="確認下載完整策略包"
+          triggerRef={exportTriggerRef}
+        />
+      )}
     </section>
   );
 }

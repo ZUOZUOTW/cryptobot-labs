@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 
 import type { Candle, StrategySignal } from "../contracts";
 import { CandleSchema, StrategySignalSchema } from "../schemas";
+import { SandboxExecutionError } from "../sandbox/contracts";
 import { adverseFill, decimal, decimalString, positionPnl, unrealizedPnl } from "./accounting";
 import { calculateMetrics } from "./metrics";
 import { datasetDigest } from "./provenance";
@@ -185,7 +186,22 @@ function validateAndCopy(request: HistoricalBacktestRequest): {
 
 export async function runHistoricalBacktest(
   request: HistoricalBacktestRequest,
+  options: Readonly<{ signal?: AbortSignal; maximumDurationMs?: number }> = {},
 ): Promise<HistoricalBacktestResult> {
+  if (options.maximumDurationMs !== undefined &&
+      (!Number.isFinite(options.maximumDurationMs) || options.maximumDurationMs <= 0)) {
+    throw new RangeError("Historical backtest maximum duration must be positive");
+  }
+  const deadlineAt = options.maximumDurationMs === undefined
+    ? undefined
+    : performance.now() + options.maximumDurationMs;
+  const assertRunActive = (): void => {
+    options.signal?.throwIfAborted();
+    if (deadlineAt !== undefined && performance.now() >= deadlineAt) {
+      throw new Error("Historical backtest execution deadline exceeded");
+    }
+  };
+  assertRunActive();
   const validated = validateAndCopy(request);
   const { dataset } = request;
   const market = dataset.request.market;
@@ -382,7 +398,13 @@ export async function runHistoricalBacktest(
   if (maximumDailyLossRate !== undefined && (!Number.isFinite(maximumDailyLossRate) || maximumDailyLossRate <= 0 || maximumDailyLossRate > 1)) {
     throw new TypeError("Evaluator maximumDailyLossRate is invalid");
   }
+  if (request.evaluator.evaluationErrorPolicy !== undefined &&
+      request.evaluator.evaluationErrorPolicy !== "reject-signal" &&
+      request.evaluator.evaluationErrorPolicy !== "abort-backtest") {
+    throw new TypeError("Evaluator error policy is invalid");
+  }
   for (let index = 0; index < validated.candles.length; index += 1) {
+    assertRunActive();
     const candle = validated.candles[index]!;
     const currentUtcDay = new Date(candle.closeTime).toISOString().slice(0, 10);
     if (currentUtcDay !== utcDay) {
@@ -467,14 +489,22 @@ export async function runHistoricalBacktest(
       }));
       const parsed = StrategySignalSchema.safeParse(candidate);
       if (!parsed.success) {
+        if (request.evaluator.evaluationErrorPolicy === "abort-backtest") {
+          throw new TypeError("Strategy evaluator returned an invalid signal");
+        }
         signalEvents.push({ signalId: `invalid-${index + 1}`, evaluatedAt, status: "rejected", effect: "none", reason: "invalid-signal" });
         continue;
       }
       signal = parsed.data;
-    } catch {
+    } catch (error) {
+      if (error instanceof SandboxExecutionError ||
+          request.evaluator.evaluationErrorPolicy === "abort-backtest" || options.signal?.aborted) {
+        throw error;
+      }
       signalEvents.push({ signalId: `error-${index + 1}`, evaluatedAt, status: "rejected", effect: "none", reason: "evaluator-error" });
       continue;
     }
+    assertRunActive();
 
     const event: SignalEvent = {
       signalId: signal.id,
@@ -508,7 +538,9 @@ export async function runHistoricalBacktest(
     };
   }
 
+  assertRunActive();
   const digest = await datasetDigest({ ...dataset, candles: validated.candles });
+  assertRunActive();
   const firstCandle = validated.candles[0]!;
   const provenanceComplete = dataset.complete && validated.gaps.length === 0 &&
     validated.duplicateCount === 0 && validated.incompleteCount === 0 && dataset.validation.ordered &&

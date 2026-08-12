@@ -135,7 +135,7 @@ describe("strategy publications", () => {
       "netlify-cdn-cache-control": "no-store",
     });
     expect(publicStrategyPublicationCacheTag("strategy-publicationa"))
-      .toBe("public-strategy-publication:v2:strategy-publicationa");
+      .toBe("public-strategy-publication:v3:strategy-publicationa");
     expect(() => publicStrategyPublicationCacheTag("unsafe/slug")).toThrow(/slug/);
   });
 

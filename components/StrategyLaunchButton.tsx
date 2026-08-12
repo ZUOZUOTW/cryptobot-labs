@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { BotDefinition } from "../lib/types";
+import { useI18n } from "./I18nProvider";
 import {
   CloudStrategyLauncher,
   type CloudAutomationTemplate,
@@ -33,6 +34,7 @@ const templateFor = (bot: BotDefinition): CloudAutomationTemplate => ({
 });
 
 export function StrategyLaunchButton({ bot, className = "button button--primary" }: StrategyLaunchButtonProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const titleId = useId();
   const pathname = usePathname();
@@ -67,7 +69,7 @@ export function StrategyLaunchButton({ bot, className = "button button--primary"
         role="dialog"
       >
         <button
-          aria-label={`關閉 ${bot.name} 啟動視窗`}
+          aria-label={t(`關閉 ${bot.name} 啟動視窗`)}
           className="strategy-launch-dialog__close"
           onClick={() => setOpen(false)}
           type="button"
@@ -89,7 +91,7 @@ export function StrategyLaunchButton({ bot, className = "button button--primary"
     <>
       <button
         aria-haspopup="dialog"
-        aria-label={`啟動策略：${bot.name}`}
+        aria-label={t(`啟動策略：${bot.name}`)}
         className={className}
         onClick={() => setOpen(true)}
         type="button"

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Candle, HistoricalDataset, StrategyEvaluator, StrategyInput } from "../src";
+import { SandboxExecutionError, type Candle, type HistoricalDataset, type StrategyEvaluator, type StrategyInput } from "../src";
 import { MAX_DECIMAL_STRING_LENGTH, MAX_HISTORICAL_CANDLES, runHistoricalBacktest } from "../src/backtest/engine";
 import fixedCandles from "./fixtures/btcusdt-1h.json";
 
@@ -377,6 +377,35 @@ describe("historical backtest", () => {
       ["rejected", "evaluator-error"],
       ["rejected", "invalid-signal"],
     ]);
+  });
+
+  it("aborts evidence immediately on sandbox failures even without a caller policy", async () => {
+    const evaluate = vi.fn(async () => {
+      throw new SandboxExecutionError("deadline-exceeded", "sandbox deadline exceeded");
+    });
+    await expect(runHistoricalBacktest(request({
+      evaluator: { evaluate },
+    }))).rejects.toThrow("sandbox deadline exceeded");
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors whole-run cancellation and wall-clock budgets", async () => {
+    const aborted = new AbortController();
+    aborted.abort(new Error("request cancelled"));
+    const evaluate = vi.fn(request().evaluator.evaluate);
+    await expect(runHistoricalBacktest(request({ evaluator: { evaluate } }), {
+      signal: aborted.signal,
+    })).rejects.toThrow("request cancelled");
+    expect(evaluate).not.toHaveBeenCalled();
+
+    const slow = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { id: "slow", action: "hold" as const, reason: "slow", createdAt: 1 };
+    });
+    await expect(runHistoricalBacktest(request({
+      evaluator: { evaluationErrorPolicy: "abort-backtest", evaluate: slow },
+    }), { maximumDurationMs: 1 })).rejects.toThrow(/deadline/i);
+    expect(slow).toHaveBeenCalledTimes(1);
   });
 
   it("fails on gaps before evaluating, or discloses them without interpolation", async () => {

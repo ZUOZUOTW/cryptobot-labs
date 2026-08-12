@@ -7,6 +7,8 @@ import type {
 
 type Database = Sql<Record<string, never>>;
 type Row = Record<string, unknown>;
+const CONNECTION_REAUTHORIZATION_REQUIRED = "connection_reauthorization_required";
+const CONNECTION_VERIFICATION_FAILED = "connection_verification_failed";
 
 export interface StoredOAuthState {
   readonly id: string;
@@ -20,7 +22,13 @@ export interface StoredOAuthState {
   readonly initializationVector: Uint8Array;
   readonly ciphertext: Uint8Array;
   readonly context: Readonly<Record<string, string>>;
+  readonly connectionVersion: number;
   readonly expiresAt: number;
+}
+
+export interface PreparedConnection {
+  readonly id: string;
+  readonly version: number;
 }
 
 export interface OAuthRepository {
@@ -28,19 +36,20 @@ export interface OAuthRepository {
   registerShard(input: { shardId: string; region: string; egressIp: string; now: number }): Promise<void>;
   reserveHandoff(input: { handoff: ExecutorOAuthHandoff; nonceHash: string; now: number }): Promise<void>;
   prepareConnection(input: { candidateId: string; userId: string; shardId: string;
-    credentialSource: WeexCredentialSource; now: number }): Promise<string>;
+    credentialSource: WeexCredentialSource; now: number }): Promise<PreparedConnection>;
   createState(input: { id: string; connectionId: string; userId: string; stateHash: string; sessionHash: string;
-    redirectUri: string; expiresAt: number; now: number; envelope: EncryptedWeexCredentials;
+    connectionVersion: number; redirectUri: string; expiresAt: number; now: number; envelope: EncryptedWeexCredentials;
     context: Readonly<Record<string, string>> }): Promise<void>;
   findState(stateHash: string): Promise<StoredOAuthState | null>;
-  consumeState(id: string, stateHash: string, now: number): Promise<boolean>;
+  consumeState(id: string, stateHash: string, connectionVersion: number, now: number): Promise<boolean>;
   completeState(input: { state: StoredOAuthState; credentialEnvelope: EncryptedWeexCredentials;
     credentialContext: Readonly<Record<string, string>>; maskedApiKeySuffix: string; now: number }): Promise<void>;
   completeManualConnection(input: { connectionId: string; userId: string;
+    expectedConnectionVersion: number;
     credentialEnvelope: EncryptedWeexCredentials; credentialContext: Readonly<Record<string, string>>;
     maskedApiKeySuffix: string; permissions: Readonly<Record<string, boolean>>; now: number }): Promise<void>;
   failConnection(input: { connectionId: string; userId: string;
-    credentialSource: WeexCredentialSource; now: number }): Promise<void>;
+    expectedConnectionVersion: number; credentialSource: WeexCredentialSource; now: number }): Promise<void>;
   failState(input: { state: StoredOAuthState; code: string; now: number }): Promise<void>;
   close(): Promise<void>;
 }
@@ -59,6 +68,11 @@ const context = (value: unknown): Readonly<Record<string, string>> => {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
     || Object.values(parsed).some((item) => typeof item !== "string")) throw new Error("encryption context is invalid");
   return Object.freeze({ ...(parsed as Record<string, string>) });
+};
+const connectionVersion = (value: unknown): number => {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error("connection version is invalid");
+  return parsed;
 };
 
 export class PostgresOAuthRepository implements OAuthRepository {
@@ -100,32 +114,42 @@ export class PostgresOAuthRepository implements OAuthRepository {
   }
 
   async prepareConnection(input: { candidateId: string; userId: string; shardId: string;
-    credentialSource: WeexCredentialSource; now: number }): Promise<string> {
-    const rows = await this.#sql.unsafe(`insert into public.weex_connections
-      (id,user_id,executor_shard_id,provider,credential_source,status,permissions_json,
-       withdrawal_access_absent,version,created_at,updated_at)
-      values ($1,$2,$3,'weex',$4,'pending','{}'::jsonb,false,1,$5,$5)
-      on conflict(user_id,provider) do update set executor_shard_id=excluded.executor_shard_id,status='pending',
-      credential_source=excluded.credential_source,revoked_at=null,
-      version=public.weex_connections.version+1,updated_at=excluded.updated_at returning id`,
-    [input.candidateId, input.userId, input.shardId, input.credentialSource, input.now]);
-    const id = (rows[0] as Row | undefined)?.id;
-    if (typeof id !== "string") throw new Error("WEEX connection preparation failed");
-    return id;
+    credentialSource: WeexCredentialSource; now: number }): Promise<PreparedConnection> {
+    return this.#sql.begin(async (transaction) => {
+      const rows = await transaction.unsafe(`insert into public.weex_connections
+        (id,user_id,executor_shard_id,provider,credential_source,status,permissions_json,
+         withdrawal_access_absent,version,created_at,updated_at)
+        values ($1,$2,$3,'weex',$4,'pending','{}'::jsonb,false,1,$5,$5)
+        on conflict(user_id,provider) do update set executor_shard_id=excluded.executor_shard_id,status='pending',
+        credential_source=excluded.credential_source,permissions_json='{}'::jsonb,
+        withdrawal_access_absent=false,verified_at=null,revoked_at=null,
+        version=public.weex_connections.version+1,updated_at=excluded.updated_at returning id,version`,
+      [input.candidateId, input.userId, input.shardId, input.credentialSource, input.now]);
+      const row = rows[0] as Row | undefined;
+      const id = row?.id;
+      if (typeof id !== "string") throw new Error("WEEX connection preparation failed");
+      const version = connectionVersion(row?.version);
+      await transaction.unsafe(`update public.cloud_strategy_runs set state='paused',version=version+1,
+        last_error_code=$3,lease_owner=null,lease_expires_at=null,updated_at=greatest(updated_at,$4)
+        where connection_id=$1 and user_id=$2 and state<>'stopped'`,
+      [id, input.userId, CONNECTION_REAUTHORIZATION_REQUIRED, input.now]);
+      return Object.freeze({ id, version });
+    });
   }
 
   async createState(input: { id: string; connectionId: string; userId: string; stateHash: string; sessionHash: string;
-    redirectUri: string; expiresAt: number; now: number; envelope: EncryptedWeexCredentials;
+    connectionVersion: number; redirectUri: string; expiresAt: number; now: number; envelope: EncryptedWeexCredentials;
     context: Readonly<Record<string, string>> }): Promise<void> {
     const result = await this.#sql.unsafe(`insert into private.weex_oauth_states
       (id,connection_id,user_id,state_hash,session_hash,redirect_uri,promoter_slug,kms_key_id,encrypted_data_key,
        initialization_vector,code_verifier_ciphertext,encryption_context_json,status,expires_at,created_at,updated_at)
       select $1,$2,$3,$4,$5,$6,null,$7,$8,$9,$10,$11::jsonb,'init',$12,$13,$13
       from public.weex_connections
-      where id=$2 and user_id=$3 and credential_source='oauth'`,
+      where id=$2 and user_id=$3 and credential_source='oauth' and status='pending' and version=$14`,
     [input.id, input.connectionId, input.userId, input.stateHash, input.sessionHash, input.redirectUri,
       input.envelope.keyId, input.envelope.encryptedDataKey, input.envelope.initializationVector,
-      input.envelope.ciphertext, this.#sql.json(input.context), input.expiresAt, input.now]);
+      input.envelope.ciphertext, this.#sql.json(input.context), input.expiresAt, input.now,
+      connectionVersion(input.connectionVersion)]);
     if (result.count !== 1) throw new Error("OAuth connection source conflict");
   }
 
@@ -135,29 +159,44 @@ export class PostgresOAuthRepository implements OAuthRepository {
       from private.weex_oauth_states where state_hash=$1 and status='init' and consumed_at is null limit 1`, [stateHash]);
     const row = rows[0] as Row | undefined;
     if (!row) return null;
+    const storedContext = context(row.encryption_context_json);
+    let storedConnectionVersion: number;
+    try { storedConnectionVersion = connectionVersion(storedContext.connection_version); }
+    catch { return null; }
     return Object.freeze({ id: String(row.id), connectionId: String(row.connection_id), userId: String(row.user_id),
       stateHash: String(row.state_hash), sessionHash: String(row.session_hash), redirectUri: String(row.redirect_uri),
       keyId: String(row.kms_key_id), encryptedDataKey: bytes(row.encrypted_data_key, "encrypted data key"),
       initializationVector: bytes(row.initialization_vector, "initialization vector"),
-      ciphertext: bytes(row.code_verifier_ciphertext, "PKCE ciphertext"), context: context(row.encryption_context_json),
+      ciphertext: bytes(row.code_verifier_ciphertext, "PKCE ciphertext"), context: storedContext,
+      connectionVersion: storedConnectionVersion,
       expiresAt: number(row.expires_at, "OAuth expiry") });
   }
 
-  async consumeState(id: string, stateHash: string, now: number): Promise<boolean> {
+  async consumeState(id: string, stateHash: string, expectedConnectionVersion: number, now: number): Promise<boolean> {
     const result = await this.#sql.unsafe(`update private.weex_oauth_states set status='processing',consumed_at=$3,updated_at=$3
       where id=$1 and state_hash=$2 and status='init' and consumed_at is null and expires_at>$3
         and exists (
           select 1 from public.weex_connections c
           where c.id=private.weex_oauth_states.connection_id
             and c.user_id=private.weex_oauth_states.user_id
-            and c.credential_source='oauth'
-        )`, [id, stateHash, now]);
+            and c.credential_source='oauth' and c.status='pending' and c.version=$4
+        )`, [id, stateHash, now, connectionVersion(expectedConnectionVersion)]);
     return result.count === 1;
   }
 
   async completeState(input: { state: StoredOAuthState; credentialEnvelope: EncryptedWeexCredentials;
     credentialContext: Readonly<Record<string, string>>; maskedApiKeySuffix: string; now: number }): Promise<void> {
     await this.#sql.begin(async (transaction) => {
+      const connection = await transaction.unsafe(`update public.weex_connections set status='active',masked_api_key_suffix=$3,
+        permissions_json=$4::jsonb,withdrawal_access_absent=true,verified_at=$5,revoked_at=null,updated_at=$5
+        where id=$1 and user_id=$2 and credential_source='oauth' and status='pending' and version=$6
+          and exists (select 1 from private.weex_oauth_states s where s.id=$7 and s.connection_id=$1
+            and s.user_id=$2 and s.status='processing')`,
+      [input.state.connectionId, input.state.userId, input.maskedApiKeySuffix,
+        transaction.json({ read: true, spotTrade: false, futuresTrade: false, futuresDemoTrade: false,
+          withdrawal: false, liveVerified: false }), input.now,
+        connectionVersion(input.state.connectionVersion), input.state.id]);
+      if (connection.count !== 1) throw new Error("OAuth connection attempt is stale");
       await transaction.unsafe(`insert into private.weex_credential_blobs
         (connection_id,user_id,kms_key_id,encrypted_data_key,initialization_vector,credential_ciphertext,
          encryption_context_json,credential_version,created_at,rotated_at,updated_at)
@@ -169,21 +208,24 @@ export class PostgresOAuthRepository implements OAuthRepository {
       [input.state.connectionId, input.state.userId, input.credentialEnvelope.keyId,
         input.credentialEnvelope.encryptedDataKey, input.credentialEnvelope.initializationVector,
         input.credentialEnvelope.ciphertext, transaction.json(input.credentialContext), input.now]);
-      const connection = await transaction.unsafe(`update public.weex_connections set status='active',masked_api_key_suffix=$3,
-        permissions_json=$4::jsonb,withdrawal_access_absent=true,verified_at=$5,revoked_at=null,updated_at=$5
-        where id=$1 and user_id=$2 and credential_source='oauth'`,
-      [input.state.connectionId, input.state.userId, input.maskedApiKeySuffix,
-        transaction.json({ read: true, spotTrade: true, futuresTrade: true, withdrawal: false }), input.now]);
       const state = await transaction.unsafe(`update private.weex_oauth_states set status='success',error_code=null,updated_at=$2
         where id=$1 and status='processing'`, [input.state.id, input.now]);
-      if (connection.count !== 1 || state.count !== 1) throw new Error("OAuth completion conflict");
+      if (state.count !== 1) throw new Error("OAuth completion conflict");
     });
   }
 
   async completeManualConnection(input: { connectionId: string; userId: string;
+    expectedConnectionVersion: number;
     credentialEnvelope: EncryptedWeexCredentials; credentialContext: Readonly<Record<string, string>>;
     maskedApiKeySuffix: string; permissions: Readonly<Record<string, boolean>>; now: number }): Promise<void> {
     await this.#sql.begin(async (transaction) => {
+      const connection = await transaction.unsafe(`update public.weex_connections
+        set status='active',masked_api_key_suffix=$3,permissions_json=$4::jsonb,
+        withdrawal_access_absent=$5,verified_at=$6,revoked_at=null,updated_at=$6
+        where id=$1 and user_id=$2 and credential_source='manual' and status='pending' and version=$7`,
+      [input.connectionId, input.userId, input.maskedApiKeySuffix, transaction.json(input.permissions),
+        input.permissions.withdrawal === false, input.now, connectionVersion(input.expectedConnectionVersion)]);
+      if (connection.count !== 1) throw new Error("Manual WEEX connection attempt is stale");
       await transaction.unsafe(`insert into private.weex_credential_blobs
         (connection_id,user_id,kms_key_id,encrypted_data_key,initialization_vector,credential_ciphertext,
          encryption_context_json,credential_version,created_at,rotated_at,updated_at)
@@ -196,21 +238,23 @@ export class PostgresOAuthRepository implements OAuthRepository {
       [input.connectionId, input.userId, input.credentialEnvelope.keyId,
         input.credentialEnvelope.encryptedDataKey, input.credentialEnvelope.initializationVector,
         input.credentialEnvelope.ciphertext, transaction.json(input.credentialContext), input.now]);
-      const connection = await transaction.unsafe(`update public.weex_connections
-        set status='active',masked_api_key_suffix=$3,permissions_json=$4::jsonb,
-        withdrawal_access_absent=$5,verified_at=$6,revoked_at=null,updated_at=$6
-        where id=$1 and user_id=$2 and credential_source='manual'`,
-      [input.connectionId, input.userId, input.maskedApiKeySuffix, transaction.json(input.permissions),
-        input.permissions.withdrawal === false, input.now]);
-      if (connection.count !== 1) throw new Error("Manual WEEX connection completion conflict");
     });
   }
 
   async failConnection(input: { connectionId: string; userId: string;
-    credentialSource: WeexCredentialSource; now: number }): Promise<void> {
-    await this.#sql.unsafe(`update public.weex_connections set status='error',updated_at=$3
-      where id=$1 and user_id=$2 and credential_source=$4`,
-    [input.connectionId, input.userId, input.now, input.credentialSource]);
+    expectedConnectionVersion: number; credentialSource: WeexCredentialSource; now: number }): Promise<void> {
+    await this.#sql.begin(async (transaction) => {
+      const connection = await transaction.unsafe(`update public.weex_connections set status='error',
+        permissions_json='{}'::jsonb,withdrawal_access_absent=false,verified_at=null,updated_at=$3
+        where id=$1 and user_id=$2 and credential_source=$4 and status='pending' and version=$5`,
+      [input.connectionId, input.userId, input.now, input.credentialSource,
+        connectionVersion(input.expectedConnectionVersion)]);
+      if (connection.count !== 1) return;
+      await transaction.unsafe(`update public.cloud_strategy_runs set state='paused',version=version+1,
+        last_error_code=$3,lease_owner=null,lease_expires_at=null,updated_at=greatest(updated_at,$4)
+        where connection_id=$1 and user_id=$2 and state<>'stopped'`,
+      [input.connectionId, input.userId, CONNECTION_VERIFICATION_FAILED, input.now]);
+    });
   }
 
   async failState(input: { state: StoredOAuthState; code: string; now: number }): Promise<void> {
@@ -218,9 +262,16 @@ export class PostgresOAuthRepository implements OAuthRepository {
     await this.#sql.begin(async (transaction) => {
       await transaction.unsafe(`update private.weex_oauth_states set status='failed',error_code=$2,updated_at=$3
         where id=$1 and status='processing'`, [input.state.id, safeCode, input.now]);
-      await transaction.unsafe(`update public.weex_connections set status='error',updated_at=$3
-        where id=$1 and user_id=$2 and credential_source='oauth'`,
-      [input.state.connectionId, input.state.userId, input.now]);
+      const connection = await transaction.unsafe(`update public.weex_connections set status='error',
+        permissions_json='{}'::jsonb,withdrawal_access_absent=false,verified_at=null,updated_at=$3
+        where id=$1 and user_id=$2 and credential_source='oauth' and status='pending' and version=$4`,
+      [input.state.connectionId, input.state.userId, input.now,
+        connectionVersion(input.state.connectionVersion)]);
+      if (connection.count !== 1) return;
+      await transaction.unsafe(`update public.cloud_strategy_runs set state='paused',version=version+1,
+        last_error_code=$3,lease_owner=null,lease_expires_at=null,updated_at=greatest(updated_at,$4)
+        where connection_id=$1 and user_id=$2 and state<>'stopped'`,
+      [input.state.connectionId, input.state.userId, CONNECTION_VERIFICATION_FAILED, input.now]);
     });
   }
 

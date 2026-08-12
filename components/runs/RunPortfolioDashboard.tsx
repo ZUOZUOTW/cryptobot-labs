@@ -294,6 +294,7 @@ export function RunPortfolioDashboard({
   const [sort, setSort] = useState<RunSort>("attention");
   const [viewMode, setViewMode] = useState<RunViewMode>("professional");
   const [gestureAnnouncement, setGestureAnnouncement] = useState("");
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
   const gestureStart = useRef<{ x: number; y: number } | null>(null);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase(locale));
 
@@ -390,7 +391,7 @@ export function RunPortfolioDashboard({
         positionAttribution, exposureEvidenceInvalid };
     });
     const attentionRows = rows.filter(({ attention }) => attention);
-    const alerts = [
+    const allAlerts = [
       ...(payload.account?.lastErrorCode ? [{
         id: "account-sync",
         tone: "warning" as const,
@@ -433,7 +434,10 @@ export function RunPortfolioDashboard({
         href: `/runs/${encodeURIComponent(run.id)}`,
         action: "查看詳情",
       })),
-    ].slice(0, 2);
+    ];
+    const alerts = allAlerts.toSorted((left, right) => (
+      left.tone === right.tone ? 0 : left.tone === "danger" ? -1 : 1
+    ));
     return {
       positions,
       allocations,
@@ -447,6 +451,7 @@ export function RunPortfolioDashboard({
       rows,
       attentionRows,
       alerts,
+      totalAlertCount: allAlerts.length,
       recentRuns: [...payload.runs]
         .sort((left, right) => (right.lastEvaluatedAt ?? 0) - (left.lastEvaluatedAt ?? 0))
         .slice(0, 3),
@@ -512,6 +517,7 @@ export function RunPortfolioDashboard({
     : viewMode === "quant"
       ? "顯示評估、訊號、失敗次數與曝險證據，方便核對程序行為。"
       : "同時顯示帳戶損益、持倉、最近訊號與風控使用率。";
+  const visibleAlerts = showAllAlerts ? dashboard.alerts : dashboard.alerts.slice(0, 2);
 
   if (state === "unauthorized") {
     return <section className="control-center-gate glass-panel" aria-labelledby="control-center-auth-title">
@@ -739,13 +745,16 @@ export function RunPortfolioDashboard({
 
       <aside className="control-center-alerts glass-panel" aria-labelledby="control-center-alerts-title">
         <header><div><FiAlertTriangle aria-hidden="true" /><h2 id="control-center-alerts-title">需要處理</h2></div>
-          <span>{dashboard.alerts.length}</span></header>
-        {dashboard.alerts.length ? <ol>{dashboard.alerts.map((alert) => <li data-tone={alert.tone} key={alert.id}>
+          <span>{dashboard.totalAlertCount}</span></header>
+        {dashboard.alerts.length ? <><ol>{visibleAlerts.map((alert) => <li data-tone={alert.tone} key={alert.id}>
           <div><span>{alert.tone === "danger" ? <FiAlertTriangle aria-hidden="true" /> : <FiShield aria-hidden="true" />}</span>
             <strong>{alert.title}</strong></div>
           <p>{alert.body}</p><small>{alert.safe}</small>
           <Link className="button button--ghost button--small" href={alert.href}>{alert.action}</Link>
-        </li>)}</ol> : <div className="control-center-alerts__clear">
+        </li>)}</ol>{dashboard.alerts.length > 2 && <button aria-expanded={showAllAlerts}
+          className="control-center-alerts__toggle" onClick={() => setShowAllAlerts((current) => !current)} type="button">
+          {showAllAlerts ? "收合提醒" : "查看全部提醒"}
+        </button>}</> : <div className="control-center-alerts__clear">
           <FiCheckCircle aria-hidden="true" /><strong>目前無需處理</strong>
           <span>連線、風控與運行策略皆未回報異常。</span>
         </div>}

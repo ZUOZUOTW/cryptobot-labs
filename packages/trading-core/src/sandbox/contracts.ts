@@ -62,3 +62,6 @@ export const BACKTEST_SANDBOX_BUDGET: ResolvedSandboxBudget = Object.freeze({
   ...LIVE_SANDBOX_BUDGET,
   deadlineMs: 250,
 });
+
+/** Maximum cumulative QuickJS execution time allowed for one evidence run. */
+export const BACKTEST_SANDBOX_TOTAL_BUDGET_MS = 5_000;

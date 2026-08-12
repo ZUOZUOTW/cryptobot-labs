@@ -271,6 +271,67 @@ describe("strategy poster share dialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("downloads through a connected anchor, removes it, and revokes the object URL later", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("png", {
+      headers: { "content-type": "image/png" },
+      status: 200,
+    }));
+    const createObjectURL = vi.fn(() => "blob:strategy-poster");
+    const revokeObjectURL = vi.fn();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    let connectedAtClick = false;
+    let revokeWasDeferred = false;
+    const append = vi.spyOn(document.body, "append");
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      connectedAtClick = this.isConnected;
+      revokeWasDeferred = !revokeObjectURL.mock.calls.length;
+    });
+
+    const user = userEvent.setup();
+    render(<StrategyShareActions botId="orbit-dca" botName="軌道定投" />);
+    await user.click(screen.getByRole("button", { name: "分享海報" }));
+    await user.click(screen.getByRole("button", { name: "下載海報" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("1200 × 630 海報已下載。");
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(File));
+    expect(connectedAtClick).toBe(true);
+    expect(revokeWasDeferred).toBe(true);
+    const clickedAnchor = append.mock.calls.flat().find((node) => node instanceof HTMLAnchorElement);
+    expect(clickedAnchor).toMatchObject({ download: "cryptobot-orbit-dca-poster.png" });
+    expect(clickedAnchor?.isConnected).toBe(false);
+    expect(document.querySelector('a[download="cryptobot-orbit-dca-poster.png"]')).not.toBeInTheDocument();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:strategy-poster"));
+  });
+
+  it("removes the temporary download anchor and revokes its URL when the click fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("png", {
+      headers: { "content-type": "image/png" },
+      status: 200,
+    }));
+    URL.createObjectURL = vi.fn(() => "blob:failed-strategy-poster");
+    const revokeObjectURL = vi.fn();
+    URL.revokeObjectURL = revokeObjectURL;
+    let connectedAtClick = false;
+    const append = vi.spyOn(document.body, "append");
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      connectedAtClick = this.isConnected;
+      throw new Error("download blocked");
+    });
+
+    const user = userEvent.setup();
+    render(<StrategyShareActions botId="orbit-dca" botName="軌道定投" />);
+    await user.click(screen.getByRole("button", { name: "分享海報" }));
+    await user.click(screen.getByRole("button", { name: "下載海報" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("海報暫時無法下載");
+    expect(connectedAtClick).toBe(true);
+    const clickedAnchor = append.mock.calls.flat().find((node) => node instanceof HTMLAnchorElement);
+    expect(clickedAnchor?.isConnected).toBe(false);
+    expect(document.querySelector('a[download="cryptobot-orbit-dca-poster.png"]')).not.toBeInTheDocument();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:failed-strategy-poster"));
+  });
+
   it("preloads the PNG on dialog open and attaches the ready File without awaiting in the click", async () => {
     const { canShare, share } = nativeShare();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("png", {
@@ -352,6 +413,9 @@ describe("strategy poster share dialog", () => {
   it("uses current English locale for clipboard payload and Japanese locale for social payload", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
+    localStorage.setItem("cryptobot-labs.locale", "en");
+    document.documentElement.dataset.locale = "en";
+    document.documentElement.lang = "en";
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const english = render(
       <I18nProvider initialLocale="en">

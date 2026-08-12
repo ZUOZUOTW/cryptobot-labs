@@ -81,6 +81,7 @@ describe("manual WEEX credential relay", () => {
   it("forwards credentials once to the fixed Executor origin and returns only masked metadata", async () => {
     const executorFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       maskedApiKeySuffix: "A1B2",
+      futuresDemoReady: true,
       liveReady: true,
     }), { status: 200, headers: { "content-type": "application/json" } }));
 
@@ -118,6 +119,47 @@ describe("manual WEEX credential relay", () => {
         redirect: "error",
       }),
     );
+  });
+
+  it("accepts an Executor-verified Demo-only capability without projecting live permission", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      maskedApiKeySuffix: "A1B2",
+      futuresDemoReady: true,
+      liveReady: false,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    const response = await POST(request({
+      apiKey: "api-key-A1B2",
+      secretKey: "secret-key",
+      passphrase: "passphrase",
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      connection: {
+        status: "active",
+        credentialSource: "manual",
+        maskedApiKeySuffix: "A1B2",
+        futuresDemoReady: true,
+        liveReady: false,
+      },
+    });
+  });
+
+  it("fails closed when the Executor omits its authoritative Demo capability", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      maskedApiKeySuffix: "A1B2",
+      liveReady: false,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    const response = await POST(request({
+      apiKey: "api-key-A1B2",
+      secretKey: "secret-key",
+      passphrase: "passphrase",
+    }));
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "invalid_executor_response" });
   });
 
   it("fails closed before authentication or body forwarding after the manual transition is disabled", async () => {

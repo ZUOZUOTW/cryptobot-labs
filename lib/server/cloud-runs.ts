@@ -1,5 +1,5 @@
 import type { ControlPlaneDatabase } from "@/db";
-import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client/symbol";
+import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -62,6 +62,7 @@ export interface RealizedPnlSeries {
   tradeCount: number;
   points: RealizedPnlPointRow[];
 }
+export type CloudRunMode = "futures-demo" | "live";
 interface RealizedPnlQueryRow extends RealizedPnlPointRow {
   overallNetPnl: string;
   overallTradeCount: number;
@@ -184,19 +185,20 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
       };
     },
     async create(input: { id: string; userId: string; strategyVersionId: string; name: string;
-      configurationHash: string; mode: "live"; risk: CloudRiskInput; now: number }): Promise<CloudRunRow | null> {
+      configurationHash: string; mode: CloudRunMode; risk: CloudRiskInput; now: number }): Promise<CloudRunRow | null> {
       if (!ID.test(input.id) || !ID.test(input.userId) || !ID.test(input.strategyVersionId)
         || input.name.trim().length < 1 || input.name.trim().length > 100 || !HASH.test(input.configurationHash)) return null;
       const row = await database.prepare(`insert into cloud_strategy_runs
         (id,user_id,connection_id,executor_shard_id,strategy_version_id,name,mode,state,config_json,risk_json,
          configuration_hash,version,consecutive_failures,created_at,updated_at,started_at)
-        select ?,s.user_id,c.id,c.executor_shard_id,s.id,?,'live','running',s.config_json::jsonb,?::text::jsonb,
+        select ?,s.user_id,c.id,c.executor_shard_id,s.id,?,?,'running',s.config_json::jsonb,?::text::jsonb,
           ?,1,0,?,?,?
         from strategy_versions s
         join strategies t on t.id=s.strategy_id and t.user_id=s.user_id
         join weex_connections c on c.user_id=s.user_id and c.provider='weex'
         where s.user_id=? and s.id=? and s.config_hash=? and c.status='active'
-          and t.market in ('spot','futures')
+          and ((?='futures-demo' and t.market='futures') or (?='live' and t.market in ('spot','futures')))
+          and s.source_code is null and s.source_hash is null
           and s.config_json::jsonb->>'market'=t.market
           and regexp_replace(regexp_replace(upper(btrim(s.config_json::jsonb->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
             =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[-/_]', '', 'g')
@@ -208,11 +210,18 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
           and c.withdrawal_access_absent=true and c.executor_shard_id is not null
           and c.permissions_json @> '{"read":true}'::jsonb
           and (
-            (s.config_json::jsonb->>'market'='spot'
-              and c.permissions_json @> '{"spotTrade":true}'::jsonb)
+            (?='futures-demo' and s.config_json::jsonb->>'market'='futures' and (
+              c.permissions_json @> '{"futuresDemoTrade":true}'::jsonb
+              or c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb
+            ))
             or
-            (s.config_json::jsonb->>'market'='futures'
-              and c.permissions_json @> '{"futuresTrade":true}'::jsonb)
+            (?='live' and (
+              (s.config_json::jsonb->>'market'='spot'
+                and c.permissions_json @> '{"spotTrade":true,"liveVerified":true}'::jsonb)
+              or
+              (s.config_json::jsonb->>'market'='futures'
+                and c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb)
+            ))
           )
           and exists (
             select 1 from backtest_jobs j
@@ -232,23 +241,23 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
               and active.state<>'stopped'
           )
         on conflict do nothing
-        returning ${columns}`).bind(input.id, input.name.trim(), JSON.stringify(input.risk), input.configurationHash,
-          input.now, input.now, input.now, input.userId, input.strategyVersionId, input.configurationHash,
-          JSON.stringify(input.risk))
+        returning ${columns}`).bind(input.id, input.name.trim(), input.mode, JSON.stringify(input.risk), input.configurationHash,
+          input.now, input.now, input.now, input.userId, input.strategyVersionId, input.configurationHash, input.mode, input.mode,
+          JSON.stringify(input.risk), input.mode, input.mode)
         .first<CloudRunRow>();
       return row ? normalizeCloudRunRow(row) : null;
     },
     async findMatching(input: { id: string; userId: string; strategyVersionId: string; name: string;
-      configurationHash: string; mode: "live"; risk: CloudRiskInput }): Promise<CloudRunRow | null> {
+      configurationHash: string; mode: CloudRunMode; risk: CloudRiskInput }): Promise<CloudRunRow | null> {
       if (!ID.test(input.id) || !ID.test(input.userId) || !ID.test(input.strategyVersionId)
         || input.name.trim().length < 1 || input.name.trim().length > 100 || !HASH.test(input.configurationHash)) {
         return Promise.resolve(null);
       }
       const row = await database.prepare(`select ${columns} from cloud_strategy_runs
         where id=? and user_id=? and strategy_version_id=? and name=? and configuration_hash=?
-          and mode='live' and risk_json=?::text::jsonb limit 1`)
+          and mode=? and risk_json=?::text::jsonb limit 1`)
         .bind(input.id, input.userId, input.strategyVersionId, input.name.trim(), input.configurationHash,
-          JSON.stringify(input.risk)).first<CloudRunRow>();
+          input.mode, JSON.stringify(input.risk)).first<CloudRunRow>();
       return row ? normalizeCloudRunRow(row) : null;
     },
     async hasActiveTargetConflict(input: { id: string; userId: string; strategyVersionId: string;
@@ -286,10 +295,18 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         .bind(input.userId, input.id).first<{ conflict: number }>();
       return conflict !== null;
     },
+    async modeForUser(input: { id: string; userId: string }): Promise<CloudRunMode | null> {
+      if (!ID.test(input.id) || !ID.test(input.userId)) return null;
+      const row = await database.prepare(`select mode from cloud_strategy_runs where user_id=? and id=? limit 1`)
+        .bind(input.userId, input.id).first<{ mode: string }>();
+      if (!row) return null;
+      if (row.mode !== "futures-demo" && row.mode !== "live") throw new Error("stored cloud run mode is invalid");
+      return row.mode;
+    },
     async transition(input: { userId: string; id: string; state: "running" | "paused" | "stopped";
-      expectedVersion: number; now: number }): Promise<CloudRunRow | null> {
+      expectedVersion: number; allowLiveResume: boolean; now: number }): Promise<CloudRunRow | null> {
       if (!ID.test(input.userId) || !ID.test(input.id) || !Number.isSafeInteger(input.expectedVersion)
-        || input.expectedVersion < 1) return Promise.resolve(null);
+        || input.expectedVersion < 1 || typeof input.allowLiveResume !== "boolean") return Promise.resolve(null);
       const row = await database.prepare(`update cloud_strategy_runs as target set state=?,version=version+1,updated_at=?,
         started_at=case when ?='running' then ? else started_at end,
         stopped_at=case when ?='stopped' then ? else stopped_at end,
@@ -297,6 +314,7 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         consecutive_failures=case when ?='running' then 0 else consecutive_failures end,
         lease_owner=null,lease_expires_at=null
         where target.user_id=? and target.id=? and target.version=? and target.state<>'stopped'
+          and (?<>'running' or target.mode<>'live' or ?)
           and (?<>'running' or not exists (
             select 1 from cloud_strategy_runs active
             where active.user_id=target.user_id and active.connection_id=target.connection_id
@@ -306,7 +324,7 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
               and active.id<>target.id and active.state<>'stopped'
           )) returning ${columns}`)
         .bind(input.state, input.now, input.state, input.now, input.state, input.now, input.state, input.state,
-          input.userId, input.id, input.expectedVersion, input.state).first<CloudRunRow>();
+          input.userId, input.id, input.expectedVersion, input.state, input.allowLiveResume, input.state).first<CloudRunRow>();
       return row ? normalizeCloudRunRow(row) : null;
     },
   };

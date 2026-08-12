@@ -73,22 +73,25 @@ const anonymousIdentity = () => ({
   now: () => 10,
 });
 
+const ownedVersion = (overrides: Partial<OwnedStrategyVersionRecord> = {}): OwnedStrategyVersionRecord => ({
+  id: "version_a",
+  userId: "usr_owner",
+  strategyId: "strategy_a",
+  version: 1,
+  market: config.market,
+  symbol: config.symbol,
+  configHash: "a".repeat(64),
+  sourceHash: null,
+  configJson: JSON.stringify(config),
+  sourceCode: null,
+  createdAt: 1,
+  ...overrides,
+});
+
 const dependencies = (auth: ApiAuthDependencies = identity()) => {
   let stored = publicationRecord();
   const versions = {
-    getOwned: vi.fn(async (): Promise<OwnedStrategyVersionRecord | null> => ({
-      id: "version_a",
-      userId: "usr_owner",
-      strategyId: "strategy_a",
-      version: 1,
-      market: config.market,
-      symbol: config.symbol,
-      configHash: "a".repeat(64),
-      sourceHash: null,
-      configJson: JSON.stringify(config),
-      sourceCode: null,
-      createdAt: 1,
-    })),
+    getOwned: vi.fn(async (): Promise<OwnedStrategyVersionRecord | null> => ownedVersion()),
   };
   const publications = {
     publish: vi.fn(async (input: {
@@ -213,7 +216,7 @@ describe("strategy publication route contracts", () => {
       publisherName: "Alice",
       description: "This strategy uses complete historical evidence and reviewable risk controls for members.",
     }));
-    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v2:${slug}`);
+    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v3:${slug}`);
     expect(revalidate.path.mock.calls.map(([path]) => path)).toEqual([
       "/api/strategy-publications",
       "/bots",
@@ -250,15 +253,18 @@ describe("strategy publication route contracts", () => {
     expect(publications.listByUser).toHaveBeenCalledWith("usr_attacker", 100);
   });
 
-  it("keeps every authenticated member eligible by replacing unsafe public identities", async () => {
-    const { handlers, publications } = dependencies(identity("usr_owner", "ＷＥＥＸ Official"));
-    const response = await handlers.post(jsonRequest("/api/strategy-publications", "POST", publicationInput()));
+  it.each(["ＷＥＥＸ Official", "ᏔЕЕХ Official"])(
+    "keeps every authenticated member eligible by replacing unsafe public identity %s",
+    async (displayName) => {
+      const { handlers, publications } = dependencies(identity("usr_owner", displayName));
+      const response = await handlers.post(jsonRequest("/api/strategy-publications", "POST", publicationInput()));
 
-    expect(response.status).toBe(201);
-    expect(publications.publish).toHaveBeenCalledWith(expect.objectContaining({
-      publisherName: "Member USROWNER",
-    }));
-  });
+      expect(response.status).toBe(201);
+      expect(publications.publish).toHaveBeenCalledWith(expect.objectContaining({
+        publisherName: "Member USROWNER",
+      }));
+    },
+  );
 
   it.each(["Alice ❤️", "Trader 👨‍💻"]) (
     "publishes for an authenticated member whose private profile label is %s",
@@ -273,12 +279,49 @@ describe("strategy publication route contracts", () => {
     },
   );
 
+  it.each([
+    "WΕΕX Official",
+    "WЕЕX Official",
+    "WEEX 公式",
+    "WEEX официальный",
+    "ᏔЕЕХ Official",
+  ])("rejects an official-looking public strategy name before publication: %s", async (name) => {
+    const { handlers, publications, versions } = dependencies();
+    versions.getOwned.mockResolvedValueOnce(ownedVersion({
+      configJson: JSON.stringify({ ...config, name }),
+    }));
+
+    const response = await handlers.post(jsonRequest(
+      "/api/strategy-publications",
+      "POST",
+      publicationInput(),
+    ));
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { code: "invalid_strategy_name" } });
+    expect(publications.publish).not.toHaveBeenCalled();
+  });
+
   it("rejects fraudulent descriptions and hides unsafe legacy records fail-closed", async () => {
     const { handlers, publications, versions } = dependencies();
     const rejected = await handlers.post(jsonRequest("/api/strategy-publications", "POST", publicationInput({
       description: "This strategy provides guaranteed profits and risk-free returns for every user.",
     })));
     expect(rejected.status).toBe(422);
+    expect(versions.getOwned).not.toHaveBeenCalled();
+    expect(publications.publish).not.toHaveBeenCalled();
+
+    const impersonation = await handlers.post(jsonRequest(
+      "/api/strategy-publications",
+      "POST",
+      publicationInput({
+        description: "This is the official ᏔЕЕХ strategy authorized for all community members.",
+      }),
+    ));
+    expect(impersonation.status).toBe(422);
+    expect(await impersonation.json()).toMatchObject({
+      error: { code: "invalid_publication_description" },
+    });
     expect(versions.getOwned).not.toHaveBeenCalled();
     expect(publications.publish).not.toHaveBeenCalled();
 

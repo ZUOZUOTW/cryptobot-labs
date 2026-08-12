@@ -11,7 +11,7 @@ vi.mock("../lib/server/platform-env", () => ({ env: {
   PUBLIC_ORIGIN: "https://app.example.test",
 } }));
 
-import { POST } from "../app/api/strategy-publications/route";
+import { GET, POST } from "../app/api/strategy-publications/route";
 import { PATCH } from "../app/api/strategy-publications/[slug]/route";
 import { GET as MINE } from "../app/api/strategy-publications/mine/route";
 
@@ -25,6 +25,7 @@ describe("production strategy publication route boundary", () => {
   });
 
   it.each([
+    ["GET", () => GET(new Request("https://app.example.test/api/strategy-publications"))],
     ["POST", () => POST(new Request("https://app.example.test/api/strategy-publications", {
       method: "POST",
       headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },

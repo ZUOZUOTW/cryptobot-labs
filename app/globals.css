@@ -1445,10 +1445,32 @@ a {
 .bot-card__badges,
 .bot-card__badge-stack { display: flex; align-items: center; gap: 0.45rem; }
 .favorite-button { width: 2.75rem; min-width: 2.75rem; border: 1px solid var(--border); border-radius: 50%; background: rgb(139 99 255 / 8%); color: var(--cyan); cursor: pointer; }
+.package-confirmation {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  overflow-y: auto;
+  background: rgb(2 3 6 / 82%);
+  backdrop-filter: blur(0.5rem);
+}
+.package-confirmation__card { width: min(100%, 29rem); padding: 1.25rem; border-radius: 1rem; }
+.package-confirmation__card h3 { margin-top: 0.45rem; font-size: 1.25rem; }
+.package-confirmation__card > p:not(.eyebrow) { color: var(--muted); font-size: 0.76rem; line-height: 1.7; }
+.package-confirmation__card .package-confirmation__warning {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgb(255 181 71 / 28%);
+  border-radius: 0.68rem;
+  background: rgb(255 181 71 / 6%);
+  color: #ffd394;
+}
+.package-confirmation__card .button-row { justify-content: flex-end; }
 .package-fallback { width: 100%; margin-top: 0.75rem; padding: 0.75rem; border: 1px solid rgb(255 107 98 / 30%); border-radius: 0.8rem; background: rgb(255 107 98 / 6%); }
 .package-fallback p { margin: 0 0 0.6rem; font-size: 0.75rem; }
 .package-fallback__files { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.package-fallback__files button { min-height: 2.75rem; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 0.55rem; background: var(--panel); font-size: 0.68rem; cursor: pointer; }
+.package-fallback__files button { min-height: 2.75rem; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 0.55rem; background: var(--panel); color: var(--text); font-size: 0.68rem; cursor: pointer; }
 
 .bot-card h3 { margin: 0; font-size: 1.3rem; letter-spacing: -0.035em; }
 .bot-card__description { min-height: 2.8rem; color: var(--muted); font-size: 0.82rem; line-height: 1.65; }
@@ -3673,7 +3695,7 @@ html[lang="ru"] body {
 }
 .workshop-share-action__referral input {
   width: 100%;
-  min-height: 2.65rem;
+  min-height: 2.75rem;
   padding: 0.68rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: 0.68rem;

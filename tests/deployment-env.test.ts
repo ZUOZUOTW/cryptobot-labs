@@ -3,6 +3,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { getSupabaseAuthConfig } from "../lib/server/supabase-auth";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,10 +70,43 @@ describe("deployment environment gate", () => {
       ["SUPABASE_URL", "https://project.supabase.co/auth"],
       ["SUPABASE_PUBLISHABLE_KEY", "short"],
       ["SUPABASE_PUBLISHABLE_KEY", "sb_publishable invalid key"],
+      ["SUPABASE_PUBLISHABLE_KEY", "sb_secret_elevated_server_credential"],
+      ["SUPABASE_PUBLISHABLE_KEY", "not_a_publishable_key_but_long_enough"],
     ] as const) {
       const result = await runChecker({ ...production, [key]: value });
       expect(result.status, `${key}=${value}`).not.toBe(0);
       expect(result.stderr).toContain(key);
     }
+  });
+
+  it("uses the same Supabase URL and publishable-key boundary at build time and runtime", async () => {
+    const production = {
+      AUTH_COOKIE_SECRET: "a".repeat(32),
+      DEMO_MODE: "false",
+      PUBLIC_ORIGIN: "https://www.cryptobotlabs.app",
+      SUPABASE_DATABASE_URL: "postgresql://server-only.example/database",
+      SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example_value",
+      SUPABASE_URL: "https://project.supabase.co",
+    };
+    const invalidBindings = [
+      ["SUPABASE_URL", "http://localhost:54321"],
+      ["SUPABASE_URL", "https://user:pass@project.supabase.co"],
+      ["SUPABASE_URL", "https://project.supabase.co/auth/v1"],
+      ["SUPABASE_URL", "https://project.supabase.co?redirect=attacker"],
+      ["SUPABASE_PUBLISHABLE_KEY", "sb_secret_elevated_server_credential"],
+      ["SUPABASE_PUBLISHABLE_KEY", "eyJhbGciOiJIUzI1NiJ9.legacy-anon-jwt"],
+      ["SUPABASE_PUBLISHABLE_KEY", "publishable_but_missing_supabase_prefix"],
+    ] as const;
+
+    for (const [key, value] of invalidBindings) {
+      const candidate = { ...production, [key]: value };
+      const buildCheck = await runChecker(candidate);
+      expect(buildCheck.status, `build accepted ${key}=${value}`).not.toBe(0);
+      expect(() => getSupabaseAuthConfig(candidate), `runtime accepted ${key}=${value}`).toThrow();
+    }
+
+    const paddedKey = { ...production, SUPABASE_PUBLISHABLE_KEY: "  sb_publishable_example_value  " };
+    await expect(runChecker(paddedKey)).resolves.toMatchObject({ status: 0 });
+    expect(getSupabaseAuthConfig(paddedKey).publishableKey).toBe("sb_publishable_example_value");
   });
 });
