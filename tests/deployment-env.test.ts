@@ -46,18 +46,26 @@ describe("deployment environment gate", () => {
     const production = {
       AUTH_COOKIE_SECRET: "a".repeat(32),
       DEMO_MODE: "false",
+      EXECUTOR_API_ORIGIN: "https://executor.example.com",
+      EXECUTOR_HANDOFF_SECRET: "b".repeat(32),
+      NEXT_PUBLIC_EXECUTOR_EGRESS_IP: "203.0.113.10",
       PUBLIC_ORIGIN: "https://www.cryptobotlabs.app",
       SUPABASE_DATABASE_URL: "postgresql://cryptobot_netlify@server-only.example/database",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example_value",
       SUPABASE_URL: "https://project.supabase.co",
+      WEEX_AUTH_STAGE: "transition",
     };
     await expect(runChecker(production)).resolves.toMatchObject({ status: 0 });
 
     for (const key of [
       "AUTH_COOKIE_SECRET",
+      "EXECUTOR_API_ORIGIN",
+      "EXECUTOR_HANDOFF_SECRET",
+      "NEXT_PUBLIC_EXECUTOR_EGRESS_IP",
       "SUPABASE_DATABASE_URL",
       "SUPABASE_PUBLISHABLE_KEY",
       "SUPABASE_URL",
+      "WEEX_AUTH_STAGE",
     ] as const) {
       const result = await runChecker({ ...production, [key]: undefined });
       expect(result.status, key).not.toBe(0);
@@ -73,6 +81,13 @@ describe("deployment environment gate", () => {
       ["SUPABASE_PUBLISHABLE_KEY", "sb_publishable invalid key"],
       ["SUPABASE_PUBLISHABLE_KEY", "sb_secret_elevated_server_credential"],
       ["SUPABASE_PUBLISHABLE_KEY", "not_a_publishable_key_but_long_enough"],
+      ["EXECUTOR_API_ORIGIN", "http://executor.example.com"],
+      ["EXECUTOR_API_ORIGIN", "https://www.cryptobotlabs.app"],
+      ["EXECUTOR_API_ORIGIN", "https://executor.example.com/path"],
+      ["EXECUTOR_HANDOFF_SECRET", "too-short"],
+      ["NEXT_PUBLIC_EXECUTOR_EGRESS_IP", "executor.example.com"],
+      ["NEXT_PUBLIC_EXECUTOR_EGRESS_IP", "2001:db8::1"],
+      ["WEEX_AUTH_STAGE", "live"],
     ] as const) {
       const result = await runChecker({ ...production, [key]: value });
       expect(result.status, `${key}=${value}`).not.toBe(0);
@@ -84,10 +99,14 @@ describe("deployment environment gate", () => {
     const production = {
       AUTH_COOKIE_SECRET: "a".repeat(32),
       DEMO_MODE: "false",
+      EXECUTOR_API_ORIGIN: "https://executor.example.com",
+      EXECUTOR_HANDOFF_SECRET: "b".repeat(32),
+      NEXT_PUBLIC_EXECUTOR_EGRESS_IP: "203.0.113.10",
       PUBLIC_ORIGIN: "https://www.cryptobotlabs.app",
       SUPABASE_DATABASE_URL: "postgresql://cryptobot_netlify@server-only.example/database",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example_value",
       SUPABASE_URL: "https://project.supabase.co",
+      WEEX_AUTH_STAGE: "transition",
     };
     const invalidBindings = [
       ["SUPABASE_URL", "http://localhost:54321"],

@@ -30,6 +30,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --prod --audit-level high
       - run: pnpm licenses:check
+      - run: pnpm handoff:cloudflare-aws:preflight --offline --no-write
+      - run: pnpm handoff:netlify:preflight
+      - run: pnpm handoff:supabase:repository
       - run: pnpm test
       - run: pnpm --filter @cryptobot-labs/executor test
       - run: pnpm --filter @cryptobot-labs/executor typecheck
@@ -44,10 +47,14 @@ jobs:
         env:
           AUTH_COOKIE_SECRET: "ci-only-auth-cookie-secret-000000000000"
           DEMO_MODE: "false"
+          EXECUTOR_API_ORIGIN: "https://executor.ci.invalid"
+          EXECUTOR_HANDOFF_SECRET: "ci-only-executor-handoff-secret-000000000000"
+          NEXT_PUBLIC_EXECUTOR_EGRESS_IP: "203.0.113.10"
           PUBLIC_ORIGIN: "https://ci.cryptobot.invalid"
           SUPABASE_DATABASE_URL: "postgresql://cryptobot_netlify@ci-only.invalid/cryptobot"
           SUPABASE_PUBLISHABLE_KEY: "sb_publishable_ci_only_value"
           SUPABASE_URL: "https://ci-only.supabase.invalid"
+          WEEX_AUTH_STAGE: "transition"
 
   postgres-migration:
     runs-on: ubuntu-24.04

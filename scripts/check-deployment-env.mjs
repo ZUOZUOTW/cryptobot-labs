@@ -2,6 +2,7 @@ import {
   canonicalSupabaseAuthUrl,
   canonicalSupabasePublishableKey,
 } from "../lib/supabase-auth-environment.js";
+import { isIP } from "node:net";
 
 const publicOrigin = process.env.PUBLIC_ORIGIN;
 
@@ -32,9 +33,13 @@ if (demoMode !== "true" && demoMode !== "false") {
 if (demoMode === "false") {
   const requiredProductionBindings = [
     "AUTH_COOKIE_SECRET",
+    "EXECUTOR_API_ORIGIN",
+    "EXECUTOR_HANDOFF_SECRET",
+    "NEXT_PUBLIC_EXECUTOR_EGRESS_IP",
     "SUPABASE_DATABASE_URL",
     "SUPABASE_PUBLISHABLE_KEY",
     "SUPABASE_URL",
+    "WEEX_AUTH_STAGE",
   ];
   const missing = requiredProductionBindings.filter((key) => !process.env[key]?.trim());
   if (missing.length > 0) {
@@ -43,6 +48,36 @@ if (demoMode === "false") {
   }
   if (new TextEncoder().encode(process.env.AUTH_COOKIE_SECRET).length < 32) {
     console.error("Deployment environment check failed: AUTH_COOKIE_SECRET must contain at least 32 bytes.");
+    process.exit(1);
+  }
+  const handoffSecretLength = new TextEncoder().encode(process.env.EXECUTOR_HANDOFF_SECRET).length;
+  if (handoffSecretLength < 32 || handoffSecretLength > 512) {
+    console.error("Deployment environment check failed: EXECUTOR_HANDOFF_SECRET must contain 32 to 512 bytes.");
+    process.exit(1);
+  }
+  let executorOrigin;
+  try {
+    executorOrigin = new URL(process.env.EXECUTOR_API_ORIGIN);
+  } catch {
+    console.error("Deployment environment check failed: EXECUTOR_API_ORIGIN must be an origin-only HTTPS URL.");
+    process.exit(1);
+  }
+  if (executorOrigin.protocol !== "https:"
+    || executorOrigin.username
+    || executorOrigin.password
+    || executorOrigin.pathname !== "/"
+    || executorOrigin.search
+    || executorOrigin.hash
+    || executorOrigin.origin === parsedOrigin.origin) {
+    console.error("Deployment environment check failed: EXECUTOR_API_ORIGIN must be a distinct origin-only HTTPS URL.");
+    process.exit(1);
+  }
+  if (isIP(process.env.NEXT_PUBLIC_EXECUTOR_EGRESS_IP.trim()) !== 4) {
+    console.error("Deployment environment check failed: NEXT_PUBLIC_EXECUTOR_EGRESS_IP must be one IPv4 address.");
+    process.exit(1);
+  }
+  if (!new Set(["transition", "dual", "oauth-only"]).has(process.env.WEEX_AUTH_STAGE)) {
+    console.error("Deployment environment check failed: WEEX_AUTH_STAGE is invalid.");
     process.exit(1);
   }
   if (!/^postgres(?:ql)?:\/\/.+/u.test(process.env.SUPABASE_DATABASE_URL)) {
