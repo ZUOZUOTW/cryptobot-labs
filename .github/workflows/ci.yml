@@ -17,13 +17,7 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     env:
-      AUTH_COOKIE_SECRET: "ci-only-auth-cookie-secret-000000000000"
-      DEMO_MODE: "false"
       NEXT_TELEMETRY_DISABLED: "1"
-      PUBLIC_ORIGIN: "https://ci.cryptobot.invalid"
-      SUPABASE_DATABASE_URL: "postgresql://ci-only.invalid/cryptobot"
-      SUPABASE_PUBLISHABLE_KEY: "sb_publishable_ci_only_value"
-      SUPABASE_URL: "https://ci-only.supabase.invalid"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -39,6 +33,13 @@ jobs:
       - run: pnpm test
       - run: pnpm lint
       - run: pnpm build
+        env:
+          AUTH_COOKIE_SECRET: "ci-only-auth-cookie-secret-000000000000"
+          DEMO_MODE: "false"
+          PUBLIC_ORIGIN: "https://ci.cryptobot.invalid"
+          SUPABASE_DATABASE_URL: "postgresql://ci-only.invalid/cryptobot"
+          SUPABASE_PUBLISHABLE_KEY: "sb_publishable_ci_only_value"
+          SUPABASE_URL: "https://ci-only.supabase.invalid"
 
   postgres-migration:
     runs-on: ubuntu-24.04
@@ -58,6 +59,7 @@ jobs:
           --health-retries 12
     env:
       POSTGRES_TEST_URL: "postgresql://postgres:postgres@127.0.0.1:5432/cryptobot_test"
+      REQUIRE_POSTGRES_TEST: "true"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4

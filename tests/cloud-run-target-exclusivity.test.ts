@@ -17,6 +17,7 @@ describe("cloud strategy target exclusivity", () => {
       "supabase/migrations/20260812090000_enforce_cloud_run_target_exclusivity.sql",
       "utf8",
     );
+    const repository = await readFile("lib/server/cloud-runs.ts", "utf8");
     const index = migration.match(/create unique index(?: if not exists)? cloud_runs_nonterminal_target_uidx[\s\S]*?;/i)?.[0];
 
     expect(index).toBeTruthy();
@@ -33,7 +34,10 @@ describe("cloud strategy target exclusivity", () => {
     expect(migration).not.toMatch(/update of config_json, risk_json, market, symbol/i);
     expect(migration).toMatch(/security invoker[\s\S]*set search_path = ''/i);
     expect(migration).toMatch(/revoke all on function private\.synchronize_cloud_run_target\(\)/i);
-    expect(migration).toMatch(/regexp_replace\([\s\S]*'\^CMT_'[\s\S]*'\[\/_-\]'/i);
+    expect(migration).toMatch(/regexp_replace\([\s\S]*'\^CMT_'[\s\S]*'\[-\/_\]'/i);
+    expect(migration).not.toContain("'[/_-]'");
+    expect(repository).toContain("'[-/_]'");
+    expect(repository).not.toContain("'[/_-]'");
     expect(migration).toMatch(/new\.market := configured_market[\s\S]*new\.symbol := configured_symbol/i);
     expect(migration).toMatch(/new\.config_json := jsonb_set\([\s\S]*symbol[\s\S]*configured_symbol/i);
     expect(migration).toMatch(/new\.risk_json := jsonb_set\([\s\S]*allowedSymbols[\s\S]*canonical_allowed_symbols/i);

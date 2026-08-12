@@ -3,7 +3,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
 import { cloneStrategyBlock } from "../data/strategies";
 import {
@@ -55,6 +55,10 @@ const config = (overrides: Partial<BotConfig> = {}): BotConfig => ({
   blocks: [cloneStrategyBlock("rsi"), cloneStrategyBlock("stop-loss")], ...overrides,
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("backtest runtime and strategy save wiring", () => {
   it("uses Netlify's canonical site URL or the request origin when PUBLIC_ORIGIN is absent", () => {
     expect(tradingEnvironmentForRequest({ URL: "https://labs.example" }, new Request("https://preview.example/api/strategies")))
@@ -64,6 +68,9 @@ describe("backtest runtime and strategy save wiring", () => {
   });
 
   it("wires the real detail GET route through fail-closed environment initialization", async () => {
+    vi.stubEnv("PUBLIC_ORIGIN", "");
+    vi.stubEnv("SUPABASE_DATABASE_URL", "");
+    vi.stubEnv("DATABASE_URL", "");
     const route = await import("../app/api/backtests/[id]/route");
     const response = await route.GET(new Request("https://labs.example/api/backtests/job_1"), {
       params: Promise.resolve({ id: "job_1" }),
@@ -74,7 +81,11 @@ describe("backtest runtime and strategy save wiring", () => {
 
   it("fails closed and returns only a generic no-store initialization error", async () => {
     expect(() => createProductionTradingHandlers({})).toThrow(/PUBLIC_ORIGIN/);
-    expect(() => createProductionTradingHandlers({ PUBLIC_ORIGIN: "https://labs.example" })).toThrow(/D1/);
+    expect(() => createProductionTradingHandlers({
+      PUBLIC_ORIGIN: "https://labs.example",
+      SUPABASE_DATABASE_URL: "",
+      DATABASE_URL: "",
+    })).toThrow(/D1|DATABASE_URL/);
     const response = productionTradingFailure(new Error("DB password secret"));
     expect(response.status).toBe(500);
     expect(response.headers.get("cache-control")).toBe("no-store");

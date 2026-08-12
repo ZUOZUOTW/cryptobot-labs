@@ -16,7 +16,7 @@ function localTestDatabase(value: string | undefined): URL | null {
 
 const target = localTestDatabase(databaseUrl);
 
-if (process.env.CI && !target) {
+if (process.env.REQUIRE_POSTGRES_TEST === "true" && !target) {
   throw new Error("POSTGRES_TEST_URL must target the local cryptobot_test database in CI");
 }
 
@@ -63,7 +63,7 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
   ): Promise<void> {
     await sql.unsafe(`insert into public.cloud_strategy_runs
       (id,user_id,connection_id,state,config_json,risk_json)
-      values ($1,'user_1','connection_1',$2,$3::jsonb,$4::jsonb)`, [
+      values ($1,'user_1','connection_1',$2,$3::text::jsonb,$4::text::jsonb)`, [
       id,
       state,
       JSON.stringify({ market: "futures", symbol }),
@@ -82,6 +82,14 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
     expect(rows[0]).toMatchObject({ market: "futures", symbol: "BTCUSDT" });
     expect(rows[0]?.config_json).toMatchObject({ market: "futures", symbol: "BTCUSDT" });
     expect(rows[0]?.risk_json).toMatchObject({ allowedSymbols: ["BTCUSDT"] });
+
+    await sql.unsafe("update public.cloud_strategy_runs set state='stopped' where id='run_1'");
+    await insertOldWriter("run_hyphen", "BTC-USDT");
+    const hyphenRows = await sql.unsafe(`select symbol,config_json,risk_json
+      from public.cloud_strategy_runs where id='run_hyphen'`);
+    expect(hyphenRows[0]).toMatchObject({ symbol: "BTCUSDT" });
+    expect(hyphenRows[0]?.config_json).toMatchObject({ symbol: "BTCUSDT" });
+    expect(hyphenRows[0]?.risk_json).toMatchObject({ allowedSymbols: ["BTCUSDT"] });
   });
 
   it("rejects equivalent aliases under concurrency while allowing a stopped predecessor", async () => {

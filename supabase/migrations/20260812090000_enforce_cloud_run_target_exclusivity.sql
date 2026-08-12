@@ -20,7 +20,7 @@ begin
   configured_market := new.config_json->>'market';
   configured_symbol := regexp_replace(
     regexp_replace(upper(btrim(new.config_json->>'symbol')), '^CMT_', ''),
-    '[/_-]',
+    '[-/_]',
     '',
     'g'
   );
@@ -62,7 +62,7 @@ begin
     allowed_symbol := allowed_value #>> '{}';
     canonical_allowed_symbol := regexp_replace(
       regexp_replace(upper(btrim(allowed_symbol)), '^CMT_', ''),
-      '[/_-]',
+      '[-/_]',
       '',
       'g'
     );
@@ -151,7 +151,7 @@ alter table public.cloud_strategy_runs
     market = config_json->>'market'
     and symbol = regexp_replace(
       regexp_replace(upper(btrim(config_json->>'symbol')), '^CMT_', ''),
-      '[/_-]',
+      '[-/_]',
       '',
       'g'
     )

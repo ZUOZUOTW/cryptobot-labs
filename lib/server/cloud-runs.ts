@@ -198,12 +198,12 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         where s.user_id=? and s.id=? and s.config_hash=? and c.status='active'
           and t.market in ('spot','futures')
           and s.config_json::jsonb->>'market'=t.market
-          and regexp_replace(regexp_replace(upper(btrim(s.config_json::jsonb->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
-            =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+          and regexp_replace(regexp_replace(upper(btrim(s.config_json::jsonb->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
+            =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[-/_]', '', 'g')
           and exists (
             select 1 from jsonb_array_elements_text(?::text::jsonb->'allowedSymbols') allowed(symbol)
-            where regexp_replace(regexp_replace(upper(btrim(allowed.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
-              =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+            where regexp_replace(regexp_replace(upper(btrim(allowed.symbol)), '^CMT_', ''), '[-/_]', '', 'g')
+              =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[-/_]', '', 'g')
           )
           and c.withdrawal_access_absent=true and c.executor_shard_id is not null
           and c.permissions_json @> '{"read":true}'::jsonb
@@ -227,8 +227,8 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
             select 1 from cloud_strategy_runs active
             where active.user_id=s.user_id and active.connection_id=c.id
               and active.config_json->>'market'=t.market
-              and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
-                =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+              and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
+                =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[-/_]', '', 'g')
               and active.state<>'stopped'
           )
         on conflict do nothing
@@ -266,8 +266,8 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
           on active.user_id=requested_version.user_id
           and active.connection_id=requested_connection.id
           and active.config_json->>'market'=requested_version.config_json::jsonb->>'market'
-          and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
-            =regexp_replace(regexp_replace(upper(btrim(requested_version.config_json::jsonb->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+          and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
+            =regexp_replace(regexp_replace(upper(btrim(requested_version.config_json::jsonb->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
         where requested_version.user_id=? and requested_version.id=? and requested_version.config_hash=?
           and active.id<>? and active.state<>'stopped' limit 1`)
         .bind(input.userId, input.strategyVersionId, input.configurationHash, input.id).first<{ conflict: number }>();
@@ -279,8 +279,8 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         from cloud_strategy_runs target join cloud_strategy_runs active
           on active.user_id=target.user_id and active.connection_id=target.connection_id
           and active.config_json->>'market'=target.config_json->>'market'
-          and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
-            =regexp_replace(regexp_replace(upper(btrim(target.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+          and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
+            =regexp_replace(regexp_replace(upper(btrim(target.config_json->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
         where target.user_id=? and target.id=? and active.id<>target.id
           and active.state<>'stopped' limit 1`)
         .bind(input.userId, input.id).first<{ conflict: number }>();
@@ -301,8 +301,8 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
             select 1 from cloud_strategy_runs active
             where active.user_id=target.user_id and active.connection_id=target.connection_id
               and active.config_json->>'market'=target.config_json->>'market'
-              and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
-                =regexp_replace(regexp_replace(upper(btrim(target.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+              and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
+                =regexp_replace(regexp_replace(upper(btrim(target.config_json->>'symbol')), '^CMT_', ''), '[-/_]', '', 'g')
               and active.id<>target.id and active.state<>'stopped'
           )) returning ${columns}`)
         .bind(input.state, input.now, input.state, input.now, input.state, input.now, input.state, input.state,
