@@ -1,4 +1,7 @@
 import type { Market } from "./types";
+import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client/symbol";
+
+export { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client/symbol";
 
 export interface WeexTradingPair {
   symbol: string;
@@ -62,7 +65,7 @@ const apiTradingSymbolSets: Readonly<Record<Market, ReadonlySet<string>>> = {
 };
 
 export const isWeexApiTradingSymbol = (market: Market, symbol: string): boolean => (
-  apiTradingSymbolSets[market].has(symbol.trim().toUpperCase().replace(/^CMT_/, "").replace(/[\/_-]/g, ""))
+  apiTradingSymbolSets[market].has(canonicalizeWeexSymbol(symbol) ?? "")
 );
 
 export const FALLBACK_WEEX_MARKET_CATALOG: WeexMarketCatalog = {
@@ -75,12 +78,6 @@ export const FALLBACK_WEEX_MARKET_CATALOG: WeexMarketCatalog = {
 const record = (value: unknown): Record<string, unknown> | null => (
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
 );
-
-const canonicalSymbol = (value: unknown): string | null => {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toUpperCase().replace(/^CMT_/, "").replace(/[\/_-]/g, "");
-  return /^[A-Z0-9]{4,32}$/.test(normalized) ? normalized : null;
-};
 
 const uniquePairs = (pairs: WeexTradingPair[]): WeexTradingPair[] => (
   [...new Map(pairs.map((pair) => [pair.symbol, pair])).values()]
@@ -97,19 +94,19 @@ export function parseWeexMarketCatalog(
   const futuresRows = Array.isArray(futuresRoot?.symbols) ? futuresRoot.symbols : [];
 
   const spot = uniquePairs(spotRows.flatMap((value): WeexTradingPair[] => {
-    const symbol = canonicalSymbol(value);
+    const symbol = canonicalizeWeexSymbol(value);
     return symbol && isWeexApiTradingSymbol("spot", symbol)
       ? [{ symbol, ...symbolAssets(symbol), maxLeverage: 1 }]
       : [];
   }));
   const futures = uniquePairs(futuresRows.flatMap((value): WeexTradingPair[] => {
     const item = record(value);
-    const symbol = canonicalSymbol(item?.displaySymbol) ?? canonicalSymbol(item?.symbol);
+    const symbol = canonicalizeWeexSymbol(item?.displaySymbol) ?? canonicalizeWeexSymbol(item?.symbol);
     const maxLeverage = typeof item?.maxLeverage === "number" ? item.maxLeverage : Number(item?.maxLeverage);
     if (!symbol || !isWeexApiTradingSymbol("futures", symbol)
       || !Number.isInteger(maxLeverage) || maxLeverage < 1 || maxLeverage > 1_000) return [];
-    const baseAsset = canonicalSymbol(item?.baseAsset) ?? symbolAssets(symbol).baseAsset;
-    const quoteAsset = canonicalSymbol(item?.quoteAsset) ?? symbolAssets(symbol).quoteAsset;
+    const baseAsset = canonicalizeWeexSymbol(item?.baseAsset) ?? symbolAssets(symbol).baseAsset;
+    const quoteAsset = canonicalizeWeexSymbol(item?.quoteAsset) ?? symbolAssets(symbol).quoteAsset;
     return [{ symbol, baseAsset, quoteAsset, maxLeverage }];
   }));
 
@@ -123,7 +120,7 @@ export function isWeexMarketCatalog(value: unknown): value is WeexMarketCatalog 
   return (["spot", "futures"] as const).every((market) => Array.isArray(root[market]) && root[market].length > 0
     && root[market].every((candidate) => {
       const pair = record(candidate);
-      return canonicalSymbol(pair?.symbol) === pair?.symbol
+      return canonicalizeWeexSymbol(pair?.symbol) === pair?.symbol
         && typeof pair?.baseAsset === "string"
         && typeof pair?.quoteAsset === "string"
         && Number.isInteger(pair?.maxLeverage)

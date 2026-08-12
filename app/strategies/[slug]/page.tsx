@@ -1,29 +1,61 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { StrategyShareActions } from "@/components/StrategyShareActions";
 import { loadPublicStrategyPublication } from "@/lib/server/public-strategy-loader";
+import { isLocale, resolveRequestLocale } from "@/lib/i18n/locales";
+import { translateMessage } from "@/lib/i18n/messages";
+import {
+  formatDrawdownMagnitude,
+  formatRate,
+  formatSignedReturn,
+  strategyPosterPath,
+} from "@/lib/strategy-sharing";
 
 export const revalidate = 3600;
 
 interface StrategyPageProps {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
-const percent = (value: string): string => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${parsed >= 0 ? "+" : ""}${(parsed * 100).toFixed(2)}%` : "—";
-};
+const interpolateMetadata = (template: string, values: readonly string[]): string => (
+  template.replace(/__(\d+)__/gu, (_, index) => values[Number(index)] ?? "")
+);
 
-export async function generateMetadata({ params }: StrategyPageProps): Promise<Metadata> {
-  const { slug } = await params;
+const AffiliateRelationshipDisclosure = () => (
+  <p className="simulation-disclosure public-strategy-affiliate-disclosure" role="note">
+    此連結可能包含推薦關係，您的使用費用不因此增加。{" "}
+    <Link href="/disclosures/affiliate">查看完整推廣揭露</Link>
+  </p>
+);
+
+export async function generateMetadata({ params, searchParams }: StrategyPageProps): Promise<Metadata> {
+  const emptyQuery: Record<string, string | string[] | undefined> = {};
+  const [{ slug }, query, requestHeaders] = await Promise.all([params, searchParams ?? Promise.resolve(emptyQuery), headers()]);
   const publication = await loadPublicStrategyPublication(slug);
   if (!publication) return {};
-  const title = `${publication.name}｜${publication.publisherName} 的公開策略`;
-  const description = `${publication.description}。${publication.symbol} ${publication.timeframe}，查看經 WEEX 公開歷史行情驗證的績效與完整策略結構。`;
-  const image = `/strategies/${publication.slug}/opengraph-image`;
+  const requestedLocale = Array.isArray(query.locale) ? query.locale[0] : query.locale;
+  const locale = isLocale(requestedLocale)
+    ? requestedLocale
+    : resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
+  const title = interpolateMetadata(
+    translateMessage(locale, "__0__｜__1__ 的公開策略"),
+    [publication.name, publication.publisherName],
+  );
+  const description = interpolateMetadata(
+    translateMessage(locale, "__0__。__1__ __2__，查看經 WEEX 公開歷史行情驗證的績效與完整策略結構。"),
+    [publication.description, publication.symbol, publication.timeframe],
+  );
+  const sharePath = `/strategies/${publication.slug}?v=${publication.updatedAt}&locale=${encodeURIComponent(locale)}`;
+  const image = strategyPosterPath(sharePath, locale);
+  const imageAlt = interpolateMetadata(
+    translateMessage(locale, "__0__ 公開策略績效預覽"),
+    [publication.name],
+  );
   return {
     title,
     description,
@@ -32,9 +64,9 @@ export async function generateMetadata({ params }: StrategyPageProps): Promise<M
       title,
       description,
       type: "article",
-      url: `/strategies/${publication.slug}`,
+      url: sharePath,
       publishedTime: new Date(publication.publishedAt).toISOString(),
-      images: [{ url: image, width: 1200, height: 630, alt: `${publication.name} 公開策略績效預覽` }],
+      images: [{ url: image, width: 1200, height: 630, alt: imageAlt }],
     },
     twitter: { card: "summary_large_image", title, description, images: [image] },
   };
@@ -52,6 +84,8 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
   const range = publication.actualStartAt !== null && publication.actualEndAt !== null
     ? `${new Date(publication.actualStartAt).toLocaleDateString("zh-TW")}–${new Date(publication.actualEndAt).toLocaleDateString("zh-TW")}`
     : "完整公開行情區間";
+  const sharePath = `/strategies/${publication.slug}?v=${publication.updatedAt}`;
+  const posterPath = strategyPosterPath(sharePath);
 
   return (
     <article className="bot-detail-page public-strategy-page">
@@ -73,20 +107,34 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
               >
                 {publication.hasPrivateSource ? "套用公開積木版本" : "套用並自行調整"}
               </Link>
-              <a
-                className="button button--secondary weex-referral-cta"
-                href={publication.weexReferralUrl}
-                rel="nofollow sponsored noopener noreferrer"
-                target="_blank"
-              >
-                透過發布者邀請註冊 WEEX
-              </a>
+              {publication.weexReferralUrl && (
+                <a
+                  className="button button--secondary weex-referral-cta"
+                  href={publication.weexReferralUrl}
+                  rel="nofollow sponsored noopener noreferrer"
+                  target="_blank"
+                >
+                  透過發布者邀請註冊 WEEX
+                </a>
+              )}
               <StrategyShareActions
                 botId={publication.slug}
                 botName={publication.name}
-                sharePath={`/strategies/${publication.slug}`}
+                marketKind={publication.market}
+                posterPath={posterPath}
+                sharePath={sharePath}
+                timeframe={publication.timeframe}
+                verifiedPerformance={{
+                  historicalPeriod: publication.actualStartAt !== null && publication.actualEndAt !== null
+                    ? { startAt: publication.actualStartAt, endAt: publication.actualEndAt }
+                    : undefined,
+                  kind: "total-return",
+                  value: formatSignedReturn(publication.metrics.totalReturn, 2),
+                  verified: true,
+                }}
               />
             </div>
+            {publication.weexReferralUrl && <AffiliateRelationshipDisclosure />}
           </div>
           <aside className="bot-detail-snapshot glass-panel public-strategy-snapshot" aria-label="公開策略摘要">
             <Image alt="" aria-hidden="true" height={180} src="/mascots/ai-builder.webp" width={200} />
@@ -108,7 +156,7 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
             ? "公開固定版本 · 自訂程式碼不公開，套用時使用公開積木設定 · Email 不公開"
             : "公開固定版本 · 可建立自己的可編輯副本 · Email 不公開"}</span>
         </div>
-        <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效；邀請連結由發布者提供。</p>
+        <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效</p>
       </header>
 
       <section className="detail-section site-container public-strategy-performance" aria-labelledby="public-performance-title">
@@ -120,9 +168,9 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
         <div className="public-strategy-performance__grid">
           <PerformanceChart label={`${publication.name} 歷史權益曲線`} points={chart} tone="cyan" variant="smooth" />
           <dl className="historical-metrics glass-panel">
-            <div><dt>總報酬</dt><dd>{percent(publication.metrics.totalReturn)}</dd></div>
-            <div><dt>最大回撤</dt><dd>{percent(publication.metrics.maxDrawdown)}</dd></div>
-            <div><dt>勝率</dt><dd>{percent(publication.metrics.winRate)}</dd></div>
+            <div><dt>總報酬</dt><dd>{formatSignedReturn(publication.metrics.totalReturn, 2)}</dd></div>
+            <div><dt>最大回撤</dt><dd>{formatDrawdownMagnitude(publication.metrics.maxDrawdown, 2)}</dd></div>
+            <div><dt>勝率</dt><dd>{formatRate(publication.metrics.winRate, 2)}</dd></div>
             <div><dt>Sharpe</dt><dd>{publication.metrics.sharpe}</dd></div>
             <div><dt>Profit Factor</dt><dd>{publication.metrics.profitFactor ?? "—"}</dd></div>
             <div><dt>交易次數</dt><dd>{publication.metrics.trades}</dd></div>
@@ -151,9 +199,14 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
 
       <section className="detail-section detail-cta site-container glass-panel public-strategy-referral">
         <div>
-          <p className="eyebrow">START WITH WEEX</p>
-          <h2>準備在 WEEX 開始驗證這個策略？</h2>
-          <p>透過 {publication.publisherName} 的專屬邀請連結前往 WEEX 註冊；註冊完成後再回到 CryptoBot Labs 連線並自行設定風險限制。</p>
+          <p className="eyebrow">
+            {publication.weexReferralUrl ? "START WITH WEEX" : "COMMUNITY STRATEGY / IMMUTABLE VERSION"}
+          </p>
+          <h2>{publication.weexReferralUrl ? "準備在 WEEX 開始驗證這個策略？" : "建立自己的可編輯策略副本"}</h2>
+          <p>{publication.weexReferralUrl
+            ? <>透過 {publication.publisherName} 的專屬邀請連結前往 WEEX 註冊；註冊完成後再回到 CryptoBot Labs 連線並自行設定風險限制。</>
+            : "將公開策略帶入組裝車間，檢查模組、方向與風控參數後，再建立自己的固定版本。"}</p>
+          {publication.weexReferralUrl && <AffiliateRelationshipDisclosure />}
         </div>
         <div className="button-row">
           <Link
@@ -162,18 +215,31 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
           >
             {publication.hasPrivateSource ? "使用公開積木建立副本" : "使用這個策略"}
           </Link>
-          <a
-            className="button button--secondary"
-            href={publication.weexReferralUrl}
-            rel="nofollow sponsored noopener noreferrer"
-            target="_blank"
-          >
-            使用發布者邀請連結註冊
-          </a>
+          {publication.weexReferralUrl && (
+            <a
+              className="button button--secondary"
+              href={publication.weexReferralUrl}
+              rel="nofollow sponsored noopener noreferrer"
+              target="_blank"
+            >
+              使用發布者邀請連結註冊
+            </a>
+          )}
           <StrategyShareActions
             botId={publication.slug}
             botName={publication.name}
-            sharePath={`/strategies/${publication.slug}`}
+            marketKind={publication.market}
+            posterPath={posterPath}
+            sharePath={sharePath}
+            timeframe={publication.timeframe}
+            verifiedPerformance={{
+              historicalPeriod: publication.actualStartAt !== null && publication.actualEndAt !== null
+                ? { startAt: publication.actualStartAt, endAt: publication.actualEndAt }
+                : undefined,
+              kind: "total-return",
+              value: formatSignedReturn(publication.metrics.totalReturn, 2),
+              verified: true,
+            }}
           />
         </div>
       </section>

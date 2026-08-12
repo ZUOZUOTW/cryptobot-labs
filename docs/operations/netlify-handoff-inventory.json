@@ -1,0 +1,87 @@
+{
+  "capturedAt": "2026-08-12",
+  "scope": "GET-only redacted Netlify ownership-handoff inventory",
+  "redactions": [
+    "account and project IDs",
+    "deploy IDs",
+    "environment values",
+    "operator identity",
+    "tokens"
+  ],
+  "localCli": {
+    "authenticatedUserSessionPresent": true,
+    "globalCliBinaryPresent": false,
+    "repositoryLinkStatePresent": false,
+    "transferPersonalSessionToWeex": false
+  },
+  "project": {
+    "name": "cryptobot-labs",
+    "repository": "https://github.com/ZUOZUOTW/cryptobot-labs",
+    "productionBranch": "main",
+    "primaryDomain": "www.cryptobotlabs.app",
+    "tlsEnabled": true,
+    "publishedDeployPresent": true,
+    "publishDirectory": ".next"
+  },
+  "environment": [
+    {
+      "key": "AUTH_COOKIE_SECRET",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["production"],
+      "secret": true
+    },
+    {
+      "key": "DEMO_MODE",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    },
+    {
+      "key": "EXECUTOR_API_ORIGIN",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    },
+    {
+      "key": "NEXT_PUBLIC_EXECUTOR_EGRESS_IP",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    },
+    {
+      "key": "PUBLIC_ORIGIN",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    },
+    {
+      "key": "SUPABASE_PUBLISHABLE_KEY",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    },
+    {
+      "key": "SUPABASE_URL",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    },
+    {
+      "key": "WEEX_AUTH_STAGE",
+      "scopes": ["builds", "functions", "runtime"],
+      "contexts": ["all"],
+      "secret": false
+    }
+  ],
+  "missingRequiredEnvironmentKeys": [
+    "EXECUTOR_HANDOFF_SECRET",
+    "SUPABASE_DATABASE_URL"
+  ],
+  "forbiddenExecutorSecretKeysFound": [],
+  "notes": [
+    "The committed netlify.toml is authoritative; the dashboard build-command field is stale.",
+    "The personal source authentication session and local link state are not handoff artifacts.",
+    "A production publication read smoke check returned HTTP 503 while the server-side database binding was absent.",
+    "Remote preflight must fail until every required production binding is provisioned by its approved owner."
+  ]
+}

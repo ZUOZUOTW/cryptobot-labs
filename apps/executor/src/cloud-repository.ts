@@ -1,5 +1,13 @@
 import postgres, { type Sql } from "postgres";
 import type { EncryptedWeexCredentials } from "@cryptobot-labs/weex-client";
+import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client";
+import type { ExchangeOrderSnapshot, SubmitOutcome } from "@cryptobot-labs/trading-core";
+import {
+  assertExecutorDatabaseSchema,
+  assertPostgresRuntimeIdentity,
+  EXECUTOR_DATABASE_SCHEMA_SQL,
+  POSTGRES_RUNTIME_IDENTITY_SQL,
+} from "../../../lib/server/postgres-runtime-readiness.js";
 
 type Database = Sql<Record<string, never>>;
 type Row = Record<string, unknown>;
@@ -13,7 +21,15 @@ export interface CloudRun {
 export interface StoredCredential {
   envelope: EncryptedWeexCredentials;
   context: Readonly<Record<string, string>>;
+  credentialVersion: number;
+  connectionVersion: number;
 }
+export type CloudRunTarget =
+  | { readonly market: "spot"; readonly mode: "live" }
+  | { readonly market: "futures"; readonly mode: "futures-demo" | "live" };
+export type AuthorizedOrderSubmission =
+  | { readonly authorized: false }
+  | { readonly authorized: true; readonly outcome: SubmitOutcome };
 export interface ClaimedOrder {
   status: "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
   exchangeOrderId: string | null;
@@ -87,6 +103,113 @@ const jsonValue = (value: unknown): postgres.JSONValue => {
   if (serialized === undefined) throw new Error("database JSON value is invalid");
   return JSON.parse(serialized) as postgres.JSONValue;
 };
+const ORDER_EVIDENCE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const ORDER_EVIDENCE_SYMBOL = /^[A-Z0-9_]{3,32}$/;
+const ORDER_EVIDENCE_DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+const ORDER_EVIDENCE_SIGNED_DECIMAL = /^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
+
+const compareOrderEvidenceDecimals = (left: string, right: string): -1 | 0 | 1 => {
+  const [leftInteger, leftFraction = ""] = left.split(".");
+  const [rightInteger, rightFraction = ""] = right.split(".");
+  const scale = Math.max(leftFraction.length, rightFraction.length);
+  const leftValue = BigInt(leftInteger! + leftFraction.padEnd(scale, "0"));
+  const rightValue = BigInt(rightInteger! + rightFraction.padEnd(scale, "0"));
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+};
+
+const validOrderEvidenceFillState = (
+  status: ExchangeOrderSnapshot["status"],
+  quantity: string,
+  cumulativeFilledQuantity: string,
+): boolean => {
+  const versusZero = compareOrderEvidenceDecimals(cumulativeFilledQuantity, "0");
+  const versusQuantity = compareOrderEvidenceDecimals(cumulativeFilledQuantity, quantity);
+  if (compareOrderEvidenceDecimals(quantity, "0") <= 0 || versusQuantity > 0) return false;
+  if (status === "NEW" || status === "REJECTED") return versusZero === 0;
+  if (status === "PARTIALLY_FILLED") return versusZero > 0 && versusQuantity < 0;
+  if (status === "FILLED") return versusQuantity === 0;
+  return status === "CANCELED";
+};
+
+export interface CloudOrderExchangeEvidence {
+  readonly schemaVersion: 1;
+  readonly provider: "weex";
+  readonly observedAt: number;
+  readonly clientOrderId: string;
+  readonly exchangeOrderId: string;
+  readonly symbol: string;
+  readonly side: "buy" | "sell";
+  readonly quantity: string;
+  readonly status: ExchangeOrderSnapshot["status"];
+  readonly cumulativeFilledQuantity: string;
+  readonly averageFillPrice?: string;
+  readonly fees?: string;
+  readonly fills?: readonly {
+    readonly exchangeFillId: string;
+    readonly price: string;
+    readonly quantity: string;
+    readonly fee: string;
+    readonly feeCurrency: string;
+    readonly realizedPnl?: string;
+    readonly filledAt: number;
+  }[];
+}
+
+export const normalizeCloudOrderExchangeEvidence = (
+  snapshot: ExchangeOrderSnapshot,
+  observedAt: number,
+): CloudOrderExchangeEvidence => {
+  if (!Number.isSafeInteger(observedAt) || observedAt < 0
+    || !ORDER_EVIDENCE_ID.test(snapshot.clientOrderId)
+    || !ORDER_EVIDENCE_ID.test(snapshot.exchangeOrderId)
+    || !ORDER_EVIDENCE_SYMBOL.test(snapshot.symbol)
+    || (snapshot.side !== "buy" && snapshot.side !== "sell")
+    || !ORDER_EVIDENCE_DECIMAL.test(snapshot.quantity)
+    || !["NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED"].includes(snapshot.status)
+    || !ORDER_EVIDENCE_DECIMAL.test(snapshot.cumulativeFilledQuantity)
+    || !validOrderEvidenceFillState(snapshot.status, snapshot.quantity, snapshot.cumulativeFilledQuantity)
+    || (snapshot.averageFillPrice !== undefined
+      && !ORDER_EVIDENCE_DECIMAL.test(snapshot.averageFillPrice))
+    || (snapshot.fees !== undefined && !ORDER_EVIDENCE_DECIMAL.test(snapshot.fees))
+    || (snapshot.fills !== undefined && (!Array.isArray(snapshot.fills) || snapshot.fills.length > 100))) {
+    throw new Error("Cloud order exchange evidence is invalid");
+  }
+  const fills = snapshot.fills?.map((fill) => {
+    if (!ORDER_EVIDENCE_ID.test(fill.exchangeFillId)
+      || !ORDER_EVIDENCE_DECIMAL.test(fill.price)
+      || !ORDER_EVIDENCE_DECIMAL.test(fill.quantity)
+      || !ORDER_EVIDENCE_DECIMAL.test(fill.fee)
+      || !/^[A-Z0-9]{1,16}$/.test(fill.feeCurrency)
+      || (fill.realizedPnl !== undefined && !ORDER_EVIDENCE_SIGNED_DECIMAL.test(fill.realizedPnl))
+      || !Number.isSafeInteger(fill.filledAt) || fill.filledAt < 0) {
+      throw new Error("Cloud order exchange evidence is invalid");
+    }
+    return Object.freeze({
+      exchangeFillId: fill.exchangeFillId,
+      price: fill.price,
+      quantity: fill.quantity,
+      fee: fill.fee,
+      feeCurrency: fill.feeCurrency,
+      ...(fill.realizedPnl === undefined ? {} : { realizedPnl: fill.realizedPnl }),
+      filledAt: fill.filledAt,
+    });
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "weex",
+    observedAt,
+    clientOrderId: snapshot.clientOrderId,
+    exchangeOrderId: snapshot.exchangeOrderId,
+    symbol: snapshot.symbol,
+    side: snapshot.side,
+    quantity: snapshot.quantity,
+    status: snapshot.status,
+    cumulativeFilledQuantity: snapshot.cumulativeFilledQuantity,
+    ...(snapshot.averageFillPrice === undefined ? {} : { averageFillPrice: snapshot.averageFillPrice }),
+    ...(snapshot.fees === undefined ? {} : { fees: snapshot.fees }),
+    ...(fills === undefined ? {} : { fills: Object.freeze(fills) }),
+  });
+};
 const signedDecimal = (value: unknown): string => {
   if (typeof value !== "string" || !/^-?(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/.test(value)) {
     throw new Error("database decimal is invalid");
@@ -95,6 +218,46 @@ const signedDecimal = (value: unknown): string => {
 };
 const CONFIGURATION_HASH = /^[a-f0-9]{64}$/;
 const LEASE_DURATION_MS = 180_000;
+export const ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS = 12_000;
+export const ORDER_SUBMISSION_TIMEOUT_MS = 10_500;
+const CONNECTION_AUTHORIZATION_REQUIRED = "connection_authorization_required";
+
+const connectionAuthorizesTarget = (
+  connection: Row | undefined,
+  target: CloudRunTarget,
+): boolean => {
+  if (!connection || connection.status !== "active" || connection.withdrawal_access_absent !== true) return false;
+  const permissions = object(connection.permissions_json, "connection permissions");
+  if (permissions.read !== true) return false;
+  if (target.mode === "futures-demo") {
+    return target.market === "futures" && (permissions.futuresDemoTrade === true
+      || (permissions.futuresTrade === true && permissions.liveVerified === true));
+  }
+  return permissions.liveVerified === true && (target.market === "spot"
+    ? permissions.spotTrade === true
+    : permissions.futuresTrade === true);
+};
+
+const canonicalRunTarget = (
+  configValue: unknown,
+  riskValue: unknown,
+): { config: Record<string, unknown>; risk: Record<string, unknown> } => {
+  const config = object(configValue, "strategy config");
+  const risk = object(riskValue, "risk policy");
+  const symbol = canonicalizeWeexSymbol(config.symbol);
+  if ((config.market !== "spot" && config.market !== "futures") || !symbol
+    || !Array.isArray(risk.allowedSymbols) || risk.allowedSymbols.length < 1 || risk.allowedSymbols.length > 20) {
+    throw new Error("Cloud run target is invalid");
+  }
+  const canonicalAllowed = risk.allowedSymbols.map(canonicalizeWeexSymbol);
+  if (canonicalAllowed.some((candidate) => candidate === null)) throw new Error("Cloud run target is invalid");
+  const allowedSymbols = [...new Set(canonicalAllowed as string[])];
+  if (!allowedSymbols.includes(symbol)) throw new Error("Cloud run target is inconsistent");
+  return {
+    config: { ...config, symbol },
+    risk: { ...risk, allowedSymbols },
+  };
+};
 
 export class CloudRuntimeRepository {
   readonly #sql: Database;
@@ -103,13 +266,10 @@ export class CloudRuntimeRepository {
   }
 
   async assertReady(): Promise<void> {
-    const rows = await this.#sql.unsafe(`select to_regclass('public.cloud_strategy_runs') as runs,
-      to_regclass('private.cloud_order_intents') as orders,
-      to_regclass('public.weex_account_snapshots') as account_snapshots,
-      to_regclass('public.weex_realized_pnl_ledger') as realized_pnl`);
-    if (!rows[0] || Object.values(rows[0] as Row).some((value) => typeof value !== "string")) {
-      throw new Error("Cloud runtime database schema is not ready");
-    }
+    const identities = await this.#sql.unsafe(POSTGRES_RUNTIME_IDENTITY_SQL);
+    assertPostgresRuntimeIdentity(identities[0], "cryptobot_executor");
+    const rows = await this.#sql.unsafe(EXECUTOR_DATABASE_SCHEMA_SQL);
+    assertExecutorDatabaseSchema(rows[0]);
   }
 
   async claimAccountSnapshots(owner: string, now: number, limit = 20): Promise<ClaimedAccountSnapshot[]> {
@@ -183,19 +343,52 @@ export class CloudRuntimeRepository {
     const rows = await this.#sql.unsafe(`update public.cloud_strategy_runs set lease_owner=$1,
       lease_expires_at=$2::bigint+${LEASE_DURATION_MS},updated_at=greatest(updated_at,$2::bigint)
       where id in (select r.id from public.cloud_strategy_runs r
+        join public.weex_connections c
+          on c.id=r.connection_id and c.user_id=r.user_id and c.provider='weex'
+          and c.executor_shard_id=r.executor_shard_id
         cross join lateral (values (case r.config_json->>'timeframe'
           when '1m' then 60000::bigint when '5m' then 300000::bigint
           when '15m' then 900000::bigint when '30m' then 1800000::bigint
           when '1h' then 3600000::bigint when '4h' then 14400000::bigint
           when '1d' then 86400000::bigint else 60000::bigint end)) schedule(interval_ms)
         where r.executor_shard_id=$3 and r.state='running'
+          and c.status='active' and c.withdrawal_access_absent=true
+          and c.permissions_json @> '{"read":true}'::jsonb
+          and (
+            (r.mode='futures-demo' and r.config_json->>'market'='futures' and (
+              c.permissions_json @> '{"futuresDemoTrade":true}'::jsonb
+              or c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb
+            ))
+            or
+            (r.mode='live' and (
+              (r.config_json->>'market'='spot'
+                and c.permissions_json @> '{"spotTrade":true,"liveVerified":true}'::jsonb)
+              or
+              (r.config_json->>'market'='futures'
+                and c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb)
+            ))
+          )
           and (r.lease_expires_at is null or r.lease_expires_at<$2::bigint or r.lease_owner=$1)
           and (r.last_candle_at is null
             or r.last_candle_at < (($2::bigint/schedule.interval_ms)*schedule.interval_ms)-1
             or exists (select 1 from private.cloud_order_intents o where o.run_id=r.id and (
               o.status in ('claimed','unknown')
-              or (o.status='acknowledged' and coalesce(o.error_code,'') not in
-                ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+              or not coalesce((
+                o.status='risk-rejected'
+                or (o.status='rejected' and o.exchange_evidence_json is null)
+                or (o.status='acknowledged' and o.error_code='exchange_order_filled'
+                  and o.exchange_evidence_json->>'status'='FILLED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+                or (o.status='acknowledged' and o.error_code='exchange_order_cancelled_partially_filled'
+                  and o.exchange_evidence_json->>'status'='CANCELED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+                or (o.status='rejected' and o.error_code='exchange_order_cancelled'
+                  and o.exchange_evidence_json->>'status'='CANCELED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+                or (o.status='rejected' and o.error_code='exchange_order_rejected'
+                  and o.exchange_evidence_json->>'status'='REJECTED'
+                  and o.exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+              ),false)
               or o.candle_close_at>coalesce(r.last_candle_at,-1)
             )))
         order by coalesce(r.last_evaluated_at,0),r.created_at limit $4 for update of r skip locked)
@@ -208,10 +401,11 @@ export class CloudRuntimeRepository {
         || typeof value.user_id !== "string" || typeof value.connection_id !== "string"
         || typeof value.configuration_hash !== "string"
         || !CONFIGURATION_HASH.test(value.configuration_hash)) throw new Error("Cloud run is invalid");
+      const target = canonicalRunTarget(value.config_json, value.risk_json);
       return { id: value.id, userId: value.user_id, connectionId: value.connection_id, mode: value.mode,
         version: integer(value.version), configurationHash: value.configuration_hash,
-        config: object(value.config_json, "strategy config"),
-        risk: object(value.risk_json, "risk policy"),
+        config: target.config,
+        risk: target.risk,
         lastCandleAt: value.last_candle_at === null ? null : integer(value.last_candle_at),
         lastEvaluatedAt: value.last_evaluated_at === null ? null : integer(value.last_evaluated_at),
         consecutiveFailures: integer(value.consecutive_failures),
@@ -226,17 +420,35 @@ export class CloudRuntimeRepository {
     return (result.count ?? 0) > 0;
   }
 
-  async credential(connectionId: string, userId: string): Promise<StoredCredential> {
-    const rows = await this.#sql.unsafe(`select kms_key_id,encrypted_data_key,initialization_vector,
-      credential_ciphertext,encryption_context_json from private.weex_credential_blobs
-      where connection_id=$1 and user_id=$2`, [connectionId, userId]);
+  async credential(connectionId: string, userId: string, target?: CloudRunTarget): Promise<StoredCredential> {
+    const rows = await this.#sql.unsafe(`select b.kms_key_id,b.encrypted_data_key,b.initialization_vector,
+      b.credential_ciphertext,b.encryption_context_json,b.credential_version,c.version as connection_version
+      from private.weex_credential_blobs b
+      join public.weex_connections c on c.id=b.connection_id and c.user_id=b.user_id
+      where b.connection_id=$1 and b.user_id=$2 and c.provider='weex' and c.status='active'
+        and c.withdrawal_access_absent=true and c.permissions_json @> '{"read":true}'::jsonb
+        and (
+          ($3::text is null and $4::text is null)
+          or
+          ($3::text='futures-demo' and $4::text='futures' and (
+            c.permissions_json @> '{"futuresDemoTrade":true}'::jsonb
+            or c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb
+          ))
+          or
+          ($3::text='live' and $4::text='spot'
+            and c.permissions_json @> '{"spotTrade":true,"liveVerified":true}'::jsonb)
+          or
+          ($3::text='live' and $4::text='futures'
+            and c.permissions_json @> '{"futuresTrade":true,"liveVerified":true}'::jsonb)
+        )`, [connectionId, userId, target?.mode ?? null, target?.market ?? null]);
     const row = rows[0] as Row | undefined;
     if (!row || typeof row.kms_key_id !== "string") throw new Error("Cloud credential is unavailable");
     const rawContext = object(row.encryption_context_json, "credential context");
     if (Object.values(rawContext).some((value) => typeof value !== "string")) throw new Error("Credential context is invalid");
     return { envelope: { version: 1, keyId: row.kms_key_id, encryptedDataKey: bytes(row.encrypted_data_key),
       initializationVector: bytes(row.initialization_vector), ciphertext: bytes(row.credential_ciphertext) },
-      context: rawContext as Record<string, string> };
+      context: rawContext as Record<string, string>, credentialVersion: integer(row.credential_version),
+      connectionVersion: integer(row.connection_version) };
   }
 
   async realizedPnl(userId: string, connectionId: string, startAt: number, endAt: number): Promise<string> {
@@ -284,8 +496,22 @@ export class CloudRuntimeRepository {
       from private.cloud_order_intents
       where run_id=$1 and (
         status in ('claimed','unknown')
-        or (status='acknowledged' and coalesce(error_code,'') not in
-          ('exchange_order_filled','exchange_order_cancelled_partially_filled'))
+        or not coalesce((
+          status='risk-rejected'
+          or (status='rejected' and exchange_evidence_json is null)
+          or (status='acknowledged' and error_code='exchange_order_filled'
+            and exchange_evidence_json->>'status'='FILLED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+          or (status='acknowledged' and error_code='exchange_order_cancelled_partially_filled'
+            and exchange_evidence_json->>'status'='CANCELED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' !~ '^0(?:\\.0+)?$')
+          or (status='rejected' and error_code='exchange_order_cancelled'
+            and exchange_evidence_json->>'status'='CANCELED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+          or (status='rejected' and error_code='exchange_order_rejected'
+            and exchange_evidence_json->>'status'='REJECTED'
+            and exchange_evidence_json->>'cumulativeFilledQuantity' ~ '^0(?:\\.0+)?$')
+        ),false)
         or candle_close_at>$2
       )
       order by candle_close_at asc limit 1`, [runId, lastCandleAt ?? -1]);
@@ -318,14 +544,126 @@ export class CloudRuntimeRepository {
     return this.#claimedOrder(row);
   }
 
+  async submitAuthorizedOrder(
+    input: { run: CloudRun; owner: string; candleCloseAt: number; now: number;
+      credentialVersion: number; connectionVersion: number },
+    operation: (signal: AbortSignal) => Promise<SubmitOutcome>,
+  ): Promise<AuthorizedOrderSubmission> {
+    const transactionResult = await this.#sql.begin(async (transaction) => {
+      await transaction.unsafe(`set local lock_timeout='5s';
+        set local statement_timeout='${ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS}ms';
+        set local idle_in_transaction_session_timeout='${ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS}ms'`);
+      const connections = await transaction.unsafe(`select c.status,c.permissions_json,c.withdrawal_access_absent,
+        c.version as connection_version,b.credential_version
+        from public.weex_connections c
+        join private.weex_credential_blobs b on b.connection_id=c.id and b.user_id=c.user_id
+        where c.id=$1 and c.user_id=$2 and c.provider='weex' for update of c,b`,
+      [input.run.connectionId, input.run.userId]);
+      const runOrders = await transaction.unsafe(`select r.mode,r.config_json->>'market' as market,
+        r.state,r.lease_owner,o.status as order_status
+        from public.cloud_strategy_runs r
+        join private.cloud_order_intents o on o.run_id=r.id and o.candle_close_at=$4
+        where r.id=$1 and r.user_id=$2 and r.connection_id=$3
+        for update of r,o`,
+      [input.run.id, input.run.userId, input.run.connectionId, input.candleCloseAt]);
+      const runOrder = runOrders[0] as Row | undefined;
+      if (!runOrder || runOrder.order_status !== "claimed") return { authorized: false } as const;
+      const connection = connections[0] as Row | undefined;
+      const target = (runOrder.market === "spot" && runOrder.mode === "live")
+        ? { market: "spot", mode: "live" } as const
+        : (runOrder.market === "futures"
+          && (runOrder.mode === "futures-demo" || runOrder.mode === "live"))
+          ? { market: "futures", mode: runOrder.mode } as const
+          : null;
+      const versionsMatch = connection
+        ? integer(connection.credential_version) === input.credentialVersion
+          && integer(connection.connection_version) === input.connectionVersion
+        : false;
+      const connectionAuthorized = target ? connectionAuthorizesTarget(connection, target) : false;
+      if (!target || !connectionAuthorized) {
+        await transaction.unsafe(`update public.cloud_strategy_runs set state='paused',version=version+1,
+          last_error_code=$4,lease_owner=null,lease_expires_at=null,updated_at=greatest(updated_at,$5)
+          where id=$1 and user_id=$2 and connection_id=$3 and state<>'stopped'`,
+        [input.run.id, input.run.userId, input.run.connectionId, CONNECTION_AUTHORIZATION_REQUIRED, input.now]);
+        await transaction.unsafe(`update private.cloud_order_intents set status='rejected',error_code=$3,updated_at=$4
+          where run_id=$1 and candle_close_at=$2 and status='claimed'`,
+        [input.run.id, input.candleCloseAt, CONNECTION_AUTHORIZATION_REQUIRED, input.now]);
+        return { authorized: false } as const;
+      }
+      if (!versionsMatch) {
+        await transaction.unsafe(`update public.cloud_strategy_runs set lease_owner=null,lease_expires_at=null,
+          updated_at=greatest(updated_at,$3) where id=$1 and user_id=$2 and lease_owner=$4`,
+        [input.run.id, input.run.userId, input.now, input.owner]);
+        return { authorized: false } as const;
+      }
+      if (runOrder.state !== "running" || runOrder.lease_owner !== input.owner) {
+        return { authorized: false } as const;
+      }
+      const marked = await transaction.unsafe(`update private.cloud_order_intents set status='unknown',
+        exchange_order_id=null,error_code='submission_in_progress',updated_at=$3
+        where run_id=$1 and candle_close_at=$2 and status='claimed'`,
+      [input.run.id, input.candleCloseAt, input.now]);
+      if (marked.count !== 1) throw new Error("Cloud order authorization conflict");
+      try {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timedOut = false;
+        const controller = new AbortController();
+        const submissionTimeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort(new Error("WEEX order submission exceeded its transaction deadline"));
+            reject(new Error("WEEX order submission exceeded its transaction deadline"));
+          }, ORDER_SUBMISSION_TIMEOUT_MS);
+          timer.unref?.();
+        });
+        const operationPromise = operation(controller.signal);
+        const outcome = await Promise.race([operationPromise, submissionTimeout]).finally(() => {
+          if (timer) clearTimeout(timer);
+        });
+        if (timedOut) throw new Error("WEEX order submission exceeded its transaction deadline");
+        if (!outcome || !["acknowledged", "rejected", "unknown"].includes(outcome.status)
+          || (outcome.status === "acknowledged" && typeof outcome.exchangeOrderId !== "string")) {
+          throw new Error("Cloud order submission outcome is invalid");
+        }
+        const unsafeReason = outcome.status === "acknowledged" ? null : outcome.reason ?? outcome.status;
+        const reason = unsafeReason && /^[a-z0-9_-]{1,64}$/.test(unsafeReason)
+          ? unsafeReason : outcome.status === "acknowledged" ? null : "submission_failed";
+        await transaction.unsafe(`update private.cloud_order_intents set status=$3,
+          exchange_order_id=$4,error_code=$5,updated_at=$6 where run_id=$1 and candle_close_at=$2`,
+        [input.run.id, input.candleCloseAt, outcome.status,
+          outcome.status === "acknowledged" ? outcome.exchangeOrderId : null, reason, input.now]);
+        return { authorized: true, outcome } as const;
+      } catch (error) {
+        return { authorized: true, submissionError: error } as const;
+      }
+    });
+    if ("submissionError" in transactionResult) throw transactionResult.submissionError;
+    return transactionResult;
+  }
+
   async recordOrder(input: { runId: string; candleCloseAt: number; status: ClaimedOrder["status"];
-    intent?: unknown; exchangeOrderId?: string; errorCode?: string; now: number }): Promise<void> {
-    await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,
+    intent?: unknown; exchangeOrderId?: string; errorCode?: string;
+    exchangeEvidence?: ExchangeOrderSnapshot; now: number }): Promise<void> {
+    const evidence = input.exchangeEvidence === undefined
+      ? null : normalizeCloudOrderExchangeEvidence(input.exchangeEvidence, input.now);
+    if (evidence && input.exchangeOrderId !== undefined
+      && input.exchangeOrderId !== evidence.exchangeOrderId) {
+      throw new Error("Cloud order exchange evidence identity is invalid");
+    }
+    const result = await this.#sql.unsafe(`update private.cloud_order_intents set status=$3,
       intent_json=coalesce($4::jsonb,intent_json),
-      exchange_order_id=$5,error_code=$6,updated_at=$7 where run_id=$1 and candle_close_at=$2`,
+      exchange_order_id=$5,error_code=$6,
+      exchange_evidence_json=coalesce($7::jsonb,exchange_evidence_json),updated_at=$8
+      where run_id=$1 and candle_close_at=$2
+        and ($9::text is null or client_order_id=$9)`,
     [input.runId, input.candleCloseAt, input.status,
       input.intent === undefined ? null : this.#sql.json(jsonValue(input.intent)),
-      input.exchangeOrderId ?? null, input.errorCode ?? null, input.now]);
+      evidence?.exchangeOrderId ?? input.exchangeOrderId ?? null, input.errorCode ?? null,
+      evidence === null ? null : this.#sql.json(jsonValue(evidence)), input.now,
+      evidence?.clientOrderId ?? null]);
+    if (evidence && result.count !== undefined && result.count !== 1) {
+      throw new Error("Cloud order exchange evidence identity is invalid");
+    }
   }
 
   #claimedOrder(row: Row): ClaimedOrder {

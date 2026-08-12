@@ -16,3 +16,6 @@
 cca7fd9ddcd820d55f666e05f16f09899d9c85c5:packages/weex-client/tests/oauth-handoff.test.ts:generic-api-key:9
 cca7fd9ddcd820d55f666e05f16f09899d9c85c5:apps/executor/tests/oauth-service.test.ts:generic-api-key:10
 8fb792a9c212cda3bda581310ca575770f1aea96:apps/agent/tests/trade-audit.test.ts:generic-api-key:64
+# Reviewed synthetic malformed JWT fixture used only to verify that the
+# deployment/runtime Auth boundary rejects legacy anon keys.
+a5213d606d4bb2c2423746b03a558bab1d134432:tests/deployment-env.test.ts:generic-api-key:97

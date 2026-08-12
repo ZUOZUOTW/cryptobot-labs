@@ -13,7 +13,7 @@ import generatedZhHant from "./generated/zh-Hant.json";
  */
 const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
   "zh-Hant": {
-    "AUTOMATION LAUNCHER": "自動交易啟動器", "WEEX FUTURES DEMO": "WEEX 合約模擬",
+    "AUTOMATION LAUNCHER": "自動交易啟動器", "WEEX FUTURES DEMO": "WEEX 合約模擬", "WEEX FUTURES DEMO / SUSDT": "WEEX 合約模擬 / SUSDT",
     "VIP code": "VIP 代碼", "RISK": "風險", "Profit Factor": "獲利因子", "Sharpe": "夏普比率",
     "0 ERRORS": "0 個錯誤", "01 / SAVE": "01 / 儲存", "01 SIGNAL": "01 訊號", "02 MODEL": "02 模型", "03 RISK": "03 風險", "ASSEMBLY BUS / 03 MODULES": "組裝匯流排 / 03 模組", "Client": "用戶端", "Correlation": "相關性", "IMPORT PREVIEW": "匯入預覽", "KLINES /": "K 線 /", "LIVE BUILD": "即時建置", "STATIC CHECK PASSED": "靜態檢查通過", "STRATEGY READY": "策略已就緒", "VERIFIED MARKET DATA /": "已驗證市場資料 /", "VISUAL STRATEGY ASSEMBLY": "視覺化策略組裝",
     "RUN /": "運行 /", "BOTS": "機器人", "02 / PARAMETERS": "02 / 參數", "04 / SAVE & SHARE": "04 / 保存與分享", "03 / HISTORICAL TEST": "03 / 歷史測試", "01 / INERT SOURCE": "01 / 隔離原始碼", "01 / STRATEGY BLOCKS": "01 / 策略模組", "ORBITAL BOT LEAGUE / SEASON 01": "軌道機器人聯賽 / 第 01 季", "PUBLIC STRATEGY /": "公開策略 /", "/ V1": "/ 版本 1",
@@ -59,9 +59,11 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 發布",
     "PUBLIC LIST": "公開列表",
     "03 / SHARE": "03 / 分享",
+    "WEEX / USDT": "WEEX 市場 / USDT", "收藏保存在此瀏覽器": "收藏保存在此瀏覽器", "v": "版本",
+    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自動生成文案", "SHARE TO SOCIAL": "分享至社群", "WEEX /": "WEEX 市場 /", "RUN-BOUND ORDER EVIDENCE": "運行綁定委託證據", "Client ID：": "用戶端 ID：", "Exchange ID：": "交易所 ID：",
   },
   "zh-Hans": {
-    "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟",
+    "AUTOMATION LAUNCHER": "自动交易启动器", "WEEX FUTURES DEMO": "WEEX 合约模拟", "WEEX FUTURES DEMO / SUSDT": "WEEX 合约模拟 / SUSDT",
     "VIP code": "VIP 代码", "RISK": "风险", "Profit Factor": "盈利因子", "Sharpe": "夏普比率",
     "0 ERRORS": "0 个错误", "01 / SAVE": "01 / 保存", "01 SIGNAL": "01 信号", "02 MODEL": "02 模型", "03 RISK": "03 风险", "ASSEMBLY BUS / 03 MODULES": "组装总线 / 03 模块", "Client": "客户端", "Correlation": "相关性", "IMPORT PREVIEW": "导入预览", "KLINES /": "K 线 /", "LIVE BUILD": "实时构建", "STATIC CHECK PASSED": "静态检查通过", "STRATEGY READY": "策略已就绪", "VERIFIED MARKET DATA /": "已验证市场数据 /", "VISUAL STRATEGY ASSEMBLY": "可视化策略组装",
     "RUN /": "运行 /", "BOTS": "机器人", "02 / PARAMETERS": "02 / 参数", "04 / SAVE & SHARE": "04 / 保存与分享", "03 / HISTORICAL TEST": "03 / 历史测试", "01 / INERT SOURCE": "01 / 隔离源代码", "01 / STRATEGY BLOCKS": "01 / 策略模块", "ORBITAL BOT LEAGUE / SEASON 01": "轨道机器人联赛 / 第 01 季", "PUBLIC STRATEGY /": "公开策略 /", "/ V1": "/ 版本 1",
@@ -107,9 +109,11 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 发布",
     "PUBLIC LIST": "公开列表",
     "03 / SHARE": "03 / 分享",
+    "WEEX / USDT": "WEEX 市场 / USDT", "收藏保存在此瀏覽器": "收藏保存在此浏览器", "v": "版本",
+    "STRATEGY SHARE STUDIO": "策略分享工作室", "AUTO-GENERATED CAPTION": "自动生成文案", "SHARE TO SOCIAL": "分享到社交平台", "WEEX /": "WEEX 市场 /", "RUN-BOUND ORDER EVIDENCE": "运行绑定委托证据", "Client ID：": "客户端 ID：", "Exchange ID：": "交易所 ID：",
   },
   en: {
-    "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO",
+    "AUTOMATION LAUNCHER": "AUTOMATION LAUNCHER", "WEEX FUTURES DEMO": "WEEX FUTURES DEMO", "WEEX FUTURES DEMO / SUSDT": "WEEX FUTURES DEMO / SUSDT",
     "VIP code": "VIP code", "RISK": "RISK", "Profit Factor": "Profit Factor", "Sharpe": "Sharpe",
     "0 ERRORS": "0 ERRORS", "01 / SAVE": "01 / SAVE", "01 SIGNAL": "01 SIGNAL", "02 MODEL": "02 MODEL", "03 RISK": "03 RISK", "ASSEMBLY BUS / 03 MODULES": "ASSEMBLY BUS / 03 MODULES", "Client": "Client", "Correlation": "Correlation", "IMPORT PREVIEW": "IMPORT PREVIEW", "KLINES /": "KLINES /", "LIVE BUILD": "LIVE BUILD", "STATIC CHECK PASSED": "STATIC CHECK PASSED", "STRATEGY READY": "STRATEGY READY", "VERIFIED MARKET DATA /": "VERIFIED MARKET DATA /", "VISUAL STRATEGY ASSEMBLY": "VISUAL STRATEGY ASSEMBLY",
     "RUN /": "RUN /", "BOTS": "BOTS", "02 / PARAMETERS": "02 / PARAMETERS", "04 / SAVE & SHARE": "04 / SAVE & SHARE", "03 / HISTORICAL TEST": "03 / HISTORICAL TEST", "01 / INERT SOURCE": "01 / INERT SOURCE", "01 / STRATEGY BLOCKS": "01 / STRATEGY BLOCKS", "ORBITAL BOT LEAGUE / SEASON 01": "ORBITAL BOT LEAGUE / SEASON 01", "PUBLIC STRATEGY /": "PUBLIC STRATEGY /", "/ V1": "/ V1",
@@ -155,9 +159,11 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / PUBLISH",
     "PUBLIC LIST": "PUBLIC LIST",
     "03 / SHARE": "03 / SHARE",
+    "WEEX / USDT": "WEEX / USDT", "收藏保存在此瀏覽器": "Favorites are saved in this browser", "v": "v",
+    "STRATEGY SHARE STUDIO": "STRATEGY SHARE STUDIO", "AUTO-GENERATED CAPTION": "AUTO-GENERATED CAPTION", "SHARE TO SOCIAL": "SHARE TO SOCIAL", "WEEX /": "WEEX /", "RUN-BOUND ORDER EVIDENCE": "RUN-BOUND ORDER EVIDENCE", "Client ID：": "Client ID:", "Exchange ID：": "Exchange ID:",
   },
   ar: {
-    "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة",
+    "AUTOMATION LAUNCHER": "مشغّل التداول الآلي", "WEEX FUTURES DEMO": "محاكاة عقود WEEX الآجلة", "WEEX FUTURES DEMO / SUSDT": "محاكاة عقود WEEX الآجلة / SUSDT",
     "VIP code": "رمز VIP", "RISK": "المخاطر", "Profit Factor": "معامل الربح", "Sharpe": "نسبة شارب",
     "0 ERRORS": "0 أخطاء", "01 / SAVE": "01 / حفظ", "01 SIGNAL": "01 إشارة", "02 MODEL": "02 النموذج", "03 RISK": "03 المخاطر", "ASSEMBLY BUS / 03 MODULES": "مسار التجميع / 03 وحدات", "Client": "العميل", "Correlation": "الارتباط", "IMPORT PREVIEW": "معاينة الاستيراد", "KLINES /": "شموع K /", "LIVE BUILD": "البناء المباشر", "STATIC CHECK PASSED": "نجح الفحص الثابت", "STRATEGY READY": "الاستراتيجية جاهزة", "VERIFIED MARKET DATA /": "بيانات سوق موثقة /", "VISUAL STRATEGY ASSEMBLY": "التجميع المرئي للاستراتيجية",
     "RUN /": "تشغيل /", "BOTS": "روبوتات", "02 / PARAMETERS": "02 / المعلمات", "04 / SAVE & SHARE": "04 / الحفظ والمشاركة", "03 / HISTORICAL TEST": "03 / الاختبار التاريخي", "01 / INERT SOURCE": "01 / شفرة مصدر معزولة", "01 / STRATEGY BLOCKS": "01 / وحدات الاستراتيجية", "ORBITAL BOT LEAGUE / SEASON 01": "دوري الروبوتات المداري / الموسم 01", "PUBLIC STRATEGY /": "استراتيجية عامة /", "/ V1": "/ الإصدار 1",
@@ -204,9 +210,11 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / نشر",
     "PUBLIC LIST": "القائمة العامة",
     "03 / SHARE": "03 / مشاركة",
+    "WEEX / USDT": "سوق WEEX / USDT", "收藏保存在此瀏覽器": "تُحفظ المفضلة في هذا المتصفح", "v": "الإصدار",
+    "STRATEGY SHARE STUDIO": "استوديو مشاركة الاستراتيجية", "AUTO-GENERATED CAPTION": "نص مُنشأ تلقائيًا", "SHARE TO SOCIAL": "المشاركة على الشبكات الاجتماعية", "WEEX /": "سوق WEEX /", "RUN-BOUND ORDER EVIDENCE": "أدلة أوامر مرتبطة بالتشغيل", "Client ID：": "معرّف العميل:", "Exchange ID：": "معرّف المنصة:",
   },
   ru: {
-    "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX",
+    "AUTOMATION LAUNCHER": "ЗАПУСК АВТОТОРГОВЛИ", "WEEX FUTURES DEMO": "ДЕМО ФЬЮЧЕРСОВ WEEX", "WEEX FUTURES DEMO / SUSDT": "ДЕМО ФЬЮЧЕРСОВ WEEX / SUSDT",
     "VIP code": "VIP-код", "RISK": "РИСК", "Profit Factor": "Фактор прибыли", "Sharpe": "Коэффициент Шарпа",
     "0 ERRORS": "0 ОШИБОК", "01 / SAVE": "01 / СОХРАНИТЬ", "01 SIGNAL": "01 СИГНАЛ", "02 MODEL": "02 МОДЕЛЬ", "03 RISK": "03 РИСК", "ASSEMBLY BUS / 03 MODULES": "ШИНА СБОРКИ / 03 МОДУЛЯ", "Client": "Клиент", "Correlation": "Корреляция", "IMPORT PREVIEW": "ПРЕДПРОСМОТР ИМПОРТА", "KLINES /": "СВЕЧИ /", "LIVE BUILD": "АКТУАЛЬНАЯ СБОРКА", "STATIC CHECK PASSED": "СТАТИЧЕСКАЯ ПРОВЕРКА ПРОЙДЕНА", "STRATEGY READY": "СТРАТЕГИЯ ГОТОВА", "VERIFIED MARKET DATA /": "ПРОВЕРЕННЫЕ РЫНОЧНЫЕ ДАННЫЕ /", "VISUAL STRATEGY ASSEMBLY": "ВИЗУАЛЬНАЯ СБОРКА СТРАТЕГИИ",
     "RUN /": "ЗАПУСК /", "BOTS": "БОТЫ", "02 / PARAMETERS": "02 / ПАРАМЕТРЫ", "04 / SAVE & SHARE": "04 / СОХРАНЕНИЕ И ПУБЛИКАЦИЯ", "03 / HISTORICAL TEST": "03 / ИСТОРИЧЕСКИЙ ТЕСТ", "01 / INERT SOURCE": "01 / ИЗОЛИРОВАННЫЙ ИСХОДНЫЙ КОД", "01 / STRATEGY BLOCKS": "01 / БЛОКИ СТРАТЕГИИ", "ORBITAL BOT LEAGUE / SEASON 01": "ОРБИТАЛЬНАЯ ЛИГА БОТОВ / СЕЗОН 01", "PUBLIC STRATEGY /": "ПУБЛИЧНАЯ СТРАТЕГИЯ /", "/ V1": "/ ВЕРСИЯ 1",
@@ -253,9 +261,11 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / ОПУБЛИКОВАТЬ",
     "PUBLIC LIST": "ОБЩИЙ СПИСОК",
     "03 / SHARE": "03 / ПОДЕЛИТЬСЯ",
+    "WEEX / USDT": "РЫНОК WEEX / USDT", "收藏保存在此瀏覽器": "Избранное сохраняется в этом браузере", "v": "версия",
+    "STRATEGY SHARE STUDIO": "СТУДИЯ ПУБЛИКАЦИИ СТРАТЕГИИ", "AUTO-GENERATED CAPTION": "АВТОМАТИЧЕСКИ СОЗДАННЫЙ ТЕКСТ", "SHARE TO SOCIAL": "ПОДЕЛИТЬСЯ В СОЦСЕТЯХ", "WEEX /": "РЫНОК WEEX /", "RUN-BOUND ORDER EVIDENCE": "ДОКАЗАТЕЛЬСТВА ОРДЕРОВ ДЛЯ ЗАПУСКА", "Client ID：": "ID клиента:", "Exchange ID：": "ID биржи:",
   },
   ja: {
-    "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ",
+    "AUTOMATION LAUNCHER": "自動取引ランチャー", "WEEX FUTURES DEMO": "WEEX先物デモ", "WEEX FUTURES DEMO / SUSDT": "WEEX先物デモ / SUSDT",
     "VIP code": "VIPコード", "RISK": "リスク", "Profit Factor": "プロフィットファクター", "Sharpe": "シャープレシオ",
     "0 ERRORS": "エラー 0 件", "01 / SAVE": "01 / 保存", "01 SIGNAL": "01 シグナル", "02 MODEL": "02 モデル", "03 RISK": "03 リスク", "ASSEMBLY BUS / 03 MODULES": "アセンブリバス / 03 モジュール", "Client": "クライアント", "Correlation": "相関", "IMPORT PREVIEW": "インポートプレビュー", "KLINES /": "Kライン /", "LIVE BUILD": "ライブビルド", "STATIC CHECK PASSED": "静的チェック合格", "STRATEGY READY": "戦略の準備完了", "VERIFIED MARKET DATA /": "検証済み市場データ /", "VISUAL STRATEGY ASSEMBLY": "ビジュアル戦略ビルダー",
     "RUN /": "運用 /", "BOTS": "ボット", "02 / PARAMETERS": "02 / パラメーター", "04 / SAVE & SHARE": "04 / 保存・共有", "03 / HISTORICAL TEST": "03 / 過去データテスト", "01 / INERT SOURCE": "01 / 隔離ソースコード", "01 / STRATEGY BLOCKS": "01 / 戦略ブロック", "ORBITAL BOT LEAGUE / SEASON 01": "オービタル・ボットリーグ / シーズン 01", "PUBLIC STRATEGY /": "公開戦略 /", "/ V1": "/ バージョン 1",
@@ -302,12 +312,156 @@ const reviewedDecorativeMessages: Record<Locale, Record<string, string>> = {
     "02 / PUBLISH": "02 / 公開",
     "PUBLIC LIST": "公開一覧",
     "03 / SHARE": "03 / 共有",
+    "WEEX / USDT": "WEEX 市場 / USDT", "收藏保存在此瀏覽器": "お気に入りはこのブラウザに保存されます", "v": "バージョン",
+    "STRATEGY SHARE STUDIO": "ストラテジー共有スタジオ", "AUTO-GENERATED CAPTION": "自動生成キャプション", "SHARE TO SOCIAL": "ソーシャルで共有", "WEEX /": "WEEX 市場 /", "RUN-BOUND ORDER EVIDENCE": "運用に紐づく注文証跡", "Client ID：": "クライアント ID：", "Exchange ID：": "取引所 ID：",
+  },
+};
+
+const reviewedReferralMessages: Record<Locale, Record<string, string>> = {
+  "zh-Hant": {
+    "AFFILIATE / REFERRAL DISCLOSURE": "推廣／推薦關係揭露",
+    "推廣與推薦關係揭露｜CryptoBot Labs": "推廣與推薦關係揭露｜CryptoBot Labs",
+    "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。": "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。",
+    "推廣與推薦關係揭露": "推廣與推薦關係揭露",
+    "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。": "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。",
+    "連結如何核准": "連結如何核准",
+    "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。": "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。",
+    "可能的推薦關係": "可能的推薦關係",
+    "此連結可能包含推薦關係，您的使用費用不因此增加。": "此連結可能包含推薦關係，您的使用費用不因此增加。",
+    "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。": "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。",
+    "你的選擇": "你的選擇",
+    "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。": "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。",
+    "不影響策略證據": "不影響策略證據",
+    "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。": "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。",
+    "查看使用條款、隱私與風險說明": "查看使用條款、隱私與風險說明",
+    "查看完整推廣揭露": "查看完整推廣揭露",
+    "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。": "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。",
+    "套用已核准推薦來源": "套用已核准推薦來源",
+    "正在套用核准來源…": "正在套用核准來源…",
+    "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。": "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。",
+    "核准的推薦來源無法套用；公開策略未變更。": "核准的推薦來源無法套用；公開策略未變更。",
+  },
+  "zh-Hans": {
+    "AFFILIATE / REFERRAL DISCLOSURE": "推广／推荐关系披露",
+    "推廣與推薦關係揭露｜CryptoBot Labs": "推广与推荐关系披露｜CryptoBot Labs",
+    "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。": "说明 CryptoBot Labs 策略页中的 WEEX 推广来源、推荐关系和用户选择。",
+    "推廣與推薦關係揭露": "推广与推荐关系披露",
+    "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。": "清楚说明策略分享页中的 WEEX 邀请链接如何产生，以及它可能带来的推荐关系。",
+    "連結如何核准": "链接如何获批",
+    "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。": "只有经 CryptoBot Labs 服务器确认有效且已批准的 KOL／BD，才能在公开策略页显示自己的 WEEX 邀请链接。普通会员、待审核、已停用或不存在的推广来源都不能加入自定义邀请链接。",
+    "可能的推薦關係": "可能的推荐关系",
+    "此連結可能包含推薦關係，您的使用費用不因此增加。": "此链接可能包含推荐关系，您的使用费用不会因此增加。",
+    "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。": "如果您通过该链接注册或使用 WEEX，CryptoBot Labs 或该策略发布者可能依 WEEX 的实际规则取得推广权益。是否成立、如何计算及能否归因，均以 WEEX 的正式记录和规则为准。",
+    "你的選擇": "您的选择",
+    "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。": "使用邀请链接并不是查看、复制、回测或使用公开策略的必要条件。您可以跳过邀请按钮，直接前往 WEEX；本站也不会更改或重新绑定现有 WEEX 账户的推荐关系。",
+    "不影響策略證據": "不影响策略证据",
+    "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。": "推荐关系不会改变公开策略的历史回测、风险披露或排序证据，也不代表收益保证、投资建议或 WEEX 对该策略的背书。",
+    "查看使用條款、隱私與風險說明": "查看使用条款、隐私和风险说明",
+    "查看完整推廣揭露": "查看完整推广披露",
+    "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。": "复制当前已发布版本的公开网址；普通会员分享时不会加入自定义推荐链接。",
+    "套用已核准推薦來源": "应用已批准的推荐来源",
+    "正在套用核准來源…": "正在应用已批准来源…",
+    "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。": "已应用服务器批准的推荐来源；公开策略页将显示推荐披露。",
+    "核准的推薦來源無法套用；公開策略未變更。": "无法应用已批准的推荐来源；公开策略未更改。",
+  },
+  en: {
+    "AFFILIATE / REFERRAL DISCLOSURE": "AFFILIATE / REFERRAL DISCLOSURE",
+    "推廣與推薦關係揭露｜CryptoBot Labs": "Affiliate and referral disclosure | CryptoBot Labs",
+    "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。": "How WEEX promotional sources, referral relationships, and user choice work on CryptoBot Labs strategy pages.",
+    "推廣與推薦關係揭露": "Affiliate and referral disclosure",
+    "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。": "A clear explanation of how WEEX invitation links appear on shared strategy pages and the referral relationship they may create.",
+    "連結如何核准": "How links are approved",
+    "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。": "Only an active, approved KOL or BD verified by the CryptoBot Labs server can show their WEEX invitation link on a public strategy page. Ordinary members and pending, disabled, or missing promoter records cannot add custom invitation links.",
+    "可能的推薦關係": "Possible referral relationship",
+    "此連結可能包含推薦關係，您的使用費用不因此增加。": "This link may involve a referral relationship. Your fees do not increase as a result.",
+    "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。": "If you register for or use WEEX through the link, CryptoBot Labs or the strategy publisher may receive promotional benefits under WEEX's applicable rules. Eligibility, calculation, and attribution depend on WEEX's official records and rules.",
+    "你的選擇": "Your choice",
+    "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。": "An invitation link is not required to view, copy, backtest, or use a public strategy. You can skip the invitation button and visit WEEX directly. This site does not change or rebind an existing WEEX account's referral relationship.",
+    "不影響策略證據": "Strategy evidence is unaffected",
+    "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。": "A referral relationship does not change a public strategy's historical backtests, risk disclosures, or ranking evidence. It is not a return guarantee, investment advice, or an endorsement by WEEX.",
+    "查看使用條款、隱私與風險說明": "View terms, privacy, and risk information",
+    "查看完整推廣揭露": "View the full affiliate disclosure",
+    "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。": "Copy the public URL for the published version. Ordinary member shares do not add custom referral links.",
+    "套用已核准推薦來源": "Apply approved referral source",
+    "正在套用核准來源…": "Applying approved source…",
+    "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。": "The server-approved referral source was applied; the public strategy page will show a referral disclosure.",
+    "核准的推薦來源無法套用；公開策略未變更。": "The approved referral source could not be applied; the public strategy was not changed.",
+  },
+  ar: {
+    "AFFILIATE / REFERRAL DISCLOSURE": "إفصاح الشراكة / الإحالة",
+    "推廣與推薦關係揭露｜CryptoBot Labs": "إفصاح الشراكة والإحالة | CryptoBot Labs",
+    "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。": "توضيح مصادر ترويج WEEX وعلاقات الإحالة وخيارات المستخدم في صفحات استراتيجيات CryptoBot Labs.",
+    "推廣與推薦關係揭露": "إفصاح الشراكة والإحالة",
+    "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。": "شرح واضح لكيفية ظهور روابط دعوة WEEX في صفحات الاستراتيجيات المشتركة وعلاقة الإحالة المحتملة.",
+    "連結如何核准": "كيفية اعتماد الروابط",
+    "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。": "لا يمكن عرض رابط دعوة WEEX في صفحة استراتيجية عامة إلا لشريك KOL أو BD نشط ومعتمد تحقّق منه خادم CryptoBot Labs. لا يستطيع الأعضاء العاديون أو الشركاء قيد المراجعة أو المعطّلون أو غير الموجودين إضافة روابط دعوة مخصّصة.",
+    "可能的推薦關係": "علاقة إحالة محتملة",
+    "此連結可能包含推薦關係，您的使用費用不因此增加。": "قد يتضمن هذا الرابط علاقة إحالة، ولن تزيد رسوم استخدامك بسببها.",
+    "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。": "إذا سجّلت أو استخدمت WEEX عبر الرابط، فقد يحصل CryptoBot Labs أو ناشر الاستراتيجية على مزايا ترويجية وفق قواعد WEEX السارية. تعتمد الأهلية والحساب والإسناد على سجلات WEEX وقواعدها الرسمية.",
+    "你的選擇": "خيارك",
+    "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。": "لا يلزم استخدام رابط الدعوة لعرض استراتيجية عامة أو نسخها أو اختبارها أو استخدامها. يمكنك تجاوز زر الدعوة والذهاب إلى WEEX مباشرة، ولا يغيّر هذا الموقع علاقة الإحالة لحساب WEEX قائم ولا يعيد ربطها.",
+    "不影響策略證據": "لا يؤثر في أدلة الاستراتيجية",
+    "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。": "لا تغيّر علاقة الإحالة الاختبارات التاريخية أو إفصاحات المخاطر أو أدلة الترتيب للاستراتيجية العامة، ولا تمثل ضمانًا للعائد أو نصيحة استثمارية أو تأييدًا من WEEX.",
+    "查看使用條款、隱私與風險說明": "عرض الشروط والخصوصية ومعلومات المخاطر",
+    "查看完整推廣揭露": "عرض إفصاح الشراكة الكامل",
+    "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。": "انسخ الرابط العام للإصدار المنشور؛ مشاركات الأعضاء العاديين لا تضيف روابط إحالة مخصّصة.",
+    "套用已核准推薦來源": "تطبيق مصدر الإحالة المعتمد",
+    "正在套用核准來源…": "جارٍ تطبيق المصدر المعتمد…",
+    "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。": "تم تطبيق مصدر الإحالة المعتمد من الخادم؛ ستعرض صفحة الاستراتيجية العامة إفصاح الإحالة.",
+    "核准的推薦來源無法套用；公開策略未變更。": "تعذر تطبيق مصدر الإحالة المعتمد؛ لم تتغير الاستراتيجية العامة.",
+  },
+  ru: {
+    "AFFILIATE / REFERRAL DISCLOSURE": "РАСКРЫТИЕ ПАРТНЁРСКОЙ СВЯЗИ",
+    "推廣與推薦關係揭露｜CryptoBot Labs": "Раскрытие партнёрской и реферальной связи | CryptoBot Labs",
+    "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。": "Как работают рекламные источники WEEX, реферальные связи и выбор пользователя на страницах стратегий CryptoBot Labs.",
+    "推廣與推薦關係揭露": "Раскрытие партнёрской и реферальной связи",
+    "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。": "Понятное объяснение появления ссылок-приглашений WEEX на общедоступных страницах стратегий и возможной реферальной связи.",
+    "連結如何核准": "Как одобряются ссылки",
+    "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。": "Только активный и одобренный KOL- или BD-партнёр, подтверждённый сервером CryptoBot Labs, может показать свою ссылку-приглашение WEEX на публичной странице стратегии. Обычные пользователи и партнёры со статусом ожидания, отключения или без записи не могут добавлять собственные ссылки.",
+    "可能的推薦關係": "Возможная реферальная связь",
+    "此連結可能包含推薦關係，您的使用費用不因此增加。": "Эта ссылка может содержать реферальную связь. Ваши расходы из-за этого не увеличиваются.",
+    "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。": "Если вы зарегистрируетесь или воспользуетесь WEEX по этой ссылке, CryptoBot Labs или автор стратегии может получить рекламные преимущества по действующим правилам WEEX. Право, расчёт и атрибуция определяются официальными записями и правилами WEEX.",
+    "你的選擇": "Ваш выбор",
+    "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。": "Ссылка-приглашение не нужна для просмотра, копирования, бэктеста или использования публичной стратегии. Можно пропустить кнопку приглашения и перейти на WEEX напрямую. Сайт не меняет и не переназначает реферальную связь существующего аккаунта WEEX.",
+    "不影響策略證據": "Данные стратегии не меняются",
+    "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。": "Реферальная связь не меняет исторические бэктесты, раскрытие рисков или данные рейтинга публичной стратегии и не означает гарантии доходности, инвестиционной рекомендации или одобрения WEEX.",
+    "查看使用條款、隱私與風險說明": "Условия, конфиденциальность и риски",
+    "查看完整推廣揭露": "Полное раскрытие партнёрской связи",
+    "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。": "Скопируйте публичный адрес опубликованной версии. В публикации обычного пользователя собственная реферальная ссылка не добавляется.",
+    "套用已核准推薦來源": "Применить одобренный источник",
+    "正在套用核准來源…": "Применяем одобренный источник…",
+    "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。": "Одобренный сервером реферальный источник применён; на публичной странице появится раскрытие реферальной связи.",
+    "核准的推薦來源無法套用；公開策略未變更。": "Не удалось применить одобренный источник; публичная стратегия не изменена.",
+  },
+  ja: {
+    "AFFILIATE / REFERRAL DISCLOSURE": "アフィリエイト／紹介関係の開示",
+    "推廣與推薦關係揭露｜CryptoBot Labs": "アフィリエイトと紹介関係の開示｜CryptoBot Labs",
+    "說明 CryptoBot Labs 策略頁中的 WEEX 推廣來源、推薦關係與使用者選擇。": "CryptoBot Labs の戦略ページにおける WEEX のプロモーション元、紹介関係、ユーザーの選択について説明します。",
+    "推廣與推薦關係揭露": "アフィリエイトと紹介関係の開示",
+    "清楚說明策略分享頁中的 WEEX 邀請連結如何產生，以及它可能帶來的推薦關係。": "共有戦略ページに WEEX 招待リンクが表示される仕組みと、紹介関係が生じる可能性を明確に説明します。",
+    "連結如何核准": "リンクの承認方法",
+    "只有經 CryptoBot Labs 伺服器確認為有效且已核准的 KOL／BD，才能在公開策略頁顯示自己的 WEEX 邀請連結。普通會員、待審核、已停用或不存在的推廣來源都不能加入自訂邀請連結。": "CryptoBot Labs のサーバーが有効かつ承認済みと確認した KOL／BD だけが、公開戦略ページに自身の WEEX 招待リンクを表示できます。一般会員、審査中、無効化済み、または記録のないプロモーターは独自の招待リンクを追加できません。",
+    "可能的推薦關係": "紹介関係の可能性",
+    "此連結可能包含推薦關係，您的使用費用不因此增加。": "このリンクには紹介関係が含まれる場合がありますが、それによって利用料金が増えることはありません。",
+    "若您透過該連結註冊或使用 WEEX，CryptoBot Labs 或該策略發布者可能依 WEEX 的實際規則取得推廣權益。是否成立、如何計算及是否可歸因，均以 WEEX 的正式紀錄與規則為準。": "このリンクから WEEX に登録または利用すると、CryptoBot Labs または戦略の公開者が WEEX の適用ルールに基づくプロモーション特典を受ける場合があります。対象条件、計算、帰属は WEEX の公式記録とルールに従います。",
+    "你的選擇": "あなたの選択",
+    "使用邀請連結不是查看、複製、回測或使用公開策略的必要條件。你可以略過邀請按鈕，直接前往 WEEX，且既有 WEEX 帳戶的推薦關係不會由本站變更或重新綁定。": "公開戦略の閲覧、コピー、バックテスト、利用に招待リンクは必要ありません。招待ボタンを使わずに WEEX へ直接移動できます。また、本サイトが既存の WEEX アカウントの紹介関係を変更または再設定することはありません。",
+    "不影響策略證據": "戦略の検証データには影響しません",
+    "推薦關係不會改變公開策略的歷史回測、風險揭露或排序證據，也不代表收益保證、投資建議或 WEEX 對該策略的背書。": "紹介関係によって公開戦略の過去バックテスト、リスク開示、ランキング根拠が変わることはありません。収益保証、投資助言、または WEEX による推奨を意味するものでもありません。",
+    "查看使用條款、隱私與風險說明": "利用規約、プライバシー、リスク情報を見る",
+    "查看完整推廣揭露": "アフィリエイト開示の全文を見る",
+    "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。": "公開済みバージョンの URL をコピーします。一般会員の共有に独自の紹介リンクは追加されません。",
+    "套用已核准推薦來源": "承認済み紹介元を適用",
+    "正在套用核准來源…": "承認済み紹介元を適用中…",
+    "已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。": "サーバー承認済みの紹介元を適用しました。公開戦略ページに紹介関係の開示が表示されます。",
+    "核准的推薦來源無法套用；公開策略未變更。": "承認済み紹介元を適用できませんでした。公開戦略は変更されていません。",
   },
 };
 
 const reviewedTechnicalMessages: Record<Locale, Record<string, string>> = {
   "zh-Hant": {
     ...reviewedDecorativeMessages["zh-Hant"],
+    ...reviewedReferralMessages["zh-Hant"],
     "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。": "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。",
     "展示動作：已要求 __0__ 停止新訂單。": "展示動作：已要求 __0__ 停止新訂單。",
     "現貨": "現貨", "合約": "合約",
@@ -315,6 +469,7 @@ const reviewedTechnicalMessages: Record<Locale, Record<string, string>> = {
   },
   "zh-Hans": {
     ...reviewedDecorativeMessages["zh-Hans"],
+    ...reviewedReferralMessages["zh-Hans"],
     "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。": "__0__连接已完成：只读和交易权限可用，提现权限明确不可用。",
     "展示動作：已要求 __0__ 停止新訂單。": "演示操作：已要求 __0__ 停止创建新订单。",
     "現貨": "现货", "合約": "合约",
@@ -322,6 +477,7 @@ const reviewedTechnicalMessages: Record<Locale, Record<string, string>> = {
   },
   en: {
     ...reviewedDecorativeMessages.en,
+    ...reviewedReferralMessages.en,
     "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。": "__0__ connection is complete: read and trading access are available; withdrawal access is explicitly unavailable.",
     "展示動作：已要求 __0__ 停止新訂單。": "Demo action: __0__ was instructed to stop placing new orders.",
     "現貨": "spot", "合約": "futures",
@@ -329,6 +485,7 @@ const reviewedTechnicalMessages: Record<Locale, Record<string, string>> = {
   },
   ar: {
     ...reviewedDecorativeMessages.ar,
+    ...reviewedReferralMessages.ar,
     "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。": "اكتمل اتصال __0__: تتوفر صلاحيتا القراءة والتداول، بينما صلاحية السحب غير متاحة صراحةً.",
     "展示動作：已要求 __0__ 停止新訂單。": "إجراء تجريبي: تم توجيه __0__ إلى التوقف عن إنشاء أوامر جديدة.",
     "現貨": "تداول فوري", "合約": "عقود آجلة",
@@ -336,6 +493,7 @@ const reviewedTechnicalMessages: Record<Locale, Record<string, string>> = {
   },
   ru: {
     ...reviewedDecorativeMessages.ru,
+    ...reviewedReferralMessages.ru,
     "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。": "Подключение __0__ завершено: доступ на чтение и торговлю включён; вывод средств явно недоступен.",
     "展示動作：已要求 __0__ 停止新訂單。": "Демо-действие: для __0__ отправлена команда прекратить создание новых ордеров.",
     "現貨": "спот", "合約": "фьючерсы",
@@ -343,6 +501,7 @@ const reviewedTechnicalMessages: Record<Locale, Record<string, string>> = {
   },
   ja: {
     ...reviewedDecorativeMessages.ja,
+    ...reviewedReferralMessages.ja,
     "__0__連線已完成：只讀與交易能力可用，提領能力明確不存在。": "__0__の接続が完了しました。読み取りと取引の権限は利用できますが、出金権限は明示的に利用できません。",
     "展示動作：已要求 __0__ 停止新訂單。": "デモ操作：__0__に新規注文を停止するよう指示しました。",
     "現貨": "現物", "合約": "先物",
@@ -496,7 +655,8 @@ export function canonicalMessageSource(value: string): string {
     for (const locale of Object.keys(messages) as Locale[]) {
       for (const [source, translation] of Object.entries(messages[locale])) {
         if (!sourceByTranslation.has(translation)) sourceByTranslation.set(translation, source);
-        if (!/__\d+__/u.test(translation)) continue;
+        if (!/__\d+__/u.test(translation)
+          || translation.replace(/__\d+__/gu, "").trim().length === 0) continue;
         const placeholderOrder: number[] = [];
         const parts: string[] = [];
         let cursor = 0;
@@ -517,10 +677,10 @@ export function canonicalMessageSource(value: string): string {
   for (const { pattern, placeholderOrder, source } of sourcePatternsByTranslation ?? []) {
     const match = value.match(pattern);
     if (!match) continue;
-    const captures = new Map(placeholderOrder.map((placeholder, index) => [
-      placeholder,
-      canonicalMessageSource(match[index + 1] ?? ""),
-    ]));
+    const captures = new Map(placeholderOrder.map((placeholder, index) => {
+      const capture = match[index + 1] ?? "";
+      return [placeholder, capture === value ? capture : canonicalMessageSource(capture)];
+    }));
     return source.replace(/__(\d+)__/gu, (_, index) => captures.get(Number(index)) ?? "");
   }
   return value;

@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./auth-stage": "./src/auth-stage.ts"
+    "./auth-stage": "./src/auth-stage.ts",
+    "./symbol": "./src/symbol.ts"
   },
   "scripts": {
     "test": "vitest run tests",

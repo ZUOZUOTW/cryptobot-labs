@@ -144,12 +144,19 @@ const execution = (
     decision?: RiskDecision;
     find?: ReturnType<typeof vi.fn>;
     submit?: ReturnType<typeof vi.fn>;
+    authorized?: boolean;
   } = {},
 ) => {
   const repository = {
     recordOrder: vi.fn(async () => undefined),
     complete: vi.fn(async () => undefined),
     release: vi.fn(async () => undefined),
+    submitAuthorizedOrder: vi.fn(async (
+      _input: unknown,
+      operation: (signal: AbortSignal) => Promise<unknown>,
+    ) => overrides.authorized === false
+      ? { authorized: false as const }
+      : { authorized: true as const, outcome: await operation(new AbortController().signal) }),
   };
   const client = {
     findOrderByClientOrderId: overrides.find ?? vi.fn(async () => null),
@@ -174,30 +181,58 @@ const execution = (
       target: { market: "futures", mode: "live" },
       symbol: "BTCUSDT",
       now: overrides.now ?? 1_700_000_000_000,
+      credentialVersion: 3,
+      connectionVersion: 5,
     }),
   };
 };
 
 describe("cloud order crash recovery", () => {
-  it("persists an ambiguous state before the first exchange submission", async () => {
+  it("keeps an accepted first submission blocking until an exchange lookup proves it terminal", async () => {
     const submit = vi.fn(async () => ({ status: "acknowledged" as const, exchangeOrderId: "exchange-1" }));
     const value = execution(freshClaim, { submit });
 
-    await expect(value.promise).resolves.toBe("completed");
+    await expect(value.promise).resolves.toBe("deferred");
 
-    expect(value.repository.recordOrder).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      status: "unknown",
-      errorCode: "submission_in_progress",
-    }));
-    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ clientOrderId: "cb_original" }));
-    expect(value.repository.recordOrder).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      status: "acknowledged",
-      exchangeOrderId: "exchange-1",
-    }));
+    expect(value.repository.submitAuthorizedOrder).toHaveBeenCalledWith(expect.objectContaining({
+      run,
+      owner: "owner-1",
+      candleCloseAt: freshClaim.candleCloseAt,
+      credentialVersion: 3,
+      connectionVersion: 5,
+    }), expect.any(Function));
+    expect(value.repository.submitAuthorizedOrder.mock.invocationCallOrder[0])
+      .toBeLessThan(submit.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({ clientOrderId: "cb_original" }),
+      expect.any(AbortSignal),
+    );
+    expect(value.repository.recordOrder).not.toHaveBeenCalled();
+    expect(value.repository.release).toHaveBeenCalledOnce();
+    expect(value.repository.complete).not.toHaveBeenCalled();
+  });
+
+  it("never submits when the final database authorization rejects the connection", async () => {
+    const value = execution(freshClaim, { authorized: false });
+
+    await expect(value.promise).resolves.toBe("deferred");
+
+    expect(value.client.submitOrder).not.toHaveBeenCalled();
+    expect(value.repository.complete).not.toHaveBeenCalled();
+    expect(value.repository.release).not.toHaveBeenCalled();
+  });
+
+  it("completes a first submission only when WEEX proves it was rejected", async () => {
+    const submit = vi.fn(async () => ({ status: "rejected" as const, reason: "insufficient_margin" }));
+    const value = execution(freshClaim, { submit });
+
+    await expect(value.promise).resolves.toBe("completed");
+    expect(value.repository.submitAuthorizedOrder).toHaveBeenCalledOnce();
+    expect(value.repository.release).not.toHaveBeenCalled();
     expect(value.repository.complete).toHaveBeenCalledOnce();
   });
 
-  it("reconciles an earlier claim with its stored client id and never resubmits it", async () => {
+  it("quarantines an earlier claim with its stored client id and never resubmits or guesses a terminal result", async () => {
     const find = vi.fn(async () => null);
     const submit = vi.fn();
     const value = execution({ ...freshClaim, fresh: false }, {
@@ -206,14 +241,16 @@ describe("cloud order crash recovery", () => {
       submit,
     });
 
-    await expect(value.promise).resolves.toBe("completed");
+    await expect(value.promise).resolves.toBe("deferred");
 
     expect(find).toHaveBeenCalledWith(expect.objectContaining({ clientOrderId: "cb_original" }));
     expect(submit).not.toHaveBeenCalled();
     expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
-      status: "rejected",
-      errorCode: "stale_claim_no_exchange_order",
+      status: "unknown",
+      errorCode: "order_reconciliation_required",
     }));
+    expect(value.repository.release).toHaveBeenCalledOnce();
+    expect(value.repository.complete).not.toHaveBeenCalled();
   });
 
   it("defers a recent missing order so WEEX has time to make it queryable", async () => {
@@ -237,8 +274,15 @@ describe("cloud order crash recovery", () => {
     expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
       status: "acknowledged",
       exchangeOrderId: "exchange-existing",
+      exchangeEvidence: expect.objectContaining({
+        clientOrderId: "cb_original",
+        status: "FILLED",
+        cumulativeFilledQuantity: "0.0001",
+      }),
       errorCode: "exchange_order_filled",
     }));
+    expect(value.repository.release).not.toHaveBeenCalled();
+    expect(value.repository.complete).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -251,12 +295,14 @@ describe("cloud order crash recovery", () => {
       submit,
     });
 
-    await expect(value.promise).resolves.toBe("completed");
+    await expect(value.promise).resolves.toBe("deferred");
     expect(submit).not.toHaveBeenCalled();
     expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
       status: "acknowledged",
       errorCode,
     }));
+    expect(value.repository.release).toHaveBeenCalledOnce();
+    expect(value.repository.complete).not.toHaveBeenCalled();
   });
 
   it("preserves ownership evidence when a partially filled order is later cancelled", async () => {
@@ -303,10 +349,8 @@ describe("cloud order crash recovery", () => {
     await expect(value.promise).resolves.toBe("deferred");
     expect(value.repository.release).toHaveBeenCalledOnce();
     expect(value.repository.complete).not.toHaveBeenCalled();
-    expect(value.repository.recordOrder).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: "unknown",
-      errorCode: "ambiguous-submit-outcome",
-    }));
+    expect(value.repository.submitAuthorizedOrder).toHaveBeenCalledOnce();
+    expect(value.repository.recordOrder).not.toHaveBeenCalled();
   });
 
   it("leaves durable reconciliation evidence when submission throws before an outcome is recorded", async () => {
@@ -316,15 +360,12 @@ describe("cloud order crash recovery", () => {
     const value = execution(freshClaim, { submit });
 
     await expect(value.promise).rejects.toMatchObject({ category: "network" });
-    expect(value.repository.recordOrder).toHaveBeenCalledTimes(1);
-    expect(value.repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
-      status: "unknown",
-      errorCode: "submission_in_progress",
-    }));
+    expect(value.repository.submitAuthorizedOrder).toHaveBeenCalledOnce();
+    expect(value.repository.recordOrder).not.toHaveBeenCalled();
     expect(value.repository.complete).not.toHaveBeenCalled();
   });
 
-  it("settles an older unresolved candle before any newer order can be submitted", async () => {
+  it("keeps an older unresolved candle quarantined so no newer order can be submitted", async () => {
     const submit = vi.fn();
     const repository = {
       recordOrder: vi.fn(async () => undefined),
@@ -353,21 +394,26 @@ describe("cloud order crash recovery", () => {
       target: { market: "futures", mode: "live" },
       symbol: "BTCUSDT",
       now: olderOrder.createdAt + ORDER_RECONCILIATION_GRACE_MS,
-    })).resolves.toBe("completed");
+    })).resolves.toBe("deferred");
 
     expect(submit).not.toHaveBeenCalled();
-    expect(repository.recordOrder).toHaveBeenCalledWith(expect.objectContaining({
-      candleCloseAt: olderOrder.candleCloseAt,
-      status: "rejected",
-      errorCode: "stale_claim_no_exchange_order",
-    }));
-    expect(repository.complete).toHaveBeenCalledWith(
-      run,
-      "owner-1",
-      olderOrder.candleCloseAt,
-      expect.objectContaining({ orderSkipped: "stale_claim_no_exchange_order" }),
-      olderOrder.createdAt + ORDER_RECONCILIATION_GRACE_MS,
+    expect(repository.recordOrder).not.toHaveBeenCalled();
+    expect(repository.release).toHaveBeenCalledWith(
+      run.id, "owner-1", olderOrder.createdAt + ORDER_RECONCILIATION_GRACE_MS,
     );
+    expect(repository.complete).not.toHaveBeenCalled();
+  });
+
+  it("never terminally rejects a very old unknown submission without authoritative exchange evidence", async () => {
+    const value = execution({ ...freshClaim, fresh: false, status: "unknown" }, {
+      now: freshClaim.createdAt + ORDER_RECONCILIATION_GRACE_MS * 10_000,
+      find: vi.fn(async () => null),
+    });
+
+    await expect(value.promise).resolves.toBe("deferred");
+    expect(value.repository.release).toHaveBeenCalledOnce();
+    expect(value.repository.recordOrder).not.toHaveBeenCalled();
+    expect(value.repository.complete).not.toHaveBeenCalled();
   });
 
   it("finishes a terminal rejected order row left behind by a crash without querying or submitting", async () => {

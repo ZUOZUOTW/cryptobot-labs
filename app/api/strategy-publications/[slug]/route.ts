@@ -1,7 +1,11 @@
 import { createControlPlaneDatabase } from "@/db";
 import { createStrategyPublicationRepository } from "@/db/repositories";
 import { env } from "@/lib/server/platform-env";
-import { toPublicStrategyPublication } from "@/lib/server/strategy-publications";
+import {
+  publicStrategyFreshnessHeaders,
+  toPublicStrategyPublication,
+} from "@/lib/server/strategy-publications";
+import { serveProductionStrategyPublicationRoute } from "@/lib/server/strategy-publication-runtime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +20,7 @@ export async function GET(
     if (!record) {
       return Response.json({ error: "not_found" }, {
         status: 404,
-        headers: { "cache-control": "public, max-age=30, s-maxage=60" },
+        headers: publicStrategyFreshnessHeaders,
       });
     }
     let publication;
@@ -29,13 +33,11 @@ export async function GET(
       });
       return Response.json({ error: "not_found" }, {
         status: 404,
-        headers: { "cache-control": "public, max-age=30, s-maxage=60" },
+        headers: publicStrategyFreshnessHeaders,
       });
     }
     return Response.json({ publication }, {
-      headers: {
-        "cache-control": "public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
-      },
+      headers: publicStrategyFreshnessHeaders,
     });
   } catch (error) {
     console.error("[strategy-publication] detail failed", {
@@ -43,7 +45,14 @@ export async function GET(
     });
     return Response.json({ error: "publication_service_unavailable" }, {
       status: 503,
-      headers: { "cache-control": "no-store" },
+      headers: publicStrategyFreshnessHeaders,
     });
   }
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ slug: string }> },
+): Promise<Response> {
+  return serveProductionStrategyPublicationRoute((handlers) => handlers.patch(request, context));
 }

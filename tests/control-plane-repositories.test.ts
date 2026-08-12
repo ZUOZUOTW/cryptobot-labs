@@ -109,6 +109,20 @@ describe("scoped control-plane repositories", () => {
       .rejects.toThrow(/email/i);
   });
 
+  it("keeps legacy-compatible emoji and ZWJ display labels outside public publication boundaries", async () => {
+    await users.upsertIdentity({ id: "usr_a", email: "a@example.com", displayName: "Alice ❤️", now: 30 });
+    expect(await users.getById("usr_a")).toMatchObject({ displayName: "Alice ❤️" });
+    await devices.create({
+      id: "dev_emoji",
+      userId: "usr_a",
+      name: "Trading Mac 👨‍💻",
+      platform: "macos",
+      publicKeyJwk,
+      now: 31,
+    });
+    expect(await devices.get("usr_a", "dev_emoji")).toMatchObject({ name: "Trading Mac 👨‍💻" });
+  });
+
   it("makes cross-owner device reads and mutations invisible and bounds pagination", async () => {
     expect(await devices.get("usr_b", "dev_a")).toBeNull();
     expect(await devices.touch("usr_b", "dev_a", 40)).toBeNull();

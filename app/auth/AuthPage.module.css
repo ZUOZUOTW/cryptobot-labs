@@ -331,7 +331,13 @@
 
 .cardFooter p { margin: 0; }
 .cardFooter a { color: #94a4bd; text-decoration: underline; text-decoration-color: rgb(148 164 189 / 30%); text-underline-offset: 0.2em; }
-.cardFooter > a { flex: 0 0 auto; white-space: nowrap; }
+.cardFooter > a {
+  min-height: 2.75rem;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  white-space: nowrap;
+}
 .cardFooter a:hover { color: #70e4ff; }
 
 @keyframes auth-mascot-float {

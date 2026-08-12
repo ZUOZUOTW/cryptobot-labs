@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { runBacktest } from "./backtest";
+import { isVerifiedHistoricalReportForConfig } from "./historical-evidence";
 import { canonicalizeBotConfig, hasBotConfigShape, validateConfig, validateJavaScript } from "./strategy-validation";
 import type { BacktestReport, BotConfig } from "./types";
 
@@ -69,14 +70,6 @@ const isBacktestReport = (value: unknown): value is BacktestReport => (
   ))
 );
 
-const historicalReportMatchesConfig = (report: BacktestReport, config: BotConfig): boolean => {
-  const evidence = report.evidence;
-  return evidence?.level === "historical" && evidence.provider === "WEEX" && evidence.complete
-    && evidence.market === config.market && evidence.symbol === config.symbol && evidence.interval === config.timeframe
-    && evidence.startTime < evidence.endTime && evidence.candleCount >= 2
-    && evidence.datasetDigest.startsWith(report.seed) && report.generatedAt === new Date(evidence.collectedAt).toISOString();
-};
-
 const invalidConfigError = (errors: string[]): Error => new Error(`策略設定無效：${errors.join("；")}`);
 
 const assertConfig = (value: unknown, validateSource: boolean): BotConfig => {
@@ -131,8 +124,17 @@ const defaultStrategySource = (config: BotConfig): string => [
   " * CryptoBot Labs WEEX 策略模擬原型。",
   " * 此檔案無法獨立執行實盤交易。",
   " */",
-  `export const strategyId = ${JSON.stringify(config.id)};`,
-  "export const exchange = \"WEEX\";",
+  "export const strategy = {",
+  `  id: ${JSON.stringify(config.id)},`,
+  "  exchange: \"WEEX\",",
+  `  market: ${JSON.stringify(config.market)},`,
+  `  symbol: ${JSON.stringify(config.symbol)},`,
+  `  timeframe: ${JSON.stringify(config.timeframe)}`,
+  "};",
+  "",
+  "export default function evaluate() {",
+  "  return { action: \"hold\", reason: \"visual-strategy-package-metadata\" };",
+  "}",
   "",
 ].join("\n");
 
@@ -148,7 +150,7 @@ const packageReadme = (config: BotConfig): string => [
 export const buildBotPackageFiles = async (config: BotConfig, report: BacktestReport): Promise<BotPackageFile[]> => {
   const validConfig = assertConfig(config, true);
   const validReport = assertReport(report);
-  if (!(validReport.evidence ? historicalReportMatchesConfig(validReport, validConfig) : reportsMatch(validReport, runBacktest(validConfig)))) {
+  if (!(validReport.evidence ? isVerifiedHistoricalReportForConfig(validReport, validConfig) : reportsMatch(validReport, runBacktest(validConfig)))) {
     throw new Error("回測報告與策略設定不一致：backtest-report.json");
   }
   const source = validConfig.source ?? defaultStrategySource(validConfig);
@@ -178,7 +180,11 @@ export const exportBotPackage = async (config: BotConfig, report: BacktestReport
   return zip.generateAsync({ type: "blob" });
 };
 
-export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig; report: BacktestReport }> => {
+export const importBotPackage = async (file: Blob): Promise<{
+  config: BotConfig;
+  report: BacktestReport | null;
+  historicalEvidenceDiscarded?: boolean;
+}> => {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(file);
@@ -206,7 +212,7 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
   if (manifest.exchange !== "WEEX") throw new Error("目前可用的實盤連線為 WEEX API");
 
   const configValue = await parseJsonFile(zip, "bot-config.json");
-  const importedConfig = assertConfig(configValue, false);
+  const importedConfig = assertConfig(configValue, true);
 
   const strategySource = await readStrategySource(zip);
   assertSource(strategySource);
@@ -219,7 +225,11 @@ export const importBotPackage = async (file: Blob): Promise<{ config: BotConfig;
 
   const reportValue = await parseJsonFile(zip, "backtest-report.json");
   const report = assertReport(reportValue);
-  if (!(report.evidence ? historicalReportMatchesConfig(report, config) : reportsMatch(report, runBacktest(config)))) {
+  // ZIP files are an unauthenticated cross-boundary input. Even a correctly
+  // content-bound historical report is not proof that our server created it,
+  // so restore the strategy draft but require a fresh backtest in this session.
+  if (report.evidence) return { config, report: null, historicalEvidenceDiscarded: true };
+  if (!reportsMatch(report, runBacktest(config))) {
     throw new Error("回測報告與策略設定不一致：backtest-report.json");
   }
 

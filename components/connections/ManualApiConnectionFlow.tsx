@@ -9,6 +9,14 @@ interface ConnectionState {
   credentialSource?: "manual" | "oauth";
   maskedApiKeySuffix?: string | null;
   withdrawalAccessAbsent?: boolean;
+  futuresDemoReady?: boolean;
+  liveReady?: boolean;
+  permissions?: {
+    spotTrade?: boolean;
+    futuresTrade?: boolean;
+    futuresDemoTrade?: boolean;
+    liveVerified?: boolean;
+  };
 }
 
 const executorEgressIp = process.env.NEXT_PUBLIC_EXECUTOR_EGRESS_IP?.trim();
@@ -75,6 +83,11 @@ export function ManualApiConnectionFlow() {
   </section>;
 
   const active = connection?.status === "active" && connection.withdrawalAccessAbsent === true;
+  const futuresDemoReady = connection?.futuresDemoReady === true
+    || connection?.permissions?.futuresDemoTrade === true
+    || (connection?.permissions?.futuresTrade === true && connection.permissions.liveVerified === true);
+  const liveReady = connection?.liveReady === true || (connection?.permissions?.liveVerified === true
+    && (connection.permissions.spotTrade === true || connection.permissions.futuresTrade === true));
   const submit = async () => {
     setState("loading"); setMessage("");
     try {
@@ -96,7 +109,9 @@ export function ManualApiConnectionFlow() {
       setConnection({ ...body.connection, withdrawalAccessAbsent: true });
       setApiKey(""); setSecretKey(""); setPassphrase("");
       setEditing(false);
-      setState("done"); setMessage("WEEX API 已驗證並由 AWS KMS 加密。雲端策略現在可 24 小時運行。");
+      setState("done"); setMessage(body.connection.liveReady === true
+        ? "WEEX API 已驗證並由 AWS KMS 加密；Demo 與已核准的真倉能力會分開控管。"
+        : "WEEX Futures Demo 已驗證並由 AWS KMS 加密；真倉權限仍保持關閉。");
     } catch (error) {
       const reason = error instanceof Error ? error.message : "verification_failed";
       setState("error");
@@ -117,7 +132,9 @@ export function ManualApiConnectionFlow() {
       <div><strong>{connection.credentialSource === "oauth"
         ? "已透過 WEEX OAuth 連線"
         : `已綁定手動 API ••••${connection.maskedApiKeySuffix ?? ""}`}</strong>
-        <p>憑證已由 AWS KMS 安全保存，真倉雲端執行可用；回到此頁不需要重新輸入。</p></div>
+        <p>{liveReady ? "憑證已由 AWS KMS 安全保存，已驗證的真倉能力可用。"
+          : futuresDemoReady ? "憑證已由 AWS KMS 安全保存，Futures Demo 可用；真倉仍由發布閘門關閉。"
+            : "憑證已由 AWS KMS 安全保存；交易能力正在等待重新驗證。"} 回到此頁不需要重新輸入。</p></div>
       <button className="button button--ghost button--small" onClick={() => {
         setEditing(true); setMessage(""); setState("idle");
       }} type="button">{connection.credentialSource === "oauth" ? "改用手動 API" : "更換手動 API"}</button>
@@ -158,8 +175,10 @@ export function ManualApiConnectionFlow() {
         <span>{completedFields}/3 欄已填寫</span>
         <small>{isComplete ? "已可進行安全驗證與綁定。" : "三個欄位皆為必填，完成後才能綁定。"}</small>
       </div>
-      <ul className="permission-list"><li><span>允許</span>讀取帳戶與 Spot / Futures 真倉交易</li>
-        <li><span>允許</span>AWS Executor 24/7 執行策略</li><li data-denied="true"><span>不支援</span>提領或轉出資產</li></ul>
+      <ul className="permission-list"><li><span>允許</span>讀取帳戶與 Futures Demo 交易</li>
+        <li><span>允許</span>AWS Executor 24/7 執行 Demo 策略</li>
+        <li data-denied="true"><span>目前關閉</span>Spot / Futures 真倉交易</li>
+        <li data-denied="true"><span>不支援</span>提領或轉出資產</li></ul>
       <button className="button button--primary" disabled={state === "loading" || !isComplete}
         type="submit">{state === "loading" ? "安全驗證與加密中…" : active ? "更新 WEEX API" : "驗證並綁定 API"}</button>
       {active && editing && <button className="button button--ghost" disabled={state === "loading"}

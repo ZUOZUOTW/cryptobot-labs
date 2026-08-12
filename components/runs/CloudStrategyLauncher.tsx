@@ -30,8 +30,9 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   backtest_execution_failed: "歷史回測未能完成，策略尚未啟動。",
   strategy_service_unavailable: "策略服務暫時無法使用，請稍後再試。",
   cloud_run_service_unavailable: "雲端運行服務暫時無法建立策略，請稍後再試。",
-  cloud_run_prerequisite_failed: "啟動條件尚未完成。請確認 WEEX API 已啟用此市場的真倉交易權限，並重新整理後再試。",
-  live_confirmation_required: "真倉同意已過期，請重新按下啟動按鈕。",
+  cloud_run_target_conflict: "同一個 WEEX 帳戶的此市場與交易對已有未停止策略。請先停止原策略，再啟動新版本。",
+  cloud_run_prerequisite_failed: "啟動條件尚未完成。請確認 WEEX API 已啟用合約 Demo 交易權限，並重新整理後再試。",
+  live_trading_disabled: "真倉啟動尚未通過發布閘門；目前只提供 WEEX Futures Demo。",
   forbidden_origin: "頁面驗證已過期，請重新整理後再試。",
   conflict: "本次啟動請求與先前資料衝突，請重新選擇策略。",
 };
@@ -131,9 +132,7 @@ export function CloudStrategyLauncher({
   const attempt = useRef<Attempt | null>(null);
   const busy = stage === "saving" || stage === "backtesting" || stage === "launching";
 
-  const checkConnection = useCallback(async (
-    market: BotConfig["market"] = selected?.config.market ?? "futures",
-  ) => {
+  const checkConnection = useCallback(async () => {
     setConnection("loading");
     try {
       const response = await fetch("/api/cloud-runs", { cache: "no-store", headers: { Accept: "application/json" } });
@@ -144,14 +143,16 @@ export function CloudStrategyLauncher({
       const details = account && typeof account === "object" && !Array.isArray(account)
         ? account as { connectionStatus?: unknown; permissions?: unknown; withdrawalAccessAbsent?: unknown } : null;
       const permissions = details?.permissions && typeof details.permissions === "object" && !Array.isArray(details.permissions)
-        ? details.permissions as { read?: unknown; spotTrade?: unknown; futuresTrade?: unknown } : null;
-      const tradePermission = market === "spot" ? permissions?.spotTrade : permissions?.futuresTrade;
+        ? details.permissions as { read?: unknown; futuresTrade?: unknown; futuresDemoTrade?: unknown;
+          liveVerified?: unknown } : null;
+      const tradePermission = permissions?.futuresDemoTrade === true
+        || (permissions?.futuresTrade === true && permissions?.liveVerified === true);
       setConnection(details?.connectionStatus === "active" && details.withdrawalAccessAbsent === true
         && permissions?.read === true && tradePermission === true ? "ready" : "missing");
     } catch {
       setConnection("error");
     }
-  }, [selected]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void checkConnection(), 0);
@@ -167,7 +168,7 @@ export function CloudStrategyLauncher({
     setMessage("");
     setRunId(null);
     attempt.current = null;
-    void checkConnection(next.config.market);
+    void checkConnection();
   };
   const changeRisk = (next: RiskPolicyDraft) => {
     setRisk(next);
@@ -237,8 +238,7 @@ export function CloudStrategyLauncher({
           strategyVersionId: version.id,
           botName: selected.config.name,
           configurationHash,
-          mode: "live",
-          liveConfirmation: { acknowledged: true, acceptedAt: Date.now() },
+          mode: "futures-demo",
           riskPolicy: risk,
         }),
       });
@@ -248,7 +248,7 @@ export function CloudStrategyLauncher({
       if (!runResponse.ok || !id) throw new Error(errorCode(runBody) || "cloud_run_prerequisite_failed");
       setRunId(id);
       setStage("done");
-      setMessage("USDT 真倉自動交易策略已啟動。AWS Executor 會在瀏覽器關閉後繼續運行。");
+      setMessage("SUSDT 合約 Demo 自動交易策略已啟動。AWS Executor 會在瀏覽器關閉後繼續運行。");
       attempt.current = null;
       refreshCloudRuns();
     } catch (error) {
@@ -268,6 +268,12 @@ export function CloudStrategyLauncher({
 
   const dialog = variant === "dialog";
 
+  if (selected.config.market !== "futures") return <section className="automation-launcher glass-panel" role="note">
+    <h2>現貨雲端模擬尚未開放</h2>
+    <p>目前雲端執行只支援 WEEX Futures Demo；現貨策略仍可完成公開歷史行情回測，不會使用真實資產。</p>
+    <Link className="button button--primary" href={`/workshop?bot=${encodeURIComponent(selected.config.id)}`}>前往歷史回測</Link>
+  </section>;
+
   return <section
     className={`automation-launcher${dialog ? " automation-launcher--dialog" : " glass-panel"}`}
     aria-labelledby={titleId}
@@ -278,12 +284,12 @@ export function CloudStrategyLauncher({
         <p>{dialog
           ? "系統會先固定這個策略版本並完成必要歷史回測，再交給固定 IP 的 AWS Executor 全天候運行。"
           : "直接從控制台選擇策略。系統會先保存不可變版本並完成必要歷史回測，再交給固定 IP 的 AWS Executor 全天候運行。"}</p></div>
-      <span className="status-chip status-chip--running">WEEX LIVE / USDT</span>
+      <span className="status-chip status-chip--running">WEEX FUTURES DEMO / SUSDT</span>
     </header>
 
     <div className="automation-launcher__safety" role="note">
-      <strong>真倉模式</strong>
-      <span>策略會使用 WEEX 帳戶中的真實資產（例如 USDT）自動交易，可能產生實際虧損。按下啟動即表示你同意以目前風控上限執行；不需逐筆確認。</span>
+      <strong>合約 Demo 模式</strong>
+      <span>策略只會使用 WEEX Futures Demo 的 SUSDT 模擬資產，不會動用 USDT 真實資金。歷史回測完成後仍會套用目前風控上限。</span>
     </div>
 
     <div className={`automation-launcher__grid${templates.length === 1 ? " automation-launcher__grid--single" : ""}`}>
@@ -303,8 +309,8 @@ export function CloudStrategyLauncher({
 
     <div className="automation-prerequisite" data-state={connection}>
       {connection === "loading" && <span>正在確認 WEEX API 連線…</span>}
-      {connection === "ready" && <span>WEEX API 已具備{selected.config.market === "spot" ? "現貨" : "合約"}真倉交易權限。</span>}
-      {connection === "missing" && <span>WEEX API 尚未完成{selected.config.market === "spot" ? "現貨" : "合約"}真倉權限驗證。 <Link href="/connections">前往連線設定</Link></span>}
+      {connection === "ready" && <span>WEEX API 已具備合約 Demo 交易權限。</span>}
+      {connection === "missing" && <span>WEEX API 尚未完成合約 Demo 權限驗證。 <Link href="/connections">前往連線設定</Link></span>}
       {connection === "unauthorized" && <span>請先 <Link href={authHref}>登入</Link>，再啟動自己的策略。</span>}
       {connection === "error" && <><span>暫時無法確認 WEEX API 連線。</span>
         <button className="button button--ghost button--small" onClick={() => void checkConnection()} type="button">重新檢查</button></>}
@@ -330,7 +336,7 @@ export function CloudStrategyLauncher({
     <button className="button button--primary automation-launcher__submit" disabled={!canLaunch}
       onClick={() => void launch()} type="button">
       {stage === "saving" ? "正在固定策略版本…" : stage === "backtesting" ? "正在取得行情並回測…"
-        : stage === "launching" ? "正在啟動 AWS Executor…" : stage === "done" ? "真倉策略已啟動" : "同意風險並啟動 USDT 真倉"}
+        : stage === "launching" ? "正在啟動 AWS Executor…" : stage === "done" ? "Demo 策略已啟動" : "啟動 SUSDT 合約 Demo"}
     </button>
     <div aria-live="polite">
       {stage === "unauthorized" && <p className="control-feedback control-feedback--danger">登入狀態已過期。 <Link href={authHref}>重新登入</Link></p>}

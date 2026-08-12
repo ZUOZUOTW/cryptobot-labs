@@ -10,16 +10,16 @@ afterEach(cleanup);
 
 function api(overrides: Partial<AgentRendererApi> = {}): AgentRendererApi {
   const defaults: AgentRendererApi = {
-    getStatus: vi.fn(async () => ({ state: "unconfigured", credential: { configured: false, apiKeySuffix: "" }, paired: false, pairingState: "unpaired", startAtLogin: false })),
+    getStatus: vi.fn(async () => ({ state: "unconfigured" as const, credential: { configured: false, apiKeySuffix: "" }, paired: false, pairingState: "unpaired" as const, startAtLogin: false })),
     saveCredentials: vi.fn(async () => ({ configured: true, apiKeySuffix: "1234" })),
-    verifyCredentials: vi.fn(async () => ({ provider: "WEEX", apiKeySuffix: "1234", verifiedAt: "2026-07-12T00:00:00.000Z",
-      permissions: { read: true, spotTrade: true, futuresTrade: false, withdrawal: false } })),
+    verifyCredentials: vi.fn(async () => ({ provider: "WEEX" as const, apiKeySuffix: "1234", verifiedAt: "2026-07-12T00:00:00.000Z",
+      permissions: { read: true, spotTrade: true, futuresTrade: false, withdrawal: false as const } })),
     eraseCredentials: vi.fn(async () => undefined),
     pair: vi.fn(async () => ({ paired: true, deviceId: "device-1" })),
     setStartAtLogin: vi.fn(async () => undefined),
     emergencyStop: vi.fn(async () => undefined),
-    getUpdateStatus: vi.fn(async () => ({ state: "idle", version: null, reason: null })),
-    checkForUpdates: vi.fn(async () => ({ state: "checking", version: null, reason: null })),
+    getUpdateStatus: vi.fn(async () => ({ state: "idle" as const, version: null, reason: null })),
+    checkForUpdates: vi.fn(async () => ({ state: "checking" as const, version: null, reason: null })),
     installUpdate: vi.fn(async () => undefined),
     onPairingSuggestion: vi.fn(() => () => undefined),
   };

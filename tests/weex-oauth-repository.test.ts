@@ -7,12 +7,11 @@ import type {
 import { createWeexOAuthConnectionRepository } from "../db/repositories";
 
 const databaseWithRow = (row: Record<string, unknown>) => {
-  const first = vi.fn(async () => row);
   const statement: ControlPlaneStatement = {
     bind: vi.fn(() => statement),
-    first,
-    all: vi.fn(),
-    run: vi.fn(),
+    async first<T>() { return row as T; },
+    async all<T>() { return { results: [] as T[], success: true }; },
+    async run() { return { success: true, meta: { changes: 0 } }; },
   };
   const prepare = vi.fn(() => statement);
   return {
@@ -30,7 +29,9 @@ const row = {
     read: true,
     spotTrade: true,
     futuresTrade: false,
+    futuresDemoTrade: true,
     withdrawal: false,
+    liveVerified: false,
   },
   withdrawalAccessAbsent: true,
   verifiedAt: 1_000,
@@ -47,6 +48,7 @@ describe("safe WEEX connection projection", () => {
     expect(connection).toEqual(expect.objectContaining({
       credentialSource: "manual",
       maskedApiKeySuffix: "A1B2",
+      permissions: expect.objectContaining({ futuresDemoTrade: true, futuresTrade: false, liveVerified: false }),
     }));
     expect(JSON.stringify(connection)).not.toMatch(/secret|passphrase|access.?token|refresh.?token/i);
     expect(prepare).toHaveBeenCalledWith(expect.stringMatching(/credential_source as credentialSource/i));

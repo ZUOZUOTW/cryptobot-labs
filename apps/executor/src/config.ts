@@ -59,6 +59,15 @@ function boundedInteger(
   return parsed;
 }
 
+function databaseUsernameMatches(database: URL, expectedRole: string): boolean {
+  try {
+    const username = decodeURIComponent(database.username);
+    return username === expectedRole || username.startsWith(`${expectedRole}.`);
+  } catch {
+    return false;
+  }
+}
+
 export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   const shardId = required(env, "EXECUTOR_SHARD_ID", 80);
   const awsRegion = required(env, "AWS_REGION", 64);
@@ -76,6 +85,9 @@ export function loadExecutorConfig(env: ExecutorEnvironment): ExecutorConfig {
   const database = new URL(databaseUrl);
   if (!/^postgres(?:ql)?:$/.test(database.protocol) || database.searchParams.get("sslmode") !== "require") {
     throw new Error("SUPABASE_DATABASE_URL must require TLS");
+  }
+  if (!databaseUsernameMatches(database, "cryptobot_executor")) {
+    throw new Error("SUPABASE_DATABASE_URL must use the cryptobot_executor runtime role");
   }
   const publicOrigin = https(required(env, "PUBLIC_ORIGIN", 2_048), "PUBLIC_ORIGIN");
   const weexOAuthRedirectUri = https(required(env, "WEEX_OAUTH_REDIRECT_URI", 2_048), "WEEX_OAUTH_REDIRECT_URI");

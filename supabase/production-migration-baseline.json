@@ -112,5 +112,22 @@
       "name": "add_weex_credential_source",
       "normalizedSha256": "88a61d4465471133639122d8ca1e242d636df7e8b102782e886010210ddf5219"
     }
+  ],
+  "pendingMigrations": [
+    {
+      "version": "20260812061404",
+      "name": "authorize_strategy_referrals",
+      "normalizedSha256": "000f6e59fd71e553d125dd8f3e73f044c8b002b449f4403be79ad92356e8fba3"
+    },
+    {
+      "version": "20260812072739",
+      "name": "add_strategy_publication_discovery_projection",
+      "normalizedSha256": "383f062a2e3b39c67088855ba884ba5fdc5e8122e7db7f10bf0c4a6848f3fc69"
+    },
+    {
+      "version": "20260812090000",
+      "name": "enforce_cloud_run_target_exclusivity",
+      "normalizedSha256": "c4ae94f842d7029379bf25ae90a1a236fd2efbd023b4b0427eee564ca0ed8bbc"
+    }
   ]
 }

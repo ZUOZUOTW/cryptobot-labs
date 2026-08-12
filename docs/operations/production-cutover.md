@@ -2,9 +2,17 @@
 
 `DEMO_MODE` and `LIVE_TRADING_ENABLED` remain fail-closed until every gate below is evidenced.
 
+> Ownership-handoff status (2026-08-12): a GET-only Netlify audit found that
+> `SUPABASE_DATABASE_URL` and `EXECUTOR_HANDOFF_SECRET` are absent from the
+> current site environment. Historical deployment evidence below does not
+> supersede current runtime state. A new formal deploy is blocked until the
+> WEEX-controlled owners provision both values, pass the redacted remote
+> preflight in `netlify-weex-handoff.md`, and re-run the database readiness
+> gate. No secret value or Netlify resource ID is stored in this repository.
+
 ## Completed foundations
 
-- Netlify production `PUBLIC_ORIGIN=https://www.cryptobotlabs.app`, Supabase URL/publishable key, signed Auth cookie secret, and the remote Functions/Runtime `DEMO_MODE=false` binding are configured.
+- The Netlify production contract requires `PUBLIC_ORIGIN=https://www.cryptobotlabs.app`, an origin-only HTTPS Supabase URL, current `sb_publishable_...` key, signed Auth cookie secret, and `DEMO_MODE=false`. A legacy JWT `anon` key or `sb_secret_...` key is not an accepted substitute. Current external readiness is governed by the ownership-handoff status above.
 - Supabase Auth routes use PKCE and short-lived signed state.
 - Supabase Data API access is deny-all for the server-owned control plane.
 - WEEX OAuth signing, PKCE generation, exact-body token exchange, create-api parsing, and secret-safe containers have tests.
@@ -19,16 +27,50 @@
 - The official AWS KMS SDK is pinned, the production KMS adapter is compiled, and its focused tests pass.
 - The executor reads `AWSCURRENT` directly from the KMS-backed Secrets Manager container using its instance role; no runtime secret file is required on EC2.
 - `www.cryptobotlabs.app` is the Netlify primary domain with active Let’s Encrypt TLS; the apex redirects to `www`, and Cloudflare authority serves both DNS records.
-- Supabase OAuth/control-plane migrations are applied. The `cryptobot_executor` runtime role is login-enabled, NOBYPASSRLS, SCRAM-protected, connection-limited, and uses the project-specific TLS Session Pooler recorded in the private deployment configuration.
-- Supabase security advisors report no findings. Performance advisors contain only informational unused-index notices from the newly provisioned workload and one Auth connection-allocation notice; no index is removed before production query evidence exists.
+- The confirmed Supabase OAuth/control-plane migration prefix through `20260728164403` is applied. The `cryptobot_executor` runtime role is login-enabled, NOBYPASSRLS, SCRAM-protected, connection-limited, and uses the project-specific TLS Session Pooler recorded in the private deployment configuration. New August strategy-referral, discovery, and cloud-run safety migrations remain explicitly pending until the rollout gate below records remote evidence.
+- The CryptoBot-controlled migration prefix previously had no Security Advisor finding. The 2026-08-12 shared-project inventory now reports a Nexus-owned SECURITY DEFINER warning; it must have a named owner, triage record, and explicit disposition before transfer. Performance findings remain review evidence rather than permission to remove an index.
 - The signed executor release is installed through SSM. Caddy serves a valid certificate for `api.cryptobotlabs.app`, Cloudflare proxies the reserved executor origin, and Terraform exposes only HTTPS/443 from reviewed Cloudflare proxy ranges.
 - Public `/healthz` and `/readyz` checks pass. KMS, fixed egress, database, and credential-envelope checks are ready while `oauthEnabled=false` and `liveTradingEnabled=false` remain intentional.
-- The current Netlify production deployment includes the Executor origin, secret-scoped handoff configuration, production Auth bindings, and opaque refresh-token handling. The Next.js production build, TypeScript validation, Functions, and Edge Function packaging pass; external smoke tests cover the homepage, Auth, Connections, Executor health, and Executor readiness. The apex resolves to `www`; demo mode is disabled while all Live gates remain fail-closed. Deploy IDs stay in private operational evidence.
+- Historical private deployment evidence covered the Executor origin, secret-scoped handoff configuration, production Auth bindings, opaque refresh-token handling, Next.js build, Functions/Edge packaging, and external smoke tests. The apex resolves to `www`; all Live gates remain fail-closed. Deploy IDs stay in private operational evidence, and the current external environment must still pass the ownership-handoff audit above.
 - Supabase Auth now uses the production Site URL `https://www.cryptobotlabs.app` and the exact redirect allow-list entry `https://www.cryptobotlabs.app/auth/callback`; no wildcard production redirect is enabled.
 - The Google OAuth web client is configured with the exact production origin and Supabase callback, its secret is stored in Supabase Auth, and the Google provider is enabled. The external OAuth app is published as `In production` rather than limited to test users. A production-browser smoke test completed Google account selection, PKCE callback, authenticated `/connections` rendering, Supabase session creation, same-origin sign-out, remote revoke attempt, and deterministic local cookie clearing on 2026-07-14.
 - WEEX registered Broker ID `WEEX111162` for CryptoBot Labs. The separate Broker UID stays in private operations metadata and is never placed in an order ID. New Spot, Futures, and Futures Demo submissions fail closed unless their `newClientOrderId` uses the 35-character `b-WEEX111162-<22-character deterministic suffix>` format. Legacy `cb_` IDs remain queryable and cancellable for safe rollout reconciliation.
-- Supabase's production migration history is mirrored by version and normalized SQL hash in the repository. Leaked Password Protection is enabled for the current Google/Email transition login.
+- This repository mirrors the confirmed CryptoBot prefix only. Production has 19 later, cross-product migration versions whose canonical SQL is not present here, so this checkout is not a complete production migration chain and must not run `db push`. Leaked Password Protection is enabled for the current Google/Email transition login.
 - `WEEX_AUTH_STAGE=transition` is the production rollout state: Google/Email login and the KMS-encrypted manual API path remain available, while WEEX OAuth start is disabled even if credentials are pre-provisioned. `dual` and `oauth-only` require separate reviewed cutovers.
+
+## Pending database rollout gate
+
+The repository baseline currently marks these migrations as pending, not as
+production evidence:
+
+1. `20260812061404_authorize_strategy_referrals.sql`
+2. `20260812072739_add_strategy_publication_discovery_projection.sql`
+3. `20260812090000_enforce_cloud_run_target_exclusivity.sql`
+
+Before deploying either the website or Executor:
+
+1. Treat the known `22 local + 19 remote-only` production history as a P0 stop.
+   Follow `docs/operations/supabase-weex-handoff.md`; an exact 22-version match
+   is not a valid precondition.
+2. Recover and review all 19 canonical remote entries (timestamp, name, SQL,
+   normalized hash, owning product, reviewer), or use an approved isolated
+   deployment chain that contains the complete 41-version history. `db pull`
+   alone is insufficient. Do not use history repair or `--include-all`.
+3. Only from that complete, approved chain may a deployer review a dry run and
+   apply exactly the three pending migrations in timestamp order during the
+   database maintenance window, before the new website or Executor artifact.
+4. Re-run `supabase migration list` and verify all 44 versions plus the expected
+   catalog objects. Promote pending entries locally only when this repository
+   has become the reviewed canonical complete chain; otherwise preserve their
+   pending status and record the isolated deployment manifest.
+5. Run `node scripts/check-production-database-readiness.mjs website` with the
+   website runtime role and `node scripts/check-production-database-readiness.mjs executor`
+   with the Executor runtime role. Both checks must pass before application
+   traffic is shifted.
+
+Schema rollback is not an accepted recovery path after these migrations are
+applied. Keep Live disabled, roll application traffic forward only, and add a
+new CLI-generated corrective migration if a database defect is discovered.
 
 ## External gates still required
 

@@ -27,10 +27,27 @@ describe("Supabase production auth boundary", () => {
   it("fails closed until every server-side auth setting is valid", () => {
     expect(productionAuthReady({ ...environment, DEMO_MODE: "true" })).toBe(false);
     expect(productionAuthReady({ ...environment, AUTH_COOKIE_SECRET: "short" })).toBe(false);
+    expect(productionAuthReady({
+      ...environment,
+      SUPABASE_PUBLISHABLE_KEY: "sb_secret_elevated_server_credential",
+    })).toBe(false);
+    expect(productionAuthReady({ ...environment, SUPABASE_URL: "http://localhost:54321" })).toBe(false);
     expect(productionAuthReady(environment)).toBe(true);
     expect(getSupabaseAuthConfig(environment)).toMatchObject({
       origin: "https://app.example.test", supabaseUrl: "https://project.supabase.co",
     });
+  });
+
+  it("allows a local Supabase Auth origin only outside formal production", () => {
+    expect(getSupabaseAuthConfig({
+      ...environment,
+      DEMO_MODE: "true",
+      SUPABASE_URL: "http://127.0.0.1:54321",
+    }).supabaseUrl).toBe("http://127.0.0.1:54321");
+    expect(() => getSupabaseAuthConfig({
+      ...environment,
+      SUPABASE_URL: "http://127.0.0.1:54321",
+    })).toThrow("SUPABASE_URL is invalid");
   });
 
   it("signs a short-lived PKCE transaction and rejects tampering, expiry, and open redirects", async () => {
@@ -69,5 +86,34 @@ describe("Supabase production auth boundary", () => {
     await expect(getCurrentSupabaseUser(environment, fetchImpl, {
       get: () => ({ value: "access_token_1234567890" }),
     })).resolves.toEqual({ id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783", email: "member@example.com", displayName: "正式會員" });
+  });
+
+  it("treats editable user metadata only as a strictly-cleaned display candidate", async () => {
+    const canonical = vi.fn(async () => Response.json({
+      id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783",
+      email: "member@example.com",
+      user_metadata: { full_name: "  Ａｌｉｃｅ　Trader  " },
+    })) as unknown as typeof fetch;
+    await expect(getCurrentSupabaseUser(environment, canonical, {
+      get: () => ({ value: "access_token_1234567890" }),
+    })).resolves.toMatchObject({ id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783", displayName: "Alice Trader" });
+
+    const unsafe = vi.fn(async () => Response.json({
+      id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783",
+      email: "member@example.com",
+      user_metadata: { full_name: "WEEX\u202e Official" },
+    })) as unknown as typeof fetch;
+    await expect(getCurrentSupabaseUser(environment, unsafe, {
+      get: () => ({ value: "access_token_1234567890" }),
+    })).resolves.toMatchObject({ id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783", displayName: "member" });
+
+    const emoji = vi.fn(async () => Response.json({
+      id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783",
+      email: "member@example.com",
+      user_metadata: { full_name: "Trader 👨‍💻" },
+    })) as unknown as typeof fetch;
+    await expect(getCurrentSupabaseUser(environment, emoji, {
+      get: () => ({ value: "access_token_1234567890" }),
+    })).resolves.toMatchObject({ id: "9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783", displayName: "Trader 👨‍💻" });
   });
 });

@@ -80,11 +80,16 @@ export async function POST(request: Request): Promise<Response> {
         : "verification_failed";
       return reply(400, { error: "connection_verification_failed", reason });
     }
-    const result = await response.json() as { maskedApiKeySuffix?: unknown; liveReady?: unknown };
-    if (typeof result.maskedApiKeySuffix !== "string") return reply(502, { error: "invalid_executor_response" });
+    const result = await response.json() as {
+      maskedApiKeySuffix?: unknown; futuresDemoReady?: unknown; liveReady?: unknown;
+    };
+    if (typeof result.maskedApiKeySuffix !== "string" || typeof result.futuresDemoReady !== "boolean"
+      || typeof result.liveReady !== "boolean" || (!result.futuresDemoReady && !result.liveReady)) {
+      return reply(502, { error: "invalid_executor_response" });
+    }
     return reply(200, { connection: { status: "active", credentialSource: "manual",
-      maskedApiKeySuffix: result.maskedApiKeySuffix, futuresDemoReady: true,
-      liveReady: result.liveReady === true } });
+      maskedApiKeySuffix: result.maskedApiKeySuffix, futuresDemoReady: result.futuresDemoReady,
+      liveReady: result.liveReady } });
   } catch {
     return reply(503, { error: "executor_unavailable" });
   }

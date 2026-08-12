@@ -67,6 +67,16 @@ identifier into an order ID.
 - `pnpm run build`: verify the same Next.js production output used by Netlify
 - `pnpm run licenses:check`: reject unreviewed production dependency licenses
 - `pnpm run db:generate`: generate Drizzle migrations after schema changes
+- `pnpm run handoff:cloudflare-aws:preflight`: validate the repository's
+  Cloudflare/AWS handoff controls without calling either provider; follow the
+  handoff runbook for the fenced, read-only online inventory
+- `pnpm run handoff:netlify:preflight`: validate the Netlify build, domain,
+  environment-name, and secret-boundary contract without printing values
+- `pnpm run handoff:supabase:repository`: verify only the redacted local
+  migration baseline, pending order, and reviewed hashes for CI; formal
+  `handoff:supabase:preflight` requires external fingerprint-only evidence plus
+  independently approved migration/split manifest fences and otherwise fails
+  closed
 
 ## Formal member authentication
 
@@ -75,6 +85,8 @@ During WEEX review, the formal site uses Supabase Auth with Google OAuth and Ema
 cookies, and server API identity is accepted only after the Supabase Auth `/user` endpoint validates the access token.
 Copy `.env.example` into the deployment secret manager and set `DEMO_MODE=false`; missing or malformed values fail
 closed. Only the Supabase publishable key may be used for this flow—never expose a secret or `service_role` key.
+The deployment gate requires the current `sb_publishable_...` format; legacy JWT `anon` keys must be rotated rather
+than relabelled, and `sb_secret_...` keys are rejected.
 
 Before enabling Google, add the site's exact `/auth/callback` URL to the Supabase redirect allow-list and configure
 the Google provider in Supabase. Live trading remains hard-disabled independently of successful member login.
@@ -100,6 +112,9 @@ Set the repository Actions variable `CBL_CONTROL_PLANE_ORIGIN` to the deployed H
 - [WEEX credential handling](docs/security/credential-handling.md)
 - [Desktop Agent release checklist](docs/operations/agent-release-checklist.md)
 - [Live execution smoke-test checklist](docs/operations/live-smoke-test-checklist.md)
+- [Cloudflare and AWS ownership handoff to WEEX](docs/operations/cloudflare-aws-weex-handoff.md)
+- [Netlify ownership handoff to WEEX](docs/operations/netlify-weex-handoff.md)
+- [Supabase ownership handoff to WEEX](docs/operations/supabase-weex-handoff.md)
 - [Security reporting policy](SECURITY.md)
 - [Open-source publication audit](docs/security/open-source-audit.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

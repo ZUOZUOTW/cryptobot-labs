@@ -33,6 +33,16 @@ describe("API platform identity", () => {
       userRepository:repository,deriveUserId:async()=>"other",now:()=>11});
     expect(conflict.ok).toBe(false); if(!conflict.ok) expect(await conflict.response.text()).not.toContain("secret@example.com");
   });
+  it("NFKC-canonicalizes display metadata without using it for identity or authorization", async () => {
+    const repository=userRepository();
+    const result=await requireApiUser(request("GET"),{identityProvider:{getIdentity:async()=>({
+      subject:"usr_verified",email:"member@example.com",displayName:"  Ａｌｉｃｅ　Trader  "})},
+      userRepository:repository,deriveUserId:async()=>"should_not_run",now:()=>12});
+    expect(result).toMatchObject({ok:true,user:{id:"usr_verified",displayName:"Alice Trader"}});
+    expect(repository.upsertIdentity).toHaveBeenCalledWith({
+      id:"usr_verified",email:"member@example.com",displayName:"Alice Trader",now:12,
+    });
+  });
   it("uses a verified provider subject instead of deriving a second production user id", async () => {
     const repository=userRepository(); const deriveUserId=vi.fn(async()=>"should_not_run");
     const result=await requireApiUser(request("GET"),{identityProvider:{getIdentity:async()=>({
@@ -41,7 +51,20 @@ describe("API platform identity", () => {
     expect(result).toMatchObject({ok:true,user:{id:"9fd9d213-4a7b-4f3d-99a0-f0fd8c42b783"}});
     expect(deriveUserId).not.toHaveBeenCalled();
   });
-  it("rejects malformed trusted identity",async()=>{const repository=userRepository();const result=await requireApiUser(request("GET"),{
+  it.each(["Alice\u202eAdmin","Alice\u200bAdmin","Alice\nAdmin"])("falls back from unsafe display metadata without rejecting verified identity %j",async(displayName)=>{
+    const repository=userRepository();const result=await requireApiUser(request("GET"),{
+      identityProvider:{getIdentity:async()=>({subject:"usr_verified",email:"member@example.com",displayName})},
+      userRepository:repository,deriveUserId:async()=>"unused",now:()=>1});
+    expect(result).toMatchObject({ok:true,user:{id:"usr_verified",displayName:"member"}});
+    expect(repository.upsertIdentity).toHaveBeenCalledWith(expect.objectContaining({displayName:"member"}));
+  });
+  it.each(["Alice ❤️","Trader 👨‍💻"])("preserves legitimate emoji display metadata %j",async(displayName)=>{
+    const repository=userRepository();const result=await requireApiUser(request("GET"),{
+      identityProvider:{getIdentity:async()=>({subject:"usr_verified",email:"member@example.com",displayName})},
+      userRepository:repository,deriveUserId:async()=>"unused",now:()=>1});
+    expect(result).toMatchObject({ok:true,user:{id:"usr_verified",displayName}});
+  });
+  it("rejects malformed trusted email",async()=>{const repository=userRepository();const result=await requireApiUser(request("GET"),{
     identityProvider:{getIdentity:async()=>({email:"bad",displayName:"X"})},userRepository:repository,deriveUserId:async()=>"usr",now:()=>1});
     expect(result.ok).toBe(false);expect(repository.upsertIdentity).not.toHaveBeenCalled();});
 });

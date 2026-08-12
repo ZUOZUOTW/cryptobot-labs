@@ -6,6 +6,7 @@ import { PackagePanel } from "../components/workshop/PackagePanel";
 import { STRATEGY_PRESETS } from "../data/strategies";
 import { runBacktest } from "../lib/backtest";
 import type { BacktestReport, BotConfig } from "../lib/types";
+import { attestHistoricalReportForConfig } from "../lib/historical-evidence";
 
 afterEach(() => {
   cleanup();
@@ -20,9 +21,10 @@ const config: BotConfig = {
   })),
 };
 
-const report: BacktestReport = {
-  ...runBacktest(config),
-  evidence: {
+const report: BacktestReport = attestHistoricalReportForConfig({
+  ...runBacktest(config), seed: "d".repeat(8), generatedAt: new Date(1_700_086_400_000).toISOString(),
+  disclaimer: "WEEX 歷史行情回測，不代表未來績效",
+}, {
     level: "historical",
     provider: "WEEX",
     market: config.market,
@@ -36,12 +38,38 @@ const report: BacktestReport = {
     feeRate: "0.001",
     slippageRate: "0.0005",
     fundingIncluded: false,
+    gapPolicy: "fail",
     datasetDigest: "d".repeat(64),
     engineVersion: "test",
-  },
-};
+}, config);
 
 describe("production strategy publishing UI", () => {
+  it("reuses the exact immutable version and completed formal backtest for publication", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      publication: { slug: "strategy-sourceformal", updatedAt: 1_707_004_800_000 },
+    }), { status: 201 }));
+    const user = userEvent.setup();
+    render(
+      <PlatformAuthProvider
+        initialUser={{ id: "usr_1", email: "member@example.test", displayName: "會員 A" }}
+        mode="production"
+      >
+        <PackagePanel config={config} flowCheckState="passed"
+          formalEvidence={{ strategyVersionId: "version_formal", backtestJobId: "job_formal" }}
+          onImport={() => ({ ok: true })} report={report} />
+      </PlatformAuthProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "發布策略到公開列表" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/strategy-publications");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      strategyVersionId: "version_formal",
+      backtestJobId: "job_formal",
+    });
+  });
+
   it("keeps publication and link sharing as two separate user actions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -57,7 +85,8 @@ describe("production strategy publishing UI", () => {
       }
       if (url === "/api/strategy-publications") {
         return new Response(JSON.stringify({
-          publication: { slug: "strategy-communitycopy" },
+          publication: { slug: "strategy-communitycopy", updatedAt: 1_707_004_800_000 },
+          capabilities: { canActivateApprovedReferral: false },
         }), { status: 201 });
       }
       throw new Error(`unexpected request: ${url}`);
@@ -74,8 +103,8 @@ describe("production strategy publishing UI", () => {
 
     const shareButton = screen.getByRole("button", { name: "複製策略分享連結" });
     expect(shareButton).toBeDisabled();
-    await user.type(screen.getByRole("textbox", { name: "你的 WEEX 邀請註冊連結" }),
-      "https://www.weex.com/register?inviteCode=TEST");
+    expect(screen.queryByRole("textbox", { name: /WEEX 邀請註冊連結/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "公開策略介紹" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "發布策略到公開列表" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
@@ -84,15 +113,66 @@ describe("production strategy publishing UI", () => {
       "/api/backtests",
       "/api/strategy-publications",
     ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      strategyVersionId: "version_1",
+      backtestJobId: "backtest_1",
+      description: expect.any(String),
+    });
     expect(await screen.findByRole("status")).toHaveTextContent("策略已發布到公開策略列表");
     expect(shareButton).toBeEnabled();
+    expect(screen.queryByRole("textbox", { name: /WEEX 邀請註冊連結/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "套用已核准推薦來源" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看公開策略" }))
-      .toHaveAttribute("href", `${window.location.origin}/strategies/strategy-communitycopy`);
+      .toHaveAttribute("href", `${window.location.origin}/strategies/strategy-communitycopy?v=1707004800000`);
 
     await user.click(shareButton);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(await screen.findByRole("status")).toHaveTextContent("策略分享連結已複製");
     expect(await navigator.clipboard.readText())
-      .toBe(`${window.location.origin}/strategies/strategy-communitycopy`);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+      .toBe(`${window.location.origin}/strategies/strategy-communitycopy?v=1707004800000`);
+  });
+
+  it("shows the activation action only when the publication response proves an approved promoter", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications" && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          publication: { slug: "strategy-approvedsource", updatedAt: 1_707_004_800_000 },
+          capabilities: { canActivateApprovedReferral: true },
+        }), { status: 201 });
+      }
+      if (url === "/api/strategy-publications/strategy-approvedsource" && init?.method === "PATCH") {
+        return new Response(JSON.stringify({
+          publication: { slug: "strategy-approvedsource", updatedAt: 1_707_091_200_000 },
+        }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(
+      <PlatformAuthProvider
+        initialUser={{ id: "usr_promoter", email: "promoter@example.test", displayName: "推廣者" }}
+        mode="production"
+      >
+        <PackagePanel config={config} flowCheckState="passed"
+          formalEvidence={{ strategyVersionId: "version_formal", backtestJobId: "job_formal" }}
+          onImport={() => ({ ok: true })} report={report} />
+      </PlatformAuthProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: "套用已核准推薦來源" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "發布策略到公開列表" }));
+    const activateButton = await screen.findByRole("button", { name: "套用已核准推薦來源" });
+    expect(screen.queryByRole("textbox", { name: /WEEX 邀請註冊連結/u })).not.toBeInTheDocument();
+
+    await user.click(activateButton);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/strategy-publications/strategy-approvedsource");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PATCH" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      action: "activate-approved-referral",
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("已套用伺服器核准的推薦來源");
   });
 });

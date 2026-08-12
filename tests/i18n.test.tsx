@@ -2,6 +2,9 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@/components/I18nProvider";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { BotCard } from "@/components/BotCard";
+import { BOT_CATALOG } from "@/data/bots";
+import { verifiedHistoricalPerformance } from "./fixtures/verified-historical-performance";
 import {
   LOCALE_STORAGE_KEY,
   matchPreferredLocale,
@@ -90,6 +93,42 @@ describe("site internationalization", () => {
     });
   });
 
+  it("translates responsive table labels that remain visible when headers are hidden", async () => {
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
+    render(
+      <I18nProvider>
+        <table><tbody><tr><td data-label="市場">BTCUSDT</td></tr></tbody></table>
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("BTCUSDT")).toHaveAttribute("data-label", translateMessage("en", "市場"));
+    });
+  });
+
+  it("localizes official strategy names inside dynamic card action labels", async () => {
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
+    const bot = BOT_CATALOG.find(({ id }) => id === "momentum-forge")!;
+    const performance = verifiedHistoricalPerformance(bot, {
+      collectedAt: Date.parse("2026-08-01T00:00:00.000Z"),
+      datasetDigest: "a".repeat(64),
+    });
+    render(
+      <I18nProvider>
+        <BotCard bot={bot} historicalPerformance={performance} onFavorite={() => undefined} />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Favorite Momentum Creator" })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("link", { name: "View strategy: Momentum Creator" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Apply directly: Momentum Creator" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Launch strategy: Momentum Creator" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download strategy: Momentum Creator" })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Momentum Creator equity curve" })).toBeInTheDocument();
+  });
+
   it("uses reviewed placeholder translations for high-risk validation copy", () => {
     expect(translateMessage("en", "BTCUSDT 不在 WEEX API 公告支援的現貨交易對中"))
       .toBe("BTCUSDT is not among the spot trading pairs supported by the WEEX API.");
@@ -102,5 +141,152 @@ describe("site internationalization", () => {
       .toBe("CryptoBot Labs｜自動交易策略實驗室");
     expect(canonicalMessageSource("BTCUSDT is not among the spot trading pairs supported by the WEEX API."))
       .toBe("BTCUSDT 不在 WEEX API 公告支援的現貨交易對中");
+  });
+
+  it("uses professional order and fill terminology in the run-bound evidence ledger", () => {
+    const expectations = [
+      ["zh-Hant", {
+        "最近委託與成交對帳": "最近委託與成交對帳",
+        "正在核對最近委託與成交證據…": "正在核對最近委託與成交證據…",
+        "委託價格": "委託價格",
+        "累計成交": "累計成交",
+        "成交均價": "成交均價",
+        "重新載入委託證據": "重新載入委託證據",
+      }],
+      ["zh-Hans", {
+        "最近委託與成交對帳": "最近委托与成交对账",
+        "正在核對最近委託與成交證據…": "正在核对最近委托与成交证据…",
+        "委託價格": "委托价格",
+        "累計成交": "累计成交量",
+        "成交均價": "成交均价",
+        "重新載入委託證據": "重新加载委托证据",
+      }],
+      ["en", {
+        "最近委託與成交對帳": "Recent order and fill reconciliation",
+        "正在核對最近委託與成交證據…": "Reconciling recent order and fill evidence…",
+        "委託價格": "Order price",
+        "累計成交": "Cumulative filled quantity",
+        "成交均價": "Average fill price",
+        "重新載入委託證據": "Reload order evidence",
+      }],
+      ["ar", {
+        "最近委託與成交對帳": "مطابقة الأوامر وعمليات التنفيذ الأخيرة",
+        "正在核對最近委託與成交證據…": "جارٍ مطابقة أدلة الأوامر والتنفيذات الأخيرة…",
+        "委託價格": "سعر الأمر",
+        "累計成交": "الكمية المنفذة تراكميًا",
+        "成交均價": "متوسط سعر التنفيذ",
+        "重新載入委託證據": "إعادة تحميل أدلة الأوامر",
+      }],
+      ["ru", {
+        "最近委託與成交對帳": "Сверка последних ордеров и исполнений",
+        "正在核對最近委託與成交證據…": "Сверяем последние подтверждения ордеров и исполнений…",
+        "委託價格": "Цена ордера",
+        "累計成交": "Накопленный объём исполнения",
+        "成交均價": "Средняя цена исполнения",
+        "重新載入委託證據": "Повторно загрузить подтверждения по ордерам",
+      }],
+      ["ja", {
+        "最近委託與成交對帳": "最近の注文・約定照合",
+        "正在核對最近委託與成交證據…": "最近の注文・約定証跡を照合しています…",
+        "委託價格": "注文価格",
+        "累計成交": "累計約定数量",
+        "成交均價": "平均約定価格",
+        "重新載入委託證據": "注文証跡を再読み込み",
+      }],
+    ] as const;
+
+    for (const [locale, translations] of expectations) {
+      for (const [source, expected] of Object.entries(translations)) {
+        expect(translateMessage(locale, source), `${locale}: ${source}`).toBe(expected);
+      }
+    }
+  });
+
+  it("keeps workshop backtest assumptions semantically distinct in every catalogue", () => {
+    const expectations = [
+      ["zh-Hant", {
+        "最近 30 天回測假設": "最近 30 天回測假設",
+        "手續費率": "手續費率",
+        "滑價率": "滑價率",
+        "資金費率": "資金費率",
+        "資料缺口": "資料缺口",
+        "歷史資金費率": "歷史資金費率",
+        "不計入": "不計入",
+        "遇缺口即停止": "遇缺口即停止",
+        "揭露缺口並繼續": "揭露缺口並繼續",
+        "驗證設定": "驗證設定",
+      }],
+      ["zh-Hans", {
+        "最近 30 天回測假設": "最近 30 天回测假设",
+        "手續費率": "手续费率",
+        "滑價率": "滑点率",
+        "資金費率": "资金费率",
+        "資料缺口": "数据缺口",
+        "歷史資金費率": "使用历史资金费率",
+        "不計入": "不计入",
+        "遇缺口即停止": "遇到数据缺口即停止",
+        "揭露缺口並繼續": "披露数据缺口并继续",
+        "驗證設定": "验证设置",
+      }],
+      ["en", {
+        "最近 30 天回測假設": "Backtest assumptions for the last 30 days",
+        "手續費率": "Trading fee rate",
+        "滑價率": "Slippage rate",
+        "資金費率": "Funding rate",
+        "資料缺口": "Data gaps",
+        "歷史資金費率": "Use historical funding rates",
+        "不計入": "Do not include",
+        "遇缺口即停止": "Stop if a data gap is found",
+        "揭露缺口並繼續": "Disclose data gaps and continue",
+        "驗證設定": "Validating settings",
+      }],
+      ["ar", {
+        "最近 30 天回測假設": "افتراضات الاختبار التاريخي لآخر 30 يومًا",
+        "手續費率": "معدل رسوم التداول",
+        "滑價率": "نسبة الانزلاق السعري",
+        "資金費率": "معدل التمويل",
+        "資料缺口": "فجوات البيانات",
+        "歷史資金費率": "استخدام معدلات التمويل التاريخية",
+        "不計入": "عدم الاحتساب",
+        "遇缺口即停止": "التوقف عند العثور على فجوة بيانات",
+        "揭露缺口並繼續": "الإفصاح عن فجوات البيانات والمتابعة",
+        "驗證設定": "جارٍ التحقق من الإعدادات",
+      }],
+      ["ru", {
+        "最近 30 天回測假設": "Допущения бэктеста за последние 30 дней",
+        "手續費率": "Ставка торговой комиссии",
+        "滑價率": "Коэффициент проскальзывания",
+        "資金費率": "Ставка финансирования",
+        "資料缺口": "Пробелы в данных",
+        "歷史資金費率": "Учитывать исторические ставки финансирования",
+        "不計入": "Не учитывать",
+        "遇缺口即停止": "Остановиться при обнаружении пробела в данных",
+        "揭露缺口並繼續": "Раскрыть пробелы в данных и продолжить",
+        "驗證設定": "Проверка настроек",
+      }],
+      ["ja", {
+        "最近 30 天回測假設": "直近30日間のバックテスト条件",
+        "手續費率": "取引手数料率",
+        "滑價率": "スリッページ率",
+        "資金費率": "資金調達率",
+        "資料缺口": "データ欠損",
+        "歷史資金費率": "過去の資金調達率を使用",
+        "不計入": "含めない",
+        "遇缺口即停止": "データ欠損があれば停止",
+        "揭露缺口並繼續": "データ欠損を開示して続行",
+        "驗證設定": "設定を検証中",
+      }],
+    ] as const;
+
+    for (const [locale, translations] of expectations) {
+      for (const [source, expected] of Object.entries(translations)) {
+        expect(translateMessage(locale, source), `${locale}: ${source}`).toBe(expected);
+      }
+    }
+
+    expect(translateMessage("en", "重設手續費率為預設值"))
+      .toBe("Reset Trading fee rate to default value");
+    expect(translateMessage("ja", "重設資金費率為預設值"))
+      .toBe("資金調達率をデフォルト値にリセット");
   });
 });

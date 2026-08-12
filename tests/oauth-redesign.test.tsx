@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DemoAuthorizePanel } from "../app/demo/weex-authorize/DemoAuthorizePanel";
 import { OAuthConnectionFlow } from "../components/connections/OAuthConnectionFlow";
 import { DemoRunsPanel } from "../components/runs/DemoRunsPanel";
@@ -13,7 +13,7 @@ import { demoModeEnabled, productionLiveReady, productionOAuthReady } from "../l
 import { GET as getBotPerformance } from "../app/api/weex/bot-performance/route";
 
 beforeEach(() => { localStorage.clear(); window.history.replaceState({}, "", "/connections"); });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllEnvs(); });
 
 const syntheticPublishableKey = ["sb", "publishable", "1234567890"].join("_");
 const fixtureHex = ["0123", "4567", "89ab", "cdef"].join("");
@@ -88,6 +88,7 @@ describe("OAuth-first redesign demo", () => {
   });
 
   it("keeps the catalog fail-closed when account demo mode has no verified market performance", async () => {
+    vi.stubEnv("DEMO_MODE", "true");
     const catalogResponse = await getBotPerformance();
     await expect(catalogResponse.json()).resolves.toMatchObject({ demo: true, performances: {} });
   });

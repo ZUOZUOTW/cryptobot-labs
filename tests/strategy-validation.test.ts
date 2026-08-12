@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { STRATEGY_BLOCKS, STRATEGY_PRESETS } from "../data/strategies";
-import { validateConfig, validateJavaScript } from "../lib/strategy-validation";
+import {
+  canonicalizeBotConfig,
+  MAX_JAVASCRIPT_SOURCE_BYTES,
+  validateConfig,
+  validateJavaScript,
+} from "../lib/strategy-validation";
 import type { BotConfig, StrategyBlock } from "../lib/types";
 
 const cloneBlock = (id: string): StrategyBlock => {
@@ -21,6 +26,11 @@ const validConfig: BotConfig = {
   leverage: 3,
   blocks: [entryBlock, riskBlock],
 };
+
+const withDefaultExport = (source: string): string => (
+  `${source}\nexport default () => ({ action: "hold", reason: "test" });`
+);
+const validSource = (body = ""): string => withDefaultExport(`const exchange = "WEEX";\n${body}`);
 
 describe("strategy catalog", () => {
   it("provides all required blocks with concrete parameter metadata", () => {
@@ -101,6 +111,13 @@ describe("validateConfig", () => {
   it("accepts a valid WEEX config", () => {
     expect(validateConfig(validConfig).valid).toBe(true);
   });
+
+  it.each(["BTCUSDT", "BTC_USDT", "BTC/USDT", "CMT_BTCUSDT"])(
+    "persists %s as the canonical strategy and executor target",
+    (symbol) => {
+      expect(canonicalizeBotConfig({ ...validConfig, symbol }).symbol).toBe("BTCUSDT");
+    },
+  );
 
   it.each([
     null,
@@ -193,10 +210,19 @@ describe("validateConfig", () => {
   it("validates optional JavaScript source without executing it", () => {
     const marker = "__cryptobotStrategyValidationExecuted";
     delete (globalThis as Record<string, unknown>)[marker];
-    const source = `globalThis.${marker} = true; const exchange = 'WEEX';`;
+    const source = validSource(`globalThis.${marker} = true;`);
 
     expect(validateConfig({ ...validConfig, source }).valid).toBe(true);
     expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+  });
+
+  it("accepts source-only strategies while retaining canonical block validation", () => {
+    expect(validateConfig({ ...validConfig, blocks: [], source: validSource() }).valid).toBe(true);
+    expect(validateConfig({
+      ...validConfig,
+      blocks: [{ ...riskBlock, name: "偽造風控" }],
+      source: validSource(),
+    }).errors).toContain("策略模組名稱不正確：stop-loss");
   });
 
   it("rejects unknown, duplicate, and self-described strategy metadata", () => {
@@ -235,7 +261,7 @@ describe("validateConfig", () => {
     ["symbol", "ETHUSDT", "JavaScript 的交易對（ETHUSDT）與策略設定（BTCUSDT）不一致"],
     ["timeframe", "4h", "JavaScript 的時間週期（4h）與策略設定（1h）不一致"],
   ])("rejects a recognized JavaScript %s that differs from bot-config", (field, sourceValue, error) => {
-    const source = `export const strategy = { exchange: 'WEEX', ${field}: '${sourceValue}' };`;
+    const source = withDefaultExport(`export const strategy = { exchange: 'WEEX', ${field}: '${sourceValue}' };`);
     expect(validateConfig({ ...validConfig, source }).errors).toContain(error);
   });
 
@@ -249,7 +275,7 @@ describe("validateConfig", () => {
       "const display = { symbol: 'BTCUSDT' }; const strategy = { exchange: 'WEEX', symbol: 'ETHUSDT' };",
     ],
   ])("rejects every recognized source value when %s", (_case, source) => {
-    expect(validateConfig({ ...validConfig, source }).errors)
+    expect(validateConfig({ ...validConfig, source: withDefaultExport(source) }).errors)
       .toContain("JavaScript 的交易對（ETHUSDT）與策略設定（BTCUSDT）不一致");
   });
 });
@@ -261,7 +287,27 @@ describe("validateJavaScript", () => {
   });
 
   it("accepts WEEX source with balanced brackets", () => {
-    expect(validateJavaScript("const exchange = 'WEEX';").valid).toBe(true);
+    expect(validateJavaScript(validSource()).valid).toBe(true);
+  });
+
+  it("requires an executable default export contract", () => {
+    expect(validateJavaScript("const exchange = 'WEEX';").errors)
+      .toContain("JavaScript 策略必須提供 default export 評估函式");
+  });
+
+  it.each([
+    "import helper from './helper.js'; export default helper; const exchange = 'WEEX';",
+    "const exchange = 'WEEX'; export default async () => import('./helper.js');",
+    "export { default } from './helper.js'; const exchange = 'WEEX';",
+  ])("rejects module imports and re-exports", (source) => {
+    expect(validateJavaScript(source).errors)
+      .toContain("JavaScript 策略不得匯入或轉匯出外部模組");
+  });
+
+  it("enforces the 128 KiB UTF-8 source ceiling", () => {
+    const oversized = validSource(`// ${"策".repeat(MAX_JAVASCRIPT_SOURCE_BYTES / 2)}`);
+    expect(validateJavaScript(oversized).errors)
+      .toEqual([`JavaScript 原始碼不得超過 ${MAX_JAVASCRIPT_SOURCE_BYTES} 位元組`]);
   });
 
   it("requires source to explicitly identify WEEX", () => {
@@ -289,15 +335,16 @@ describe("validateJavaScript", () => {
       .toBe(true);
   });
 
-  it("accepts weex.com and its subdomains", () => {
-    expect(validateJavaScript("fetch('https://api.weex.com/v1/markets');").valid).toBe(true);
-    expect(validateJavaScript("const endpoint = 'https://weex.com/api';").valid).toBe(true);
+  it("allows inert WEEX URL metadata but rejects network APIs", () => {
+    expect(validateJavaScript(validSource("const endpoint = 'https://weex.com/api';")).valid).toBe(true);
+    expect(validateJavaScript(validSource("fetch('https://api.weex.com/v1/markets');")).errors)
+      .toContain("JavaScript 策略不得使用網路或主機 API：fetch");
   });
 
   it("ignores URLs in comments for both approval and rejection", () => {
     expect(validateJavaScript("// https://api.weex.com/v1\nconst note = 'comment only';").errors)
       .toContain("策略程式碼必須明確指定 WEEX 交易所");
-    expect(validateJavaScript("// https://api.kucoin.com/v1\nconst exchange = 'WEEX';").valid)
+    expect(validateJavaScript(withDefaultExport("// https://api.kucoin.com/v1\nconst exchange = 'WEEX';")).valid)
       .toBe(true);
   });
 
@@ -308,13 +355,13 @@ describe("validateJavaScript", () => {
   });
 
   it("checks static template URL values and rejects lookalike hosts", () => {
-    expect(validateJavaScript("const endpoint = `https://api.weex.com/v1`; ").valid).toBe(true);
+    expect(validateJavaScript(validSource("const endpoint = `https://api.weex.com/v1`;")).valid).toBe(true);
     expect(validateJavaScript("const exchange = 'WEEX'; const endpoint = `https://weex.com.evil.example/v1`; ").errors)
       .toContain("偵測到非 WEEX 網域：weex.com.evil.example");
   });
 
   it("folds a template whose interpolation is statically known", () => {
-    const validation = validateJavaScript("const host = 'api.weex.com'; const endpoint = `https://${host}/v1`; ");
+    const validation = validateJavaScript(validSource("const host = 'api.weex.com'; const endpoint = `https://${host}/v1`;"));
 
     expect(validation.valid).toBe(true);
   });
@@ -348,7 +395,7 @@ describe("validateJavaScript", () => {
   });
 
   it("accepts an approved WEEX websocket host", () => {
-    expect(validateJavaScript("const endpoint = 'wss://ws.weex.com/stream';").valid).toBe(true);
+    expect(validateJavaScript(validSource("const endpoint = 'wss://ws.weex.com/stream';")).valid).toBe(true);
   });
 
   it("checks every scheme candidate inside one decoded string", () => {
@@ -365,10 +412,12 @@ describe("validateJavaScript", () => {
     expect(validateJavaScript(source).errors.some((error) => error.includes("非 WEEX"))).toBe(true);
   });
 
-  it("folds static concatenations and templates before applying URL policy", () => {
+  it("rejects network APIs even when their destinations are statically allowed", () => {
     expect(validateJavaScript("const exchange='WEEX'; fetch('https://' + 'api.binance.com/v1');").valid).toBe(false);
-    expect(validateJavaScript("const exchange='WE' + 'EX'; fetch('https://' + 'api.weex.com/v1');").valid).toBe(true);
-    expect(validateJavaScript("const exchange='WEEX'; const host='api.weex.com'; fetch(`https://${host}/v1`);").valid).toBe(true);
+    expect(validateJavaScript(withDefaultExport("const exchange='WE' + 'EX'; fetch('https://' + 'api.weex.com/v1');")).errors)
+      .toContain("JavaScript 策略不得使用網路或主機 API：fetch");
+    expect(validateJavaScript(withDefaultExport("const exchange='WEEX'; const host='api.weex.com'; fetch(`https://${host}/v1`);")).errors)
+      .toContain("JavaScript 策略不得使用網路或主機 API：fetch");
   });
 
   it.each([
@@ -391,12 +440,16 @@ describe("validateJavaScript", () => {
       .toContain("網路目的地必須是可靜態確認的 WEEX 網址");
   });
 
-  it("allows only approved schemes for resolved network APIs", () => {
-    expect(validateJavaScript("const exchange='WEEX'; fetch('wss://ws.weex.com/feed');").valid).toBe(false);
-    expect(validateJavaScript("const exchange='WEEX'; new WebSocket('wss://ws.weex.com/feed');").valid).toBe(true);
-    expect(validateJavaScript("const exchange='WEEX'; new EventSource('https://api.weex.com/events');").valid).toBe(true);
-    expect(validateJavaScript("const exchange='WEEX'; new WebTransport('https://api.weex.com/transport');").valid).toBe(true);
-  });
+  it.each(["fetch", "WebSocket", "EventSource", "WebTransport"])(
+    "rejects the %s network API even for a WEEX destination",
+    (api) => {
+      const expression = api === "fetch"
+        ? "fetch('https://api.weex.com/v1')"
+        : `new ${api}('${api === "WebSocket" ? "wss://ws.weex.com/feed" : "https://api.weex.com/v1"}')`;
+      expect(validateJavaScript(validSource(`${expression};`)).errors)
+        .toContain(`JavaScript 策略不得使用網路或主機 API：${api}`);
+    },
+  );
 
   it.each([
     ["const exchange = 'WEEX';\nconst = ;", 2],

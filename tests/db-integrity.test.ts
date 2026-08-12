@@ -39,7 +39,21 @@ describe("D1 tenant integrity migrations", () => {
     database.exec("PRAGMA foreign_keys=ON");
 
     const migrationFiles = (await readdir(resolve("drizzle"))).filter((file) => file.endsWith(".sql")).sort();
-    expect(migrationFiles.map((file) => file.slice(0, 4))).toEqual(["0000", "0001", "0002", "0003"]);
+    expect(migrationFiles).toEqual([
+      "0000_overconfident_lady_vermin.sql",
+      "0001_acoustic_luke_cage.sql",
+      "0002_flaky_riptide.sql",
+      "0003_mushy_frightful_four.sql",
+      "0004_glorious_jetstream.sql",
+      "0005_cuddly_brother_voodoo.sql",
+      "0006_tranquil_proudstar.sql",
+    ]);
+    const journal = JSON.parse(await readFile(resolve("drizzle/meta/_journal.json"), "utf8")) as {
+      entries: Array<{ idx: number; tag: string }>;
+    };
+    expect(journal.entries.map(({ idx, tag }) => ({ idx, tag }))).toEqual(
+      migrationFiles.map((file, idx) => ({ idx, tag: file.replace(/\.sql$/u, "") })),
+    );
     const migrations = await Promise.all(migrationFiles.map((file) => readFile(resolve("drizzle", file), "utf8")));
     const sql = migrations.join("\n");
     expect(sql).not.toMatch(/PRAGMA\s+foreign_keys\s*=\s*OFF/i);

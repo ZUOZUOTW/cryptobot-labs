@@ -20,12 +20,12 @@ describe("executor OAuth service", () => {
     let state: StoredOAuthState | null = null;
     const repository: OAuthRepository = {
       assertReady: vi.fn(), registerShard: vi.fn(), close: vi.fn(), reserveHandoff: vi.fn(),
-      prepareConnection: vi.fn(async () => "conn_abcdefghijklmnop"),
+      prepareConnection: vi.fn(async () => ({ id: "conn_abcdefghijklmnop", version: 7 })),
       createState: vi.fn(async (input) => { state = { id: input.id, connectionId: input.connectionId, userId: input.userId,
         stateHash: input.stateHash, sessionHash: input.sessionHash, redirectUri: input.redirectUri,
         keyId: input.envelope.keyId, encryptedDataKey: input.envelope.encryptedDataKey,
         initializationVector: input.envelope.initializationVector, ciphertext: input.envelope.ciphertext,
-        context: input.context, expiresAt: input.expiresAt }; }),
+        context: input.context, connectionVersion: input.connectionVersion, expiresAt: input.expiresAt }; }),
       findState: vi.fn(async () => state), consumeState: vi.fn(async () => true),
       completeState: vi.fn(), completeManualConnection: vi.fn(), failConnection: vi.fn(), failState: vi.fn(),
     };
@@ -42,10 +42,16 @@ describe("executor OAuth service", () => {
       credentialSource: "oauth",
     }));
     expect(repository.createState).toHaveBeenCalledOnce();
+    expect(repository.createState).toHaveBeenCalledWith(expect.objectContaining({ connectionVersion: 7,
+      context: expect.objectContaining({ connection_version: "7" }) }));
     expect(JSON.stringify(state)).not.toContain("codeVerifier");
     const callback = await service.callback({ state: authorizationUrl.searchParams.get("state")!, code: "code-1" });
     expect(callback.toString()).toBe("https://www.example.test/connections?status=connected");
     expect(repository.completeState).toHaveBeenCalledOnce();
+    expect(repository.consumeState).toHaveBeenCalledWith(expect.any(String), expect.any(String), 7, 1_000_000);
+    expect(repository.completeState).toHaveBeenCalledWith(expect.objectContaining({
+      credentialContext: expect.objectContaining({ connection_version: "7" }),
+    }));
     expect(JSON.stringify(vi.mocked(repository.completeState).mock.calls[0])).not.toContain("secret");
   });
 

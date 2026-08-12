@@ -6,9 +6,13 @@ import { runBacktest } from "../lib/backtest";
 import { buildBotPackageFiles, exportBotPackage, importBotPackage } from "../lib/bot-package";
 import { loadDraft, saveDraft } from "../lib/storage";
 import type { BacktestReport, BotConfig } from "../lib/types";
+import { attestHistoricalReportForConfig } from "../lib/historical-evidence";
 
 const validConfig = STRATEGY_PRESETS.find((preset) => preset.name === "突破追蹤")!;
-const strategySource = "const exchange = 'WEEX';";
+const strategySource = [
+  "export const strategy = { exchange: 'WEEX' };",
+  "export default function evaluate() { return { action: 'hold', reason: 'package-test' }; }",
+].join("\n");
 const configWithSource: BotConfig = { ...validConfig, source: strategySource };
 const requiredFiles = [
   "README-zh-TW.md",
@@ -54,6 +58,29 @@ describe("bot package", () => {
     expect(files.every((file) => file.blob instanceof Blob)).toBe(true);
   });
 
+  it("imports historical strategy settings but discards cross-boundary verification evidence", async () => {
+    const datasetDigest = "d".repeat(64);
+    const report = attestHistoricalReportForConfig({
+      ...runBacktest(validConfig),
+      seed: datasetDigest.slice(0, 8),
+      generatedAt: new Date(1_700_086_400_000).toISOString(),
+      disclaimer: "WEEX 歷史行情回測，不代表未來績效",
+    }, {
+      level: "historical", provider: "WEEX", market: validConfig.market, symbol: validConfig.symbol,
+      interval: validConfig.timeframe, startTime: 1_700_000_000_000, endTime: 1_700_086_400_000,
+      collectedAt: 1_700_086_400_000, candleCount: 24, complete: true, feeRate: "0.001",
+      slippageRate: "0.0005", fundingIncluded: false, gapPolicy: "fail", datasetDigest,
+      engineVersion: "test",
+    }, validConfig);
+    const blob = await exportBotPackage(validConfig, report);
+
+    await expect(importBotPackage(new File([blob], "historical.zip"))).resolves.toEqual({
+      config: validConfig,
+      report: null,
+      historicalEvidenceDiscarded: true,
+    });
+  });
+
   it("preserves an absent config source while validating the generated strategy source", async () => {
     const report = runBacktest(validConfig);
     const blob = await exportBotPackage(validConfig, report);
@@ -64,8 +91,20 @@ describe("bot package", () => {
     expect(packagedConfig).toEqual(validConfig);
     expect(packagedConfig).not.toHaveProperty("source");
     expect(packagedSource).toContain("WEEX");
+    expect(packagedSource).toContain("export default function evaluate");
     await expect(importBotPackage(new File([blob], "bot.zip"))).resolves.toEqual({
       config: validConfig,
+      report,
+    });
+  });
+
+  it("round-trips a source-only strategy without visual entry or exit blocks", async () => {
+    const sourceOnly = { ...configWithSource, blocks: [] };
+    const report = runBacktest(sourceOnly);
+    const blob = await exportBotPackage(sourceOnly, report);
+
+    await expect(importBotPackage(new File([blob], "source-only.zip"))).resolves.toEqual({
+      config: sourceOnly,
       report,
     });
   });
@@ -160,7 +199,7 @@ describe("bot package", () => {
 
   it("validates config before parsing a malformed report", async () => {
     const files = validPackageFiles();
-    files["bot-config.json"] = JSON.stringify({ ...configWithSource, blocks: [] });
+    files["bot-config.json"] = JSON.stringify({ ...validConfig, blocks: [] });
     files["backtest-report.json"] = "{not-json";
 
     await expect(importBotPackage(await packageFile(files)))
@@ -177,7 +216,7 @@ describe("bot package", () => {
 
   it("rejects mismatched config and strategy sources", async () => {
     const files = validPackageFiles();
-    files["strategy.js"] = "const exchange = 'WEEX'; // different";
+    files["strategy.js"] = "const exchange = 'WEEX'; export default () => ({ action: 'hold', reason: 'different' });";
 
     await expect(importBotPackage(await packageFile(files)))
       .rejects.toThrow("策略程式碼與設定不一致");
@@ -185,7 +224,7 @@ describe("bot package", () => {
 
   it("rejects import when recognized source controls disagree with bot-config", async () => {
     const files = validPackageFiles();
-    const source = "export const strategy={exchange:'WEEX',symbol:'ETHUSDT'};";
+    const source = "export const strategy={exchange:'WEEX',symbol:'ETHUSDT'}; export default () => ({action:'hold',reason:'test'});";
     const config = { ...configWithSource, source };
     files["bot-config.json"] = JSON.stringify(config);
     files["strategy.js"] = source;
@@ -198,7 +237,7 @@ describe("bot package", () => {
   it("rejects export when recognized source controls disagree with bot-config", async () => {
     const config = {
       ...configWithSource,
-      source: "export const strategy={exchange:'WEEX',timeframe:'4h'};",
+      source: "export const strategy={exchange:'WEEX',timeframe:'4h'}; export default () => ({action:'hold',reason:'test'});",
     };
     await expect(exportBotPackage(config, runBacktest(configWithSource)))
       .rejects.toThrow("JavaScript 的時間週期（4h）與策略設定（1h）不一致");

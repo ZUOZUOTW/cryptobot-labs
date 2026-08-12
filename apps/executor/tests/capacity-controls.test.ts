@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { Candle, InstrumentRules } from "@cryptobot-labs/trading-core";
 import { CloudMarketDataCache } from "../src/cloud-market-cache";
 import { mapWithConcurrency } from "../src/concurrency";
-import { AdaptiveWeexRateGovernor } from "../src/rate-limited-transport";
+import {
+  AdaptiveWeexRateGovernor,
+  ORDER_RATE_LIMIT_WAIT_TIMEOUT_MS,
+  RateLimitedWeexTransport,
+} from "../src/rate-limited-transport";
 import { WeexApiError } from "@cryptobot-labs/weex-client";
 
 const candle = (openTime: number, interval = 60_000): Candle => ({
@@ -116,6 +120,26 @@ describe("WEEX capacity governor", () => {
 
     expect(waits).toEqual([10_000]);
     expect(governor.snapshot().rateLimitEvents).toBe(1);
+  });
+
+  it("fails an order before dispatch when the governor wait cannot fit its deadline", async () => {
+    let now = 1_000;
+    const scheduler = vi.fn(async (delayMs: number) => { now += delayMs; });
+    const governor = new AdaptiveWeexRateGovernor({ now: () => now, scheduler });
+    governor.trip(new WeexApiError("limited", { category: "rate-limit", retryable: true, status: 429 }));
+    const send = vi.fn();
+    const transport = new RateLimitedWeexTransport({ send }, governor);
+
+    await expect(transport.send({
+      method: "POST",
+      url: "https://api-contract.weex.com/capi/v3/order",
+      headers: {},
+      body: "{}",
+    })).rejects.toMatchObject({ category: "rate-limit", retryable: true });
+
+    expect(ORDER_RATE_LIMIT_WAIT_TIMEOUT_MS).toBeLessThan(10_000);
+    expect(scheduler).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 });
 

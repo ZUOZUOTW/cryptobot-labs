@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
 import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
@@ -15,6 +15,11 @@ import type { BacktestReport, BotConfig, BotDefinition, StrategyBlock } from "..
 import { validateConfig } from "../../lib/strategy-validation";
 import { captureAttribution } from "../../lib/attribution";
 import { resolvedTradeDirection } from "../../lib/trade-direction";
+import type { FormalBacktestEvidence } from "../../lib/formal-backtest-report";
+import type { BacktestRequestState } from "../../components/backtests/BacktestRequestForm";
+import { useI18n } from "../../components/I18nProvider";
+import { isLocale, LOCALE_STORAGE_KEY, resolveInitialLocale } from "../../lib/i18n/locales";
+import { localizedWorkshopTemplateCopy } from "../../lib/i18n/workshop-template";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -41,15 +46,28 @@ const configFromBot = (bot: BotDefinition): BotConfig => ({
 });
 
 const DEFAULT_CONFIG = cloneConfig(STRATEGY_PRESETS[0]);
-const blankConfig = (): BotConfig => ({
+const blankConfig = (locale: Parameters<typeof localizedWorkshopTemplateCopy>[0] = "zh-Hant"): BotConfig => ({
   ...cloneConfig(DEFAULT_CONFIG),
   id: "untitled-strategy",
-  name: "未命名策略",
+  name: localizedWorkshopTemplateCopy(locale).unnamed,
   blocks: [],
 });
 const draftSaveWarning = (reason: string): string => (
   `${reason}；目前內容仍保留在本頁，可調整後再次儲存。`
 );
+
+const resolveWorkshopBootstrapLocale = () => {
+  let storedLocale: string | null = null;
+  try { storedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY); }
+  catch { /* Storage can be unavailable in hardened/private browsing contexts. */ }
+  const documentLocale = isLocale(document.documentElement.dataset.locale)
+    ? document.documentElement.dataset.locale
+    : null;
+  return resolveInitialLocale(
+    storedLocale ?? documentLocale,
+    navigator.languages?.length ? navigator.languages : [navigator.language],
+  );
+};
 
 const configFromPublication = (value: unknown): BotConfig | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -76,6 +94,7 @@ const configFromPublication = (value: unknown): BotConfig | null => {
 };
 type WorkshopMode = "visual" | "javascript";
 type MobileWorkshopStep = "build" | "parameters" | "test" | "publish";
+const MOBILE_SWIPE_THRESHOLD = 56;
 
 const MOBILE_WORKSHOP_STEPS = [
   { id: "build", number: "01", label: "組裝" },
@@ -87,6 +106,7 @@ const MOBILE_WORKSHOP_STEPS = [
 interface AssociatedReport {
   fingerprint: string;
   report: BacktestReport;
+  formal?: Pick<FormalBacktestEvidence, "strategyVersionId" | "backtestJobId">;
 }
 
 interface AssociatedFlowCheck {
@@ -95,6 +115,7 @@ interface AssociatedFlowCheck {
 }
 
 export default function WorkshopPage() {
+  const { locale } = useI18n();
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [draftError, setDraftError] = useState("");
   const [mode, setMode] = useState<WorkshopMode>("visual");
@@ -102,6 +123,8 @@ export default function WorkshopPage() {
   const [associatedFlowCheck, setAssociatedFlowCheck] = useState<AssociatedFlowCheck | null>(null);
   const [mobileMessage, setMobileMessage] = useState("");
   const [mobileStep, setMobileStep] = useState<MobileWorkshopStep>("build");
+  const mobileSwipeStart = useRef<{ x: number; y: number } | null>(null);
+  const configFingerprintRef = useRef("");
 
   useEffect(() => {
     let active = true;
@@ -144,15 +167,16 @@ export default function WorkshopPage() {
         if (!active) return;
         const draft = loadDraft();
         const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
+        const bootstrappedLocale = resolveWorkshopBootstrapLocale();
         const next = deliberateNew
-          ? blankConfig()
+          ? blankConfig(bootstrappedLocale)
           : requestedBot
             ? configFromBot(requestedBot)
             : draft
               ? cloneConfig(draft)
               : cloneConfig(DEFAULT_CONFIG);
         const requestedJavaScript = search.get("mode") === "javascript";
-        if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next);
+        if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next, bootstrappedLocale);
         setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
         setConfig(next);
       })();
@@ -165,10 +189,22 @@ export default function WorkshopPage() {
 
   const validation = useMemo(() => validateConfig(config), [config]);
   const configFingerprint = useMemo(() => backtestConfigFingerprint(config), [config]);
+  useEffect(() => { configFingerprintRef.current = configFingerprint; }, [configFingerprint]);
   const currentReport = associatedReport?.fingerprint === configFingerprint ? associatedReport.report : null;
+  const currentFormalEvidence = associatedReport?.fingerprint === configFingerprint ? associatedReport.formal : undefined;
   const currentFlowCheck: SignalFlowCheckState = associatedFlowCheck?.fingerprint === configFingerprint
     ? associatedFlowCheck.state
     : "untested";
+  const beginFormalReport = () => {
+    setAssociatedReport(null);
+    setMobileMessage("正在固定策略版本並建立正式歷史回測證據…");
+  };
+  const reflectFormalReportState = useCallback((state: BacktestRequestState) => {
+    if (state === "ensuring") setMobileMessage("正在固定策略版本並建立正式歷史回測證據…");
+    else if (state === "running") setMobileMessage("正在取得公開歷史行情並執行回測…");
+    else if (state === "unauthorized") setMobileMessage("請先登入，才能保存並查看自己的歷史回測。");
+    else if (state === "error") setMobileMessage("歷史回測暫時無法執行，請稍後重試。");
+  }, []);
   const mobileStepIndex = MOBILE_WORKSHOP_STEPS.findIndex((step) => step.id === mobileStep);
 
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
@@ -224,7 +260,7 @@ export default function WorkshopPage() {
       return;
     }
     if (nextMode === "javascript" && config.source === undefined) {
-      updateConfig((current) => ({ ...current, source: createWeexJavaScriptTemplate(current) }));
+      updateConfig((current) => ({ ...current, source: createWeexJavaScriptTemplate(current, locale) }));
     }
   };
 
@@ -233,18 +269,27 @@ export default function WorkshopPage() {
     setAssociatedReport({ fingerprint: configFingerprint, report });
     setMobileMessage("回測完成，可保存或發布策略");
   };
-  const acceptImport = (importedConfig: BotConfig, report: BacktestReport) => {
+  const acceptFormalReport = (evidence: FormalBacktestEvidence) => {
+    if (configFingerprintRef.current !== configFingerprint) return;
+    setAssociatedReport({
+      fingerprint: configFingerprint,
+      report: evidence.report,
+      formal: { strategyVersionId: evidence.strategyVersionId, backtestJobId: evidence.backtestJobId },
+    });
+    setMobileMessage("正式歷史回測完成，可匯出或發布策略");
+  };
+  const acceptImport = (importedConfig: BotConfig, report: BacktestReport | null) => {
     const next = cloneConfig(importedConfig);
     const saved = saveDraft(next);
     setDraftError(saved.ok ? "" : draftSaveWarning("無法儲存匯入策略草稿"));
     setConfig(next);
     setMode(next.source === undefined ? "visual" : "javascript");
-    setAssociatedReport({ fingerprint: backtestConfigFingerprint(next), report });
+    setAssociatedReport(report ? { fingerprint: backtestConfigFingerprint(next), report } : null);
     return { ok: true } as const;
   };
 
   const resetToBlank = () => {
-    const next = blankConfig();
+    const next = blankConfig(locale);
     const saved = saveDraft(next);
     setDraftError(saved.ok ? "" : draftSaveWarning(saved.reason));
     setConfig(next);
@@ -259,6 +304,33 @@ export default function WorkshopPage() {
     if (!next) return;
     setMobileStep(next.id);
     setMobileMessage(`目前步驟：${next.label}`);
+  };
+
+  const beginMobileSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1 || window.innerWidth > 704) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("button, a, input, select, textarea, [contenteditable='true'], [role='slider']")) {
+      mobileSwipeStart.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    mobileSwipeStart.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const finishMobileSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    const start = mobileSwipeStart.current;
+    mobileSwipeStart.current = null;
+    if (!start || event.changedTouches.length !== 1 || window.innerWidth > 704) return;
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < MOBILE_SWIPE_THRESHOLD || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    const nextIndex = deltaX < 0 ? mobileStepIndex + 1 : mobileStepIndex - 1;
+    if (nextIndex < 0 || nextIndex >= MOBILE_WORKSHOP_STEPS.length) {
+      setMobileMessage(deltaX < 0 ? "已是最後一步" : "已是第一步");
+      return;
+    }
+    moveToMobileStep(nextIndex);
   };
 
   return (
@@ -289,6 +361,7 @@ export default function WorkshopPage() {
       </div>
 
       <nav className="workshop-stepper" aria-label="手機版組裝步驟">
+        <p className="workshop-swipe-hint" id="workshop-swipe-instructions">左右滑動內容可快速切換步驟</p>
         <ol>
           {MOBILE_WORKSHOP_STEPS.map((step, index) => (
             <li key={step.id}>
@@ -306,7 +379,13 @@ export default function WorkshopPage() {
         </ol>
       </nav>
 
-      <div className="workshop-grid">
+      <div
+        aria-describedby="workshop-swipe-instructions"
+        className="workshop-grid"
+        onTouchCancel={() => { mobileSwipeStart.current = null; }}
+        onTouchEnd={finishMobileSwipe}
+        onTouchStart={beginMobileSwipe}
+      >
         <div className="workshop-step-panel" data-mobile-active={mobileStep === "build"} id="workshop-step-build">
           {mode === "visual" ? (
             <StrategyPalette
@@ -316,7 +395,7 @@ export default function WorkshopPage() {
               selected={config.blocks}
             />
           ) : (
-            <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config)} onChange={updateSource} />
+            <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config, locale)} onChange={updateSource} />
           )}
         </div>
         <div className="workshop-step-panel" data-mobile-active={mobileStep === "parameters"} id="workshop-step-parameters">
@@ -331,11 +410,17 @@ export default function WorkshopPage() {
             validation={validation}
           />
           <div className="backtest-track">
-            <p className="backtest-track__label">快速驗證 · 公開歷史 K 線 · 無需登入</p>
+            <p className="backtest-track__label">{config.source === undefined
+              ? "快速驗證 · 公開歷史 K 線 · 無需登入"
+              : "進階歷史回測"}</p>
             <BacktestPanel
               config={config}
+              onRun={config.source === undefined
+                ? () => setMobileMessage("正在取得公開歷史行情並執行回測…")
+                : beginFormalReport}
+              onFormalReport={acceptFormalReport}
+              onFormalStateChange={reflectFormalReportState}
               onReport={acceptReport}
-              onRun={() => setMobileMessage("正在取得公開歷史行情並執行回測…")}
               restoredReport={currentReport}
               validation={validation}
             />
@@ -347,6 +432,7 @@ export default function WorkshopPage() {
             flowCheckState={currentFlowCheck}
             onImport={acceptImport}
             report={currentReport}
+            formalEvidence={currentFormalEvidence}
           />
         </div>
       </div>
@@ -359,7 +445,12 @@ export default function WorkshopPage() {
             <button aria-label="行動列：檢查設定" onClick={() => setMobileMessage(validation.valid ? "設定檢查通過，可以執行歷史行情回測。" : validation.errors.join("；"))} type="button">檢查</button>
           )}
           {mobileStep === "test" && (
-            <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => document.querySelector<HTMLButtonElement>(".backtest-run")?.click()} type="button">回測</button>
+            <button aria-label="行動列：執行回測" disabled={!validation.valid} onClick={() => {
+              setMobileMessage(config.source === undefined
+                ? "正在取得公開歷史行情並執行回測…"
+                : "正在固定策略版本並建立正式歷史回測證據…");
+              document.querySelector<HTMLButtonElement>(config.source === undefined ? ".backtest-run" : ".historical-submit")?.click();
+            }} type="button">回測</button>
           )}
           {mobileStepIndex < MOBILE_WORKSHOP_STEPS.length - 1 && (
             <button className="workshop-mobile-actions__next" aria-label="行動列：下一步" onClick={() => moveToMobileStep(mobileStepIndex + 1)} type="button">下一步</button>

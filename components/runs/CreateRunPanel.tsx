@@ -31,7 +31,7 @@ export function CreateRunPanel({ backtest, config }: { backtest: HistoricalBackt
       const response = await fetch("/api/cloud-runs", { method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", "Idempotency-Key": attempt.current },
         body: JSON.stringify({ strategyVersionId: backtest.strategyVersionId, botName: config.name,
-          configurationHash, riskPolicy: risk }) });
+          configurationHash, mode: "futures-demo", riskPolicy: risk }) });
       if (response.status === 401) { setState("unauthorized"); return; }
       const body: unknown = await response.json(); const run = body && typeof body === "object"
         ? (body as { run?: unknown }).run : null;
@@ -43,7 +43,7 @@ export function CreateRunPanel({ backtest, config }: { backtest: HistoricalBackt
     } catch { setState("error"); setMessage("無法建立雲端運行；請先在連線頁綁定有效的 WEEX API。"); }
   };
 
-  if (!backtest.result || backtest.status !== "succeeded") return null;
+  if (!backtest.result || backtest.status !== "succeeded" || config.market !== "futures" || config.source !== undefined) return null;
   return <section className="create-run-panel glass-panel" aria-labelledby={`create-run-${backtest.id}`}>
     <div><p className="eyebrow">DEPLOY TO 24/7 CLOUD</p><h2 id={`create-run-${backtest.id}`}>建立雲端交易機器人</h2>
       <p>設定完整風險上限後，由固定 IP 的 AWS Executor 全天候執行。第一階段固定使用 WEEX Futures Demo。</p></div>

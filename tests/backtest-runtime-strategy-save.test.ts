@@ -3,7 +3,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlPlaneDatabase, ControlPlaneRunResult, ControlPlaneStatement } from "../db";
 import { cloneStrategyBlock } from "../data/strategies";
 import {
@@ -55,6 +55,10 @@ const config = (overrides: Partial<BotConfig> = {}): BotConfig => ({
   blocks: [cloneStrategyBlock("rsi"), cloneStrategyBlock("stop-loss")], ...overrides,
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("backtest runtime and strategy save wiring", () => {
   it("uses Netlify's canonical site URL or the request origin when PUBLIC_ORIGIN is absent", () => {
     expect(tradingEnvironmentForRequest({ URL: "https://labs.example" }, new Request("https://preview.example/api/strategies")))
@@ -64,15 +68,24 @@ describe("backtest runtime and strategy save wiring", () => {
   });
 
   it("wires the real detail GET route through fail-closed environment initialization", async () => {
+    vi.stubEnv("PUBLIC_ORIGIN", "");
+    vi.stubEnv("SUPABASE_DATABASE_URL", "");
+    vi.stubEnv("DATABASE_URL", "");
     const route = await import("../app/api/backtests/[id]/route");
-    const response = await route.GET(new Request("https://labs.example/api/backtests/job_1"), { params: { id: "job_1" } });
+    const response = await route.GET(new Request("https://labs.example/api/backtests/job_1"), {
+      params: Promise.resolve({ id: "job_1" }),
+    });
     expect(response.status).toBe(500);
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("fails closed and returns only a generic no-store initialization error", async () => {
     expect(() => createProductionTradingHandlers({})).toThrow(/PUBLIC_ORIGIN/);
-    expect(() => createProductionTradingHandlers({ PUBLIC_ORIGIN: "https://labs.example" })).toThrow(/D1/);
+    expect(() => createProductionTradingHandlers({
+      PUBLIC_ORIGIN: "https://labs.example",
+      SUPABASE_DATABASE_URL: "",
+      DATABASE_URL: "",
+    })).toThrow(/D1|DATABASE_URL/);
     const response = productionTradingFailure(new Error("DB password secret"));
     expect(response.status).toBe(500);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -115,12 +128,17 @@ describe("backtest runtime and strategy save wiring", () => {
     }, "save-blocked-name"));
     expect(blockedName.status).toBe(422);
     expect(await blockedName.json()).toMatchObject({ error: { code: "invalid_strategy_name" } });
+    for (const [index, name] of ["SAFE\u202Egpj.exe", "CryptoBot\u200BLabs 官方", "Ａtlas Trend"].entries()) {
+      const blockedUnicode = await handlers.strategy(makeRequest({ config: config({ name }) }, `save-blocked-unicode-${index}`));
+      expect(blockedUnicode.status).toBe(422);
+      expect(await blockedUnicode.json()).toMatchObject({ error: { code: "invalid_strategy_name" } });
+    }
     const custom = await handlers.strategy(makeRequest({ config: config({ source: "return {action:'buy'}" }) }, "save-custom"));
     expect(custom.status).toBe(422);
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM strategy_versions").get()).toEqual({ count: 1 });
 
     const source=`export const strategy={exchange:"WEEX",market:"futures",symbol:"BTCUSDT",timeframe:"1h"};\nexport default () => ({action:"hold",reason:"test"});`;
-    const savedCustom=await handlers.strategy(makeRequest({config:config({source})},"save-custom-valid"));
+    const savedCustom=await handlers.strategy(makeRequest({config:config({blocks:[],source})},"save-custom-valid"));
     expect(savedCustom.status).toBe(201);
     const row=database.raw.prepare("SELECT source_hash AS sourceHash,source_code AS sourceCode FROM strategy_versions WHERE source_code IS NOT NULL").get() as {sourceHash:string;sourceCode:string};
     expect(row).toEqual({sourceHash:expect.stringMatching(/^[a-f0-9]{64}$/),sourceCode:source});

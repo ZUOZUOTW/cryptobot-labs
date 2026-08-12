@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BacktestHistory } from "../components/backtests/BacktestHistory";
 import { BacktestRequestForm } from "../components/backtests/BacktestRequestForm";
-import { BacktestResultCard } from "../components/backtests/BacktestResultCard";
+import { BacktestResultCard, type HistoricalBacktestRecord } from "../components/backtests/BacktestResultCard";
 import { STRATEGY_PRESETS } from "../data/strategies";
 import WorkshopPage from "../app/workshop/page";
+import { attestHistoricalReportForConfig } from "../lib/historical-evidence";
 
-const succeededBacktest = {
+const succeededBacktest: HistoricalBacktestRecord = {
   id: "job-owner-1",
   strategyVersionId: "version-1",
   status: "succeeded",
@@ -46,7 +47,7 @@ const succeededBacktest = {
     equityCurve: [{ timestamp: 1_700_000_000_000, equity: "10000" }, { timestamp: 1_700_086_399_999, equity: "11200" }],
     engineVersion: "engine-v1", configurationHash: "c".repeat(64), strategyHash: "s".repeat(64), scriptHash: null,
   },
-} as const;
+};
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -93,6 +94,34 @@ describe("historical backtest UI", () => {
     expect(screen.getByRole("button", { name: "執行進階歷史回測" })).toBeDisabled();
   });
 
+  it("keeps disclose mode available on the standalone page without mislabeling a successful result", async () => {
+    const succeededRequest = succeededBacktest.request!;
+    const disclosedBacktest: HistoricalBacktestRecord = {
+      ...succeededBacktest,
+      request: { ...succeededRequest, gapPolicy: "disclose" },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ strategyVersion: {
+        id: "version-1", strategyId: "strategy-1", version: 1, configHash: "c".repeat(64),
+        createdAt: 1_700_000_000_000,
+      }, idempotent: false }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ backtest: disclosedBacktest }), { status: 201 }));
+    const onVerifiedReport = vi.fn();
+    const user = userEvent.setup();
+    render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} onVerifiedReport={onVerifiedReport} />);
+
+    const gapPolicy = screen.getByRole("combobox", { name: "資料缺口" });
+    expect(gapPolicy).toBeEnabled();
+    await user.selectOptions(gapPolicy, "disclose");
+    await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
+
+    expect(await screen.findByText("不是實盤績效")).toBeInTheDocument();
+    expect(screen.queryByText(/回測證據與目前策略版本不一致/)).not.toBeInTheDocument();
+    expect(onVerifiedReport).not.toHaveBeenCalled();
+    const request = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    expect(request.gapPolicy).toBe("disclose");
+  });
+
   it("reuses request-bound idempotency keys after a lost response and rotates them after success", async () => {
     const strategy = (idempotent: boolean) => new Response(JSON.stringify({ strategyVersion: {
       id: "version-1", strategyId: "strategy-1", version: 1, configHash: "c".repeat(64), createdAt: 1_700_000_000_000,
@@ -125,15 +154,18 @@ describe("historical backtest UI", () => {
 
   it("offers sign-in recovery and blocks invalid JavaScript before persistence", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 401 }));
+    const onStateChange = vi.fn();
     const user = userEvent.setup();
-    const { rerender } = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} />);
+    const { rerender } = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} onStateChange={onStateChange} />);
     await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     expect(await screen.findByRole("link", { name: "登入" })).toHaveAttribute("href", "/auth?return_to=%2Fbacktests");
+    expect(onStateChange).toHaveBeenCalledWith("ensuring");
+    expect(onStateChange).toHaveBeenLastCalledWith("unauthorized");
 
-    rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], source: "fetch('https://example.com')" }} />);
+    rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], source: "fetch('https://example.com')" }} onStateChange={onStateChange} />);
     const button = screen.getByRole("button", { name: "執行進階歷史回測" });
     expect(button).toBeDisabled();
-    expect(screen.getByText(/JavaScript.*隔離沙箱/)).toBeInTheDocument();
+    expect(screen.getByText(/回測結果會記錄程式碼雜湊/)).toBeInTheDocument();
     fireEvent.click(button);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -141,7 +173,7 @@ describe("historical backtest UI", () => {
   it("submits a valid JavaScript strategy for immutable save and sandbox backtest",async()=>{
     const preset=STRATEGY_PRESETS[0];
     const source=`export const strategy={exchange:"WEEX",market:"spot",symbol:${JSON.stringify(preset.symbol)},timeframe:${JSON.stringify(preset.timeframe)}};\nexport default () => ({action:"hold",reason:"test"});`;
-    const custom={...preset,source};
+    const custom={...preset,blocks:[],source};
     const fetchMock=vi.spyOn(globalThis,"fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({strategyVersion:{id:"version-js",strategyId:"strategy-js",version:1,configHash:"c".repeat(64),createdAt:1_700_000_000_000},idempotent:false}),{status:201}))
       .mockResolvedValueOnce(new Response(JSON.stringify({backtest:{...succeededBacktest,strategyVersionId:"version-js",result:{...succeededBacktest.result,scriptHash:"d".repeat(64)}}}),{status:201}));
@@ -152,7 +184,9 @@ describe("historical backtest UI", () => {
     await user.click(button);
     await waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({config:custom});
-    expect(screen.getByText(/JavaScript.*隔離沙箱/)).toBeInTheDocument();
+    expect(screen.getByText(/回測結果會記錄程式碼雜湊/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading",{name:"建立雲端交易機器人"})).not.toBeInTheDocument();
+    expect(screen.getByText(/雲端 Executor 只支援視覺策略/)).toBeInTheDocument();
   });
 
   it("loads an ownership-shaped history response without caching and supports retry", async () => {
@@ -182,13 +216,13 @@ describe("historical backtest UI", () => {
 
   it("runs the quick workshop check against the public WEEX historical endpoint", async () => {
     window.history.replaceState({}, "", "/workshop?bot=steady-trend");
-    const quickReport = {
+    const quickConfig = STRATEGY_PRESETS[0];
+    const quickReport = attestHistoricalReportForConfig({
       seed: "d".repeat(8), generatedAt: new Date(1_700_086_400_000).toISOString(),
       metrics: { totalReturn: -6.2, annualizedReturn: -54, maxDrawdown: -12, winRate: 25, profitFactor: 0.49, sharpe: -2.19, trades: 4, runningDays: 30, stability: 78 },
       equityCurve: [{ label: "01/01", value: 100 }, { label: "01/31", value: 93.8 }],
       disclaimer: "WEEX 歷史行情回測，不代表未來績效",
-      evidence: { level: "historical", provider: "WEEX", market: "spot", symbol: "BTCUSDT", interval: "4h", startTime: 1_697_494_400_000, endTime: 1_700_086_400_000, collectedAt: 1_700_086_400_000, candleCount: 180, complete: true, feeRate: "0.001", slippageRate: "0.0005", fundingIncluded: false, datasetDigest: "d".repeat(64), engineVersion: "test" },
-    };
+    }, { level: "historical", provider: "WEEX", market: "spot", symbol: "BTCUSDT", interval: "4h", startTime: 1_697_494_400_000, endTime: 1_700_086_400_000, collectedAt: 1_700_086_400_000, candleCount: 180, complete: true, feeRate: "0.001", slippageRate: "0.0005", fundingIncluded: false, gapPolicy: "fail", datasetDigest: "d".repeat(64), engineVersion: "test" }, quickConfig);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ report: quickReport }), { status: 200 }));
     const user = userEvent.setup();
     render(<WorkshopPage />);

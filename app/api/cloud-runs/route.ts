@@ -1,6 +1,13 @@
 import { createControlPlaneDatabase } from "@/db";
 import { createUserRepository } from "@/db/repositories";
-import { createCloudRunRepository, isRecentLiveConfirmation, parseCloudRisk } from "@/lib/server/cloud-runs";
+import {
+  CLOUD_RUN_TARGET_CONFLICT,
+  createCloudRunRepository,
+  isRecentLiveConfirmation,
+  parseCloudRisk,
+  type CloudRunMode,
+} from "@/lib/server/cloud-runs";
+import { productionLiveReady } from "@/lib/server/demo-mode";
 import { env } from "@/lib/server/platform-env";
 import { requireApiUser, platformIdentityProvider, deriveWorkspaceUserId } from "@/lib/server/auth";
 
@@ -28,7 +35,8 @@ export async function GET(request: Request): Promise<Response> {
     repository.list(identity.user.id),
     repository.account(identity.user.id),
   ]);
-  const points = account ? await repository.realizedPnl(identity.user.id, account.connectionId) : [];
+  const realizedPnl = account ? await repository.realizedPnl(identity.user.id, account.connectionId)
+    : { total: "0", tradeCount: 0, points: [] };
   return response(200, {
     generatedAt: Date.now(),
     runs,
@@ -49,9 +57,9 @@ export async function GET(request: Request): Promise<Response> {
     } : null,
     realizedPnl: {
       asset: "USDT",
-      total: points.at(-1)?.cumulativeNetPnl ?? "0",
-      tradeCount: points.reduce((total, point) => total + Number(point.tradeCount), 0),
-      points,
+      total: realizedPnl.total,
+      tradeCount: realizedPnl.tradeCount,
+      points: realizedPnl.points,
     },
   });
 }
@@ -67,16 +75,22 @@ export async function POST(request: Request): Promise<Response> {
   const value = body as Record<string, unknown>;
   const risk = parseCloudRisk(value.riskPolicy);
   const now = Date.now();
+  const mode: CloudRunMode | null = value.mode === "futures-demo" || value.mode === "live" ? value.mode : null;
   if (typeof value.strategyVersionId !== "string" || typeof value.botName !== "string"
-    || typeof value.configurationHash !== "string" || value.mode !== "live" || !risk
-    || !isRecentLiveConfirmation(value.liveConfirmation, now)) {
-    return response(400, { error: "live_confirmation_required" });
+    || typeof value.configurationHash !== "string" || !mode || !risk) {
+    return response(400, { error: "invalid_request" });
+  }
+  if (mode === "live" && (!productionLiveReady() || !isRecentLiveConfirmation(value.liveConfirmation, now))) {
+    return response(503, { error: "live_trading_disabled" });
+  }
+  if (mode === "futures-demo" && value.liveConfirmation !== undefined) {
+    return response(400, { error: "invalid_request" });
   }
   const repository = createCloudRunRepository(database);
   const input = {
     id: await runId(identity.user.id, key),
     userId: identity.user.id, strategyVersionId: value.strategyVersionId, name: value.botName,
-    configurationHash: value.configurationHash, mode: "live" as const, risk, now,
+    configurationHash: value.configurationHash, mode, risk, now,
   };
   let run;
   try {
@@ -93,6 +107,7 @@ export async function POST(request: Request): Promise<Response> {
   }
   if (run) return response(201, { run, idempotent: false });
   const replay = await repository.findMatching(input);
-  return replay ? response(200, { run: replay, idempotent: true })
-    : response(409, { error: "cloud_run_prerequisite_failed" });
+  if (replay) return response(200, { run: replay, idempotent: true });
+  if (await repository.hasActiveTargetConflict(input)) return response(409, CLOUD_RUN_TARGET_CONFLICT);
+  return response(409, { error: "cloud_run_prerequisite_failed" });
 }

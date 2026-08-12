@@ -1,7 +1,7 @@
 import type { BacktestJobCreateDto } from "../control-plane/types";
 import { parseBacktestJobCreateDto, safeCanonicalJsonStringify } from "../control-plane/schemas";
 import type { BotConfig } from "../types";
-import { createVisualHistoricalEvaluator } from "../historical-strategy";
+import { createVisualHistoricalEvaluator, historicalRiskPolicyForConfig } from "../historical-strategy";
 import type { ApiAuthDependencies } from "./auth";
 import { requireApiUser } from "./auth";
 import { HttpProblem, errorResponse, jsonResponse, readStrictJson } from "./http";
@@ -13,11 +13,14 @@ import type {
 import type { HistoricalDataset, HistoricalBacktestResult, StrategyEvaluator, StrategySandbox } from "../../packages/trading-core/src";
 import {
   BACKTEST_SANDBOX_BUDGET,
+  BACKTEST_SANDBOX_TOTAL_BUDGET_MS,
   MAX_HISTORICAL_LEVERAGE,
+  SandboxExecutionError,
   createQuickJsStrategySandbox,
   runHistoricalBacktest,
 } from "../../packages/trading-core/src";
-import { validateConfig } from "../strategy-validation";
+import { hasStrictBotConfigShape, validateConfig } from "../strategy-validation";
+import { enforceTradeDirection } from "../trade-direction";
 import type { HistoricalFundingDataset } from "../../packages/weex-client/src";
 import {
   DEFAULT_FUNDING_MARK_MAX_AGE_MS, FUNDING_HISTORY_LIMIT, FUNDING_MARK_PAGE_SIZE,
@@ -41,6 +44,7 @@ const maintenanceMarginRate = (market: "spot" | "futures", leverage: string): st
 };
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 const SIGNED_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const SOURCE_BACKTEST_RUN_DEADLINE_MS = BACKTEST_SANDBOX_TOTAL_BUDGET_MS * 2;
 
 type BacktestRepository = {
   createIdempotent(input: { id: string; idempotencyId: string; idempotencyKey: string; requestHash: string;
@@ -123,10 +127,12 @@ const parseStoredConfig = async (version: OwnedStrategyVersionRecord): Promise<{
   const source = version.sourceCode;
   if ((source === null && Object.hasOwn(config as object, "source"))
     || (source !== null && config.source !== source)) throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
-  // The visual clone proves strict canonical config shape; source receives its own validation and digest fence.
   try {
-    createVisualHistoricalEvaluator({ ...config, source: undefined });
-    if (!validateConfig(config).valid) throw new Error("invalid source");
+    if (source === null) {
+      createVisualHistoricalEvaluator(config);
+    } else if (!hasStrictBotConfigShape(config) || !validateConfig(config).valid) {
+      throw new Error("invalid source");
+    }
   }
   catch { throw new HistoricalBacktestProblem(422, "invalid_strategy_configuration"); }
   const canonical = safeCanonicalJsonStringify(config, "strategy configuration", 262_144);
@@ -373,15 +379,25 @@ export function createHistoricalBacktestService(dependencies: {
         if (integrity.source === null) {
           evaluator = createVisualHistoricalEvaluator(integrity.config);
         } else {
-          const visualPolicy = createVisualHistoricalEvaluator({ ...integrity.config, source: undefined });
           sandbox = await (dependencies.createSandbox ?? (() => createQuickJsStrategySandbox(BACKTEST_SANDBOX_BUDGET)))();
-          evaluator = { maximumLookback: 1024, riskPolicy: visualPolicy.riskPolicy, evaluate: async (input) => {
+          let cumulativeSandboxDurationMs = 0;
+          evaluator = { evaluationErrorPolicy: "abort-backtest", maximumLookback: 1024,
+            riskPolicy: historicalRiskPolicyForConfig(integrity.config), evaluate: async (input) => {
+            signal?.throwIfAborted();
             const evaluated = await sandbox!.evaluate({ source: integrity.source!, input, now: input.now,
               randomSeed: `${integrity.scriptHash}:${input.now}` });
             if (evaluated.scriptHash !== integrity.scriptHash) {
               throw new HistoricalBacktestProblem(500, "strategy_integrity_failed");
             }
-            return evaluated.signal;
+            if (!Number.isFinite(evaluated.durationMs) || evaluated.durationMs < 0) {
+              throw new SandboxExecutionError("resource-exhausted", "Strategy sandbox returned invalid resource evidence");
+            }
+            cumulativeSandboxDurationMs += evaluated.durationMs;
+            if (cumulativeSandboxDurationMs > BACKTEST_SANDBOX_TOTAL_BUDGET_MS) {
+              throw new SandboxExecutionError("deadline-exceeded", "Backtest strategy cumulative execution deadline exceeded");
+            }
+            signal?.throwIfAborted();
+            return enforceTradeDirection(integrity.config, input, evaluated.signal);
           } };
         }
         const maintenanceRate = maintenanceMarginRate(request.market, request.leverage);
@@ -391,7 +407,10 @@ export function createHistoricalBacktestService(dependencies: {
             initialCapital: request.initialCapital, feeRate: request.feeRate, slippageRate: request.slippageRate,
             leverage: request.leverage, funding: funding?.funding ?? [], gapPolicy: request.gapPolicy,
             maintenanceMarginRate: maintenanceRate,
-            engineVersion: HISTORICAL_ENGINE_VERSION, configHash: integrity.configHash, strategyHash: integrity.strategyHash });
+            engineVersion: HISTORICAL_ENGINE_VERSION, configHash: integrity.configHash, strategyHash: integrity.strategyHash }, {
+            ...(signal ? { signal } : {}),
+            ...(integrity.source === null ? {} : { maximumDurationMs: SOURCE_BACKTEST_RUN_DEADLINE_MS }),
+          });
         } finally { await sandbox?.dispose(); }
         signal?.throwIfAborted();
         const completedAt = safeTime(dependencies.now);

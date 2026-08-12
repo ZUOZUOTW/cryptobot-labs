@@ -6,6 +6,7 @@ import { benchmarkSeries } from "../lib/benchmark-series";
 import { isVerifiedWeexPerformance, loadWeexBotPerformance } from "../lib/weex-historical-client";
 import { MetricCard } from "./MetricCard";
 import { PerformanceChart } from "./PerformanceChart";
+import { BotDownloadButton } from "./BotCard";
 
 export function BotDetailPerformance({ bot }: { bot: BotDefinition }) {
   const [performance, setPerformance] = useState<WeexHistoricalPerformance | null>(null);
@@ -52,6 +53,7 @@ export function BotDetailPerformance({ bot }: { bot: BotDefinition }) {
   return (
     <>
       <section className="detail-section site-container" aria-label="完整績效指標">
+        <div className="button-row"><BotDownloadButton bot={bot} historicalPerformance={performance} className="button button--secondary" /></div>
         <div className="metric-grid">
           <MetricCard label="交易績效" value={`${metrics.totalReturn >= 0 ? "+" : ""}${metrics.totalReturn.toFixed(1)}%`} hint="回測期間資產淨值變化" tone="mint" />
           <MetricCard label="年化報酬" value={`${metrics.annualizedReturn >= 0 ? "+" : ""}${metrics.annualizedReturn.toFixed(1)}%`} hint="依回測期間換算的年化值" tone="cyan" />

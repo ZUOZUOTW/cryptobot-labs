@@ -12,7 +12,7 @@ import { CommandServiceError } from "../lib/server/commands";
 import { createDeviceEventService, DeviceEventError } from "../lib/server/device-events";
 import {
   canonicalDeviceRequest, createDeviceRequestVerifier, createDeviceSignatureHeaders, DeviceAuthenticationError,
-  sha256Hex, type DeviceCrypto,
+  sha256Hex, type DeviceCrypto, type VerifiedDeviceIdentity,
 } from "../lib/server/device-signature";
 
 class Statement implements ControlPlaneStatement {
@@ -38,16 +38,17 @@ class Database implements ControlPlaneDatabase {
 }
 
 const now = 1_700_000_000_000;
-const identity = { userId: "usr_a", deviceId: "dev_a", capability: "agent.events" };
+const identity: VerifiedDeviceIdentity = { userId: "usr_a", deviceId: "dev_a", capability: "agent.events" };
 const event = (id: string, type = "signal") => ({ version: 1, id, type, deploymentId: "dep_a",
   expectedDeploymentVersion: 1, correlationId: `cor_${id}`, occurredAt: now,
   payload: { symbol: "BTCUSDT", action: "hold", side: "buy", quantity: "1", price: null, reason: "test" } });
+type AgentDependencies = Parameters<typeof createAgentHandlers>[0];
 const fakeDependencies = () => ({
-  verify: vi.fn(async () => identity),
-  eventService: { ingest: vi.fn(async () => ({ idempotent: false })) },
+  verify: vi.fn<AgentDependencies["verify"]>(async () => identity),
+  eventService: { ingest: vi.fn<AgentDependencies["eventService"]["ingest"]>(async () => ({ idempotent: false })) },
   commandService: {
-    poll: vi.fn(async () => ({ items: [], nextCursor: null })),
-    ack: vi.fn(async () => ({ acknowledgement: {}, idempotent: false })),
+    poll: vi.fn<AgentDependencies["commandService"]["poll"]>(async () => ({ items: [], nextCursor: null })),
+    ack: vi.fn<AgentDependencies["commandService"]["ack"]>(async () => ({ acknowledgement: {}, idempotent: false })),
   },
 });
 const post = (path: string, value: string, headers: Record<string,string> = {}) => new Request(`https://labs.test${path}`, {

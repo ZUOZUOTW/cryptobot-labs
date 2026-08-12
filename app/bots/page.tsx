@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { BotCard } from "../../components/BotCard";
 import { BOT_CATALOG } from "../../data/bots";
 import type { Market, RiskLevel, WeexHistoricalPerformance } from "../../lib/types";
@@ -14,6 +14,7 @@ import { usePlatformUser } from "../../components/PlatformAuthProvider";
 import { useI18n } from "../../components/I18nProvider";
 import { PublishedStrategyCard } from "../../components/PublishedStrategyCard";
 import type { PublicStrategyPublication } from "../../lib/strategy-publications";
+import { normalizeDiscoverySearch, strategyPublicationListPath } from "../../lib/strategy-discovery-query";
 
 type MarketFilter = Market | "all";
 type RiskFilter = RiskLevel | "all";
@@ -21,6 +22,35 @@ type SortOption = "recommended" | "return-desc" | "drawdown-asc" | "win-rate-des
 
 const TAGS = Array.from(new Set(BOT_CATALOG.flatMap((bot) => bot.tags))).sort((a, b) => a.localeCompare(b, "zh-Hant"));
 const TIMEFRAMES = Array.from(new Set(BOT_CATALOG.map((bot) => bot.timeframe))).sort();
+const PUBLICATION_CURSOR = /^[A-Za-z0-9_-]{16,384}$/;
+
+const isPublicStrategyPublication = (entry: unknown): entry is PublicStrategyPublication => (
+  Boolean(entry) && typeof entry === "object"
+  && typeof (entry as { slug?: unknown }).slug === "string"
+  && typeof (entry as { name?: unknown }).name === "string"
+  && typeof (entry as { publisherName?: unknown }).publisherName === "string"
+  && ["long", "short", "both"].includes(String((entry as { tradeDirection?: unknown }).tradeDirection))
+  && typeof (entry as { hasPrivateSource?: unknown }).hasPrivateSource === "boolean"
+  && Array.isArray((entry as { blocks?: unknown }).blocks)
+  && Array.isArray((entry as { equityCurve?: unknown }).equityCurve)
+);
+
+const parsePublicationPage = (value: unknown): {
+  publications: PublicStrategyPublication[];
+  nextCursor: string | null;
+} => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("publication_list_failed");
+  const body = value as { publications?: unknown; nextCursor?: unknown };
+  if (!Array.isArray(body.publications)) throw new Error("publication_list_failed");
+  const nextCursor = body.nextCursor ?? null;
+  if (nextCursor !== null && (typeof nextCursor !== "string" || !PUBLICATION_CURSOR.test(nextCursor))) {
+    throw new Error("publication_list_failed");
+  }
+  return {
+    publications: body.publications.filter(isPublicStrategyPublication),
+    nextCursor,
+  };
+};
 
 export default function BotsPage() {
   const { locale } = useI18n();
@@ -30,7 +60,9 @@ export default function BotsPage() {
   const [tag, setTag] = useState("all");
   const [timeframe, setTimeframe] = useState("all");
   const [sort, setSort] = useState<SortOption>("recommended");
+  const [search, setSearch] = useState("");
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [communityFavorites, setCommunityFavorites] = useState<string[]>([]);
   const [preferenceError, setPreferenceError] = useState("");
   const [performanceState, setPerformanceState] = useState<"loading" | "ready" | "error">("loading");
   const [performances, setPerformances] = useState<Record<string, WeexHistoricalPerformance>>({});
@@ -39,6 +71,11 @@ export default function BotsPage() {
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
   const [publications, setPublications] = useState<PublicStrategyPublication[]>([]);
   const [publicationState, setPublicationState] = useState<"loading" | "ready" | "error">("loading");
+  const [publicationMoreState, setPublicationMoreState] = useState<"idle" | "loading" | "error">("idle");
+  const [publicationNextCursor, setPublicationNextCursor] = useState<string | null>(null);
+  const [publicationReloadKey, setPublicationReloadKey] = useState(0);
+  const publicationRequestInFlight = useRef(false);
+  const publicationMoreAbort = useRef<AbortController | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
@@ -60,31 +97,83 @@ export default function BotsPage() {
       setTimeframe(hasMatch ? nextTimeframe : "all");
       setSort(saved.sort);
       setFavorites(saved.favorites.filter((id) => BOT_CATALOG.some((bot) => bot.id === id)));
+      setCommunityFavorites(saved.communityFavorites?.filter((slug) => /^strategy-[a-z0-9-]{8,71}$/.test(slug)).slice(0, 24) ?? []);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  const deferredSearch = useDeferredValue(normalizeDiscoverySearch(search));
+  const publicationQuery = useMemo(() => strategyPublicationListPath({
+    ...(deferredSearch ? { search: deferredSearch } : {}),
+    ...(market === "all" ? {} : { market }),
+    ...(timeframe === "all" ? {} : { timeframe }),
+    ...(risk === "all" ? {} : { risk }),
+    sort,
+  }), [deferredSearch, market, risk, sort, timeframe]);
+
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/strategy-publications", { headers: { Accept: "application/json" } })
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      publicationMoreAbort.current?.abort();
+      publicationMoreAbort.current = null;
+      publicationRequestInFlight.current = false;
+      setPublicationState("loading");
+      setPublicationMoreState("idle");
+      setPublicationNextCursor(null);
+      void fetch(publicationQuery, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      })
       .then(async (response) => {
-        const body = await response.json() as { publications?: unknown };
-        if (!response.ok || !Array.isArray(body.publications)) throw new Error("publication_list_failed");
-        const valid = body.publications.filter((entry): entry is PublicStrategyPublication => (
-          Boolean(entry) && typeof entry === "object"
-          && typeof (entry as { slug?: unknown }).slug === "string"
-          && typeof (entry as { name?: unknown }).name === "string"
-          && typeof (entry as { publisherName?: unknown }).publisherName === "string"
-          && ["long", "short", "both"].includes(String((entry as { tradeDirection?: unknown }).tradeDirection))
-          && typeof (entry as { hasPrivateSource?: unknown }).hasPrivateSource === "boolean"
-          && Array.isArray((entry as { blocks?: unknown }).blocks)
-          && Array.isArray((entry as { equityCurve?: unknown }).equityCurve)
-        ));
-        if (!cancelled) { setPublications(valid); setPublicationState("ready"); }
+        const body = parsePublicationPage(await response.json() as unknown);
+        if (!response.ok) throw new Error("publication_list_failed");
+        if (!cancelled) {
+          setPublications(body.publications);
+          setPublicationNextCursor(body.nextCursor);
+          setPublicationState("ready");
+        }
       })
       .catch(() => { if (!cancelled) setPublicationState("error"); });
-    return () => { cancelled = true; };
-  }, []);
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); };
+  }, [publicationQuery, publicationReloadKey]);
+
+  useEffect(() => () => publicationMoreAbort.current?.abort(), []);
+
+  const loadMorePublications = useCallback(async () => {
+    const cursor = publicationNextCursor;
+    if (cursor === null || publicationRequestInFlight.current) return;
+    publicationRequestInFlight.current = true;
+    const controller = new AbortController();
+    publicationMoreAbort.current = controller;
+    setPublicationMoreState("loading");
+    try {
+      const response = await fetch(`${publicationQuery}${publicationQuery.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+      const body = parsePublicationPage(await response.json() as unknown);
+      if (!response.ok || body.nextCursor === cursor) throw new Error("publication_list_failed");
+      setPublications((current) => {
+        const known = new Set(current.map((publication) => publication.slug));
+        return [...current, ...body.publications.filter((publication) => {
+          if (known.has(publication.slug)) return false;
+          known.add(publication.slug);
+          return true;
+        })];
+      });
+      setPublicationNextCursor(body.nextCursor);
+      setPublicationMoreState("idle");
+    } catch {
+      if (!controller.signal.aborted) setPublicationMoreState("error");
+    } finally {
+      if (publicationMoreAbort.current === controller) publicationMoreAbort.current = null;
+      publicationRequestInFlight.current = false;
+    }
+  }, [publicationNextCursor, publicationQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,11 +202,16 @@ export default function BotsPage() {
   }), [performances]);
 
   const persist = (next: Partial<DiscoveryPreferences>) => {
-    const result = saveDiscoveryPreferences({ market, risk, tag, timeframe, sort, favorites, ...next });
+    const result = saveDiscoveryPreferences({ market, risk, tag, timeframe, sort, favorites, communityFavorites, ...next });
     setPreferenceError(result.ok ? "" : result.reason);
   };
 
   const visibleBots = useMemo(() => catalog
+    .filter((bot) => {
+      if (!deferredSearch) return true;
+      const haystack = [bot.name, bot.description, bot.symbol, ...bot.tags].join(" ").toLocaleLowerCase(locale);
+      return haystack.includes(deferredSearch.toLocaleLowerCase(locale));
+    })
     .filter((bot) => market === "all" || bot.market === market)
     .filter((bot) => risk === "all" || bot.risk === risk)
     .filter((bot) => tag === "all" || bot.tags.includes(tag))
@@ -131,7 +225,7 @@ export default function BotsPage() {
         return score(b) - score(a);
       }
       return b.metrics.totalReturn - a.metrics.totalReturn;
-    }), [catalog, market, risk, sort, tag, timeframe]);
+    }), [catalog, deferredSearch, locale, market, risk, sort, tag, timeframe]);
   const displayedBots = user ? visibleBots : visibleBots.slice(0, 6);
   const hasMemberResults = !user && visibleBots.length > displayedBots.length;
 
@@ -140,6 +234,7 @@ export default function BotsPage() {
     setRisk("all");
     setTag("all");
     setTimeframe("all");
+    setSearch("");
     persist({ market: "all", risk: "all", tag: "all", timeframe: "all" });
   };
 
@@ -147,6 +242,18 @@ export default function BotsPage() {
     const next = favorites.includes(botId) ? favorites.filter((id) => id !== botId) : [...favorites, botId];
     setFavorites(next);
     persist({ favorites: next });
+  };
+
+  const toggleCommunityFavorite = (slug: string) => {
+    if (!communityFavorites.includes(slug) && communityFavorites.length >= 24) {
+      setPreferenceError("會員策略收藏已達 24 組上限");
+      return;
+    }
+    const next = communityFavorites.includes(slug)
+      ? communityFavorites.filter((favorite) => favorite !== slug)
+      : [...communityFavorites, slug];
+    setCommunityFavorites(next);
+    persist({ communityFavorites: next });
   };
 
   return (
@@ -157,8 +264,12 @@ export default function BotsPage() {
         <p>先比較用途、風險、最大回撤、交易次數與資料日期；未登入可預覽精選策略，登入後查看完整策略庫。</p>
       </header>
 
-      {(publicationState === "loading" || publications.length > 0) && (
-        <section className="published-strategies" aria-labelledby="published-strategies-title">
+      {(publicationState === "loading" || publicationState === "ready" || publications.length > 0 || publicationNextCursor !== null) && (
+        <section
+          aria-busy={publicationState === "loading" || publicationMoreState === "loading"}
+          aria-labelledby="published-strategies-title"
+          className="published-strategies"
+        >
           <div className="section-heading">
             <p className="eyebrow">COMMUNITY RELEASES</p>
             <h2 id="published-strategies-title">會員公開策略</h2>
@@ -167,14 +278,60 @@ export default function BotsPage() {
           {publicationState === "loading" ? (
             <div className="published-strategies__loading glass-panel" role="status">正在載入會員公開策略…</div>
           ) : (
-            <div className="published-strategies__grid">
-              {publications.map((publication) => <PublishedStrategyCard key={publication.slug} publication={publication} />)}
-            </div>
+            <>
+              {publications.length > 0 ? <div className="published-strategies__grid">
+                {publications.map((publication) => <PublishedStrategyCard
+                  favorite={communityFavorites.includes(publication.slug)}
+                  key={publication.slug}
+                  onFavorite={toggleCommunityFavorite}
+                  publication={publication}
+                />)}
+              </div> : <div className="published-strategies__loading glass-panel" role="status">沒有符合目前搜尋與篩選條件的會員策略。</div>}
+              <div aria-live="polite" className="published-strategies__pagination">
+                {publicationMoreState === "error" ? (
+                  <>
+                    <p role="alert">無法載入更多會員策略，請稍後重試。</p>
+                    <button
+                      className="button button--secondary"
+                      onClick={() => { void loadMorePublications(); }}
+                      type="button"
+                    >
+                      重試載入更多會員策略
+                    </button>
+                  </>
+                ) : publicationNextCursor !== null ? (
+                  <button
+                    className="button button--secondary"
+                    disabled={publicationMoreState === "loading"}
+                    onClick={() => { void loadMorePublications(); }}
+                    type="button"
+                  >
+                    {publicationMoreState === "loading" ? "正在載入更多會員策略…" : "載入更多會員策略"}
+                  </button>
+                ) : (
+                  <p role="status">已顯示全部會員公開策略</p>
+                )}
+              </div>
+            </>
           )}
         </section>
       )}
       {publicationState === "error" && (
-        <p className="catalog-preference-status" role="status">會員公開策略暫時無法載入；官方策略仍可正常瀏覽。</p>
+        <div className="catalog-preference-status published-strategies__error" role="alert">
+          <p>會員公開策略暫時無法載入；官方策略仍可正常瀏覽。</p>
+          <button
+            className="text-button"
+            onClick={() => {
+              setPublicationState("loading");
+              setPublicationMoreState("idle");
+              setPublicationNextCursor(null);
+              setPublicationReloadKey((value) => value + 1);
+            }}
+            type="button"
+          >
+            重新載入會員公開策略
+          </button>
+        </div>
       )}
 
       <button
@@ -190,7 +347,7 @@ export default function BotsPage() {
         className="catalog-controls glass-panel"
         data-mobile-open={mobileFiltersOpen}
         id="catalog-filter-panel"
-        aria-label="篩選與排序機器人"
+        aria-label="篩選、搜尋與排序策略"
       >
         <div className="catalog-choice-filter catalog-choice-filter--market">
           <span>市場</span>
@@ -213,13 +370,23 @@ export default function BotsPage() {
             ))}
           </div>
         </div>
-        <label>
+        <label className="catalog-risk-field">
           <span>風險等級</span>
           <select value={risk} onChange={(event) => { const value = event.target.value as RiskFilter; setRisk(value); persist({ risk: value }); }}>
             <option value="all">全部風險</option><option value="低">低風險</option><option value="中">中風險</option><option value="高">高風險</option>
           </select>
         </label>
-        <label>
+        <label className="catalog-search-field">
+          <span>搜尋官方與會員策略</span>
+          <input
+            maxLength={80}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="策略名稱、發布者、交易對或關鍵字"
+            type="search"
+            value={search}
+          />
+        </label>
+        <label className="catalog-tag-field">
           <span>策略類型</span>
           <select value={tag} onChange={(event) => { const value = event.target.value; setTag(value); persist({ tag: value }); }}>
             <option value="all">全部策略</option>
@@ -243,7 +410,7 @@ export default function BotsPage() {
             ))}
           </div>
         </div>
-        <label>
+        <label className="catalog-sort-field">
           <span>排序方式</span>
           <select value={sort} onChange={(event) => { const value = event.target.value as SortOption; setSort(value); persist({ sort: value }); }}>
             <option value="recommended">熱門推薦：完成度與風險調整</option>
@@ -279,7 +446,7 @@ export default function BotsPage() {
         <p aria-live="polite">{user ? `顯示 ${displayedBots.length} / ${visibleBots.length} 組符合策略` : `目前顯示 ${displayedBots.length} 組符合策略`}</p>
         <div className="catalog-summary__actions">
           <Link aria-label="收藏策略" className="text-button catalog-favorites-link" href="/favorites">
-            <span>收藏</span><span>策略</span><strong>{favorites.length}</strong>
+            <span>收藏</span><span>策略</span><strong>{favorites.length + communityFavorites.length}</strong>
           </Link>
           <button className="text-button" onClick={resetFilters} type="button">重設篩選</button>
         </div>
@@ -320,7 +487,7 @@ export default function BotsPage() {
                   <h2 id="catalog-login-title">登入後，繼續探索完整策略庫</h2>
                   <p>查看更多現貨與合約策略、保存收藏偏好，並將策略直接帶入組裝車間。</p>
                   <ul aria-label="會員功能">
-                    <li>完整策略比較</li><li>收藏跨裝置保存</li><li>一鍵帶入組裝</li>
+                    <li>完整策略比較</li><li>收藏保存在此瀏覽器</li><li>一鍵帶入組裝</li>
                   </ul>
                 </div>
                 <div className="catalog-login-gate__action">

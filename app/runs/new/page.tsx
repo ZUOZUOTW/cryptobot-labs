@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 export default function NewRunPage() {
   const demoMode = demoModeEnabled();
   const templates: CloudAutomationTemplate[] = BOT_CATALOG
+    .filter((bot) => bot.market === "futures")
     .sort((left, right) => left.leverage - right.leverage || right.metrics.stability - left.metrics.stability)
     .map((bot) => ({
       config: {
@@ -32,7 +33,7 @@ export default function NewRunPage() {
     <header className="run-task-heading">
       <div><p className="eyebrow">NEW AUTOMATION</p><h1>啟動新策略</h1>
         <p>依序確認策略、WEEX 權限、歷史回測與風控上限，完成後回到控制中心監看。</p></div>
-      <span>USDT 真倉</span>
+      <span>SUSDT 合約 Demo</span>
     </header>
     {demoMode ? <section className="runs-empty glass-panel"><h2>展示模式不啟動真倉策略</h2>
       <p>你仍可在組裝車間建立與測試模擬策略。</p>

@@ -1,8 +1,18 @@
 "use client";
 
 import Image from "next/image";
-import { useRef, useState, type ChangeEvent } from "react";
-import { importBotPackage } from "../../lib/bot-package";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+import {
+  buildBotPackageFiles,
+  exportBotPackage,
+  importBotPackage,
+  type BotPackageFile,
+} from "../../lib/bot-package";
 import { validateConfig } from "../../lib/strategy-validation";
 import type { BacktestReport, BotConfig } from "../../lib/types";
 import { demoAuthPath } from "../../lib/demo-auth";
@@ -11,16 +21,25 @@ import { backtestConfigFingerprint } from "../../lib/backtest";
 import { saveDemoStrategy } from "../../lib/demo-strategies";
 import type { SignalFlowCheckState } from "./StrategySummary";
 import { validateStrategyName } from "../../lib/strategy-name";
+import { downloadBlob } from "../../lib/browser-download";
+import { DownloadConfirmationDialog } from "../DownloadConfirmationDialog";
+import { PackageFallbackFiles } from "../PackageFallbackFiles";
 
 interface PackagePanelProps {
   config: BotConfig;
   flowCheckState?: SignalFlowCheckState;
+  formalEvidence?: { strategyVersionId: string; backtestJobId: string };
   report: BacktestReport | null;
-  onImport: (config: BotConfig, report: BacktestReport) => { ok: true } | { ok: false; reason: string };
+  onImport: (config: BotConfig, report: BacktestReport | null) => { ok: true } | { ok: false; reason: string };
 }
 
 type WorkState = "idle" | "working" | "complete" | "error";
 interface SavedVersion { id: string; configHash: string }
+interface PublishedPublication {
+  slug: string;
+  updatedAt: number;
+  canActivateApprovedReferral: boolean;
+}
 
 const ACTION_MASCOTS = {
   save: "/mascots/ai-strategy-vault-v1.webp",
@@ -36,23 +55,106 @@ function ActionVisual({ type }: { type: keyof typeof ACTION_MASCOTS }) {
   );
 }
 
-export function PackagePanel({ config, flowCheckState = "untested", report, onImport }: PackagePanelProps) {
+const safeFilenameStem = (config: BotConfig): string => (
+  config.id.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "weex-strategy"
+);
+
+export function PackagePanel({ config, flowCheckState = "untested", formalEvidence, report, onImport }: PackagePanelProps) {
   const { mode: authMode, user } = usePlatformAuth();
+  const fingerprint = backtestConfigFingerprint(config);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [exportState, setExportState] = useState<WorkState>("idle");
+  const [backupState, setBackupState] = useState<WorkState>("idle");
   const [actionState, setActionState] = useState<WorkState>("idle");
   const [publishState, setPublishState] = useState<WorkState>("idle");
   const [shareState, setShareState] = useState<WorkState>("idle");
+  const [referralState, setReferralState] = useState<WorkState>("idle");
   const [importState, setImportState] = useState<WorkState>("idle");
   const [message, setMessage] = useState("");
   const [description, setDescription] = useState("");
-  const [weexReferralUrl, setWeexReferralUrl] = useState("");
-  const [publication, setPublication] = useState<{ fingerprint: string; url: string } | null>(null);
+  const [fallback, setFallback] = useState<{ fingerprint: string; files: BotPackageFile[] } | null>(null);
+  const [publication, setPublication] = useState<{
+    fingerprint: string;
+    slug: string;
+    url: string;
+    canActivateApprovedReferral: boolean;
+  } | null>(null);
+  const exportTriggerRef = useRef<HTMLButtonElement>(null);
+  const exportInFlightRef = useRef(false);
+  const restoreAfterExportRef = useRef(false);
+  const latestFingerprintRef = useRef(fingerprint);
   const saveAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const savedVersionRef = useRef<{ fingerprint: string; version: SavedVersion } | null>(null);
   const configurationReady = validateConfig(config).valid;
   const strategyName = validateStrategyName(config.name);
-  const fingerprint = backtestConfigFingerprint(config);
+  const exportableReport = report;
+  const canExport = exportableReport !== null && configurationReady && exportState !== "working";
   const publishedUrl = publication?.fingerprint === fingerprint ? publication.url : "";
   const flowCheckLabel = flowCheckState === "passed" ? "通過測試" : flowCheckState === "failed" ? "未通過測試" : "未測試";
+
+  useEffect(() => {
+    if (confirmationOpen || exportState === "working" || !restoreAfterExportRef.current) return;
+    restoreAfterExportRef.current = false;
+    exportTriggerRef.current?.focus();
+  }, [confirmationOpen, exportState]);
+
+  useEffect(() => {
+    latestFingerprintRef.current = fingerprint;
+  }, [fingerprint]);
+
+  const confirmExport = async () => {
+    if (!exportableReport || !canExport || exportInFlightRef.current) return;
+    exportInFlightRef.current = true;
+    const exportFingerprint = fingerprint;
+    const exportConfig = config;
+    const packageReport = exportableReport;
+    restoreAfterExportRef.current = true;
+    setConfirmationOpen(false);
+    setExportState("working");
+    setImportState((current) => current === "error" ? "idle" : current);
+    setBackupState((current) => current === "error" ? "idle" : current);
+    setMessage("");
+    try {
+      const blob = await exportBotPackage(exportConfig, packageReport);
+      if (latestFingerprintRef.current !== exportFingerprint) {
+        throw new Error("策略設定已變更，請以目前設定重新完成回測後再匯出。");
+      }
+      downloadBlob(blob, `${safeFilenameStem(exportConfig)}-package.zip`);
+      setFallback(null);
+      setExportState("complete");
+      setMessage("完整策略包已開始下載。");
+    } catch (error) {
+      let nextFallback: BotPackageFile[] = [];
+      if (latestFingerprintRef.current !== exportFingerprint) {
+        setFallback(null);
+      } else {
+        try {
+          nextFallback = await buildBotPackageFiles(exportConfig, packageReport);
+        } catch {
+          nextFallback = [];
+        }
+        setFallback(nextFallback.length > 0 ? { fingerprint: exportFingerprint, files: nextFallback } : null);
+      }
+      setExportState("error");
+      setMessage(error instanceof Error ? error.message : "無法產生策略套件，請重試。");
+    } finally {
+      exportInFlightRef.current = false;
+    }
+  };
+
+  const downloadDraftBackup = () => {
+    setMessage("");
+    setBackupState("working");
+    try {
+      const blob = new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: "application/json" });
+      downloadBlob(blob, `${safeFilenameStem(config)}-draft-backup.json`);
+      setBackupState("complete");
+      setMessage("草稿備份 JSON 已開始下載；此檔案不是可執行策略套件。");
+    } catch (error) {
+      setBackupState("error");
+      setMessage(error instanceof Error ? error.message : "草稿備份 JSON 下載失敗");
+    }
+  };
 
   const importPackage = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
@@ -73,15 +175,17 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       const accepted = onImport(imported.config, imported.report);
       if (!accepted.ok) throw new Error(accepted.reason);
       setImportState("complete");
-      setMessage(`已匯入 ${file.name}，策略設定與回測報告已還原。`);
+      setMessage(imported.report
+        ? `已匯入 ${file.name}，策略設定與可重現的模擬報告已還原。`
+        : `已匯入 ${file.name} 的策略設定；跨裝置歷史證據不作為驗證依據，請重新執行行情回測。`);
     } catch (error) {
       setImportState("error");
       setMessage(error instanceof Error ? error.message : "策略套件匯入失敗");
     }
   };
 
-  const hasError = actionState === "error" || publishState === "error"
-    || shareState === "error" || importState === "error";
+  const hasError = exportState === "error" || backupState === "error" || actionState === "error" || publishState === "error"
+    || shareState === "error" || referralState === "error" || importState === "error";
   const requireLogin = () => { window.location.assign(demoAuthPath(`${window.location.pathname}${window.location.search}`)); };
   const parseSavedVersion = (value: unknown): SavedVersion | null => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -136,14 +240,25 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     }
   };
 
-  const validReferralUrl = (value: string): boolean => {
-    try {
-      const url = new URL(value);
-      const hostname = url.hostname.toLowerCase();
-      return url.protocol === "https:" && !url.username && !url.password && !url.hash
-        && (url.port === "" || url.port === "443")
-        && (hostname === "weex.com" || hostname.endsWith(".weex.com"));
-    } catch { return false; }
+  const parsePublishedPublication = (value: unknown): PublishedPublication | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const response = value as { publication?: unknown; capabilities?: unknown };
+    const candidate = response.publication;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const record = candidate as Record<string, unknown>;
+    const capabilities = response.capabilities;
+    const canActivateApprovedReferral = Boolean(capabilities && typeof capabilities === "object"
+      && !Array.isArray(capabilities)
+      && (capabilities as Record<string, unknown>).canActivateApprovedReferral === true);
+    return typeof record.slug === "string" && /^[a-z0-9][a-z0-9-]{7,79}$/.test(record.slug)
+      && Number.isSafeInteger(record.updatedAt) && Number(record.updatedAt) >= 0
+      ? { slug: record.slug, updatedAt: record.updatedAt as number, canActivateApprovedReferral }
+      : null;
+  };
+  const publicationUrl = ({ slug, updatedAt }: PublishedPublication): string => {
+    const url = new URL(`/strategies/${encodeURIComponent(slug)}`, window.location.origin);
+    url.searchParams.set("v", String(updatedAt));
+    return url.toString();
   };
 
   const publishStrategy = async () => {
@@ -167,11 +282,6 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       setPublishState("error");
       return;
     }
-    if (!validReferralUrl(weexReferralUrl.trim())) {
-      setMessage("請輸入有效的 WEEX HTTPS 邀請註冊連結；為避免錯誤導流，不接受其他網域。");
-      setPublishState("error");
-      return;
-    }
     const publicDescription = description.trim()
       || `${config.name} 使用 ${config.symbol} ${config.timeframe} 週期，由 ${config.blocks.length} 個進出場、倉位與風控模組組成。`;
     if (publicDescription.length < 20 || publicDescription.length > 400) {
@@ -183,37 +293,46 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     setPublishState("working");
     setMessage("正在固定策略版本並建立正式歷史回測證據…");
     try {
-      const version = await saveStrategy(false);
-      if (!version) throw new Error("save_failed");
-      const backtestKey = `publish-backtest-${crypto.randomUUID()}`;
-      const backtestResponse = await fetch("/api/backtests", {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": backtestKey },
-        body: JSON.stringify({
-          strategyVersionId: version.id,
-          market: config.market,
-          symbol: config.symbol,
-          interval: config.timeframe,
-          startTime: report.evidence.startTime,
-          endTime: report.evidence.endTime,
-          initialCapital: "10000",
-          feeRate: report.evidence.feeRate,
-          slippageRate: report.evidence.slippageRate,
-          leverage: String(config.leverage),
-          fundingMode: config.market === "futures" && report.evidence.fundingIncluded ? "historical" : "none",
-          gapPolicy: "fail",
-        }),
-      });
-      if (backtestResponse.status === 401) { requireLogin(); return; }
-      const backtestBody = await backtestResponse.json().catch(() => null) as {
-        backtest?: { id?: unknown; status?: unknown };
-        error?: { code?: unknown };
-      } | null;
-      if (!backtestResponse.ok || typeof backtestBody?.backtest?.id !== "string"
-        || backtestBody.backtest.status !== "succeeded") {
-        throw new Error(typeof backtestBody?.error?.code === "string"
-          ? backtestBody.error.code : "verified_backtest_failed");
+      let strategyVersionId: string;
+      let backtestJobId: string;
+      if (formalEvidence) {
+        strategyVersionId = formalEvidence.strategyVersionId;
+        backtestJobId = formalEvidence.backtestJobId;
+      } else {
+        const version = await saveStrategy(false);
+        if (!version) throw new Error("save_failed");
+        const backtestKey = `publish-backtest-${crypto.randomUUID()}`;
+        const backtestResponse = await fetch("/api/backtests", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": backtestKey },
+          body: JSON.stringify({
+            strategyVersionId: version.id,
+            market: config.market,
+            symbol: config.symbol,
+            interval: config.timeframe,
+            startTime: report.evidence.startTime,
+            endTime: report.evidence.endTime,
+            initialCapital: "10000",
+            feeRate: report.evidence.feeRate,
+            slippageRate: report.evidence.slippageRate,
+            leverage: String(config.leverage),
+            fundingMode: config.market === "futures" && report.evidence.fundingIncluded ? "historical" : "none",
+            gapPolicy: "fail",
+          }),
+        });
+        if (backtestResponse.status === 401) { requireLogin(); return; }
+        const backtestBody = await backtestResponse.json().catch(() => null) as {
+          backtest?: { id?: unknown; status?: unknown };
+          error?: { code?: unknown };
+        } | null;
+        if (!backtestResponse.ok || typeof backtestBody?.backtest?.id !== "string"
+          || backtestBody.backtest.status !== "succeeded") {
+          throw new Error(typeof backtestBody?.error?.code === "string"
+            ? backtestBody.error.code : "verified_backtest_failed");
+        }
+        strategyVersionId = version.id;
+        backtestJobId = backtestBody.backtest.id;
       }
       setMessage("歷史證據完成，正在發布至策略列表並建立社群分享頁…");
       const publicationResponse = await fetch("/api/strategy-publications", {
@@ -221,32 +340,33 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          strategyVersionId: version.id,
-          backtestJobId: backtestBody.backtest.id,
+          strategyVersionId,
+          backtestJobId,
           description: publicDescription,
-          weexReferralUrl: weexReferralUrl.trim(),
         }),
       });
       if (publicationResponse.status === 401) { requireLogin(); return; }
-      const publicationBody = await publicationResponse.json().catch(() => null) as {
-        publication?: { slug?: unknown };
-      } | null;
-      if (!publicationResponse.ok || typeof publicationBody?.publication?.slug !== "string") {
-        throw new Error("publish_failed");
-      }
-      const url = `${window.location.origin}/strategies/${encodeURIComponent(publicationBody.publication.slug)}`;
-      setPublication({ fingerprint, url });
+      const published = parsePublishedPublication(await publicationResponse.json().catch(() => null));
+      if (!publicationResponse.ok || !published) throw new Error("publish_failed");
+      const url = publicationUrl(published);
+      setPublication({
+        fingerprint,
+        slug: published.slug,
+        url,
+        canActivateApprovedReferral: published.canActivateApprovedReferral,
+      });
       setPublishState("complete");
       setShareState("idle");
+      setReferralState("idle");
       setMessage("策略已發布到公開策略列表；你現在可以查看公開頁或分享策略連結。");
     } catch {
       setPublishState("error");
-      setMessage("發布未完成；策略不會出現在公開列表。請確認行情資料與 WEEX 邀請連結後重試。");
+      setMessage("發布未完成；策略不會出現在公開列表。請確認行情資料後重試。");
     }
   };
 
   const sharePublishedStrategy = async () => {
-    if (!publishedUrl) {
+    if (!publishedUrl || !publication || publication.fingerprint !== fingerprint) {
       setShareState("error");
       setMessage("請先將目前策略版本發布到公開策略列表，再分享策略連結。");
       return;
@@ -259,6 +379,41 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
     } catch {
       setShareState("error");
       setMessage(`無法自動複製，請手動分享此策略連結：${publishedUrl}`);
+    }
+  };
+
+  const activateApprovedReferral = async () => {
+    if (!publishedUrl || !publication || publication.fingerprint !== fingerprint
+      || !publication.canActivateApprovedReferral) return;
+    setReferralState("working");
+    setMessage("");
+    try {
+      const response = await fetch(`/api/strategy-publications/${encodeURIComponent(publication.slug)}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "activate-approved-referral" }),
+      });
+      if (response.status === 401) { requireLogin(); return; }
+      const updated = parsePublishedPublication(await response.json().catch(() => null));
+      if (!response.ok || !updated || updated.slug !== publication.slug) {
+        if (response.status === 403) {
+          setPublication((current) => current ? { ...current, canActivateApprovedReferral: false } : current);
+        }
+        throw new Error("referral_activation_failed");
+      }
+      const url = publicationUrl(updated);
+      setPublication({
+        fingerprint,
+        slug: updated.slug,
+        url,
+        canActivateApprovedReferral: true,
+      });
+      setReferralState("complete");
+      setMessage("已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。");
+    } catch {
+      setReferralState("error");
+      setMessage("核准的推薦來源無法套用；公開策略未變更。");
     }
   };
   return (
@@ -320,17 +475,6 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
                   value={description}
                 />
               </label>
-              <label>
-                <span>你的 WEEX 邀請註冊連結</span>
-                <input
-                  autoComplete="url"
-                  inputMode="url"
-                  onChange={(event) => setWeexReferralUrl(event.target.value)}
-                  placeholder="https://www.weex.com/..."
-                  type="url"
-                  value={weexReferralUrl}
-                />
-              </label>
             </div>
           )}
           <small>訪客只能查看；自訂原始碼、Email 與交易憑證不會公開</small>
@@ -364,7 +508,7 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           <h3 id="workshop-share-strategy-title">分享策略連結</h3>
           <p>
             {publishedUrl
-              ? "分享目前已發布版本的公開網址；這個動作不會修改或重新發布策略。"
+              ? "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。"
               : "發布完成後，才可複製公開策略網址並分享給其他用戶。"}
           </p>
         </div>
@@ -372,15 +516,61 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
           {publishedUrl
             ? <a className="button button--secondary" href={publishedUrl}>查看公開策略</a>
             : <span>尚未發布，暫無可分享連結</span>}
+          {publishedUrl && publication?.canActivateApprovedReferral && (
+            <button
+              aria-label="套用已核准推薦來源"
+              className="button button--secondary"
+              disabled={referralState === "working" || shareState === "working"}
+              onClick={() => void activateApprovedReferral()}
+              type="button"
+            >
+              {referralState === "working" ? "正在套用核准來源…" : "套用已核准推薦來源"}
+            </button>
+          )}
           <button
             aria-label="複製策略分享連結"
             className="button button--primary"
-            disabled={!publishedUrl || shareState === "working"}
+            disabled={!publishedUrl || shareState === "working" || referralState === "working"}
             onClick={() => void sharePublishedStrategy()}
             type="button"
           >
             {shareState === "working" ? "正在複製…" : "複製策略連結"}
           </button>
+        </div>
+      </section>
+
+      <section className="workshop-portable-package" aria-labelledby="package-export-title">
+        <div>
+          <h3 id="package-export-title">匯出與備份</h3>
+          <p>完整策略包會綁定目前設定與對應回測；草稿備份 JSON 則可隨時保存尚未完成或未通過驗證的內容。</p>
+        </div>
+        <div className="package-export-actions">
+          <button
+            className="button button--primary"
+            data-package-export-trigger="true"
+            disabled={!canExport}
+            onClick={() => {
+              restoreAfterExportRef.current = false;
+              setConfirmationOpen(true);
+            }}
+            ref={exportTriggerRef}
+            type="button"
+          >
+            {exportState === "working" ? "產生套件中…" : "下載完整策略包"}
+          </button>
+          <button
+            className="button button--secondary"
+            disabled={backupState === "working"}
+            onClick={downloadDraftBackup}
+            type="button"
+          >
+            {backupState === "working" ? "準備草稿備份中…" : "下載草稿備份 JSON"}
+          </button>
+        </div>
+        <div className="workshop-portable-package__notes">
+          {!exportableReport && <small>完整策略包需要先完成目前設定的歷史行情回測；草稿備份不受此限制。</small>}
+          {exportableReport && !configurationReady && <small>設定已變更或尚未通過驗證，請修正並重新回測後再匯出完整策略包。</small>}
+          <small>草稿備份不是可執行策略套件，也不含交易憑證。</small>
         </div>
       </section>
 
@@ -402,6 +592,19 @@ export function PackagePanel({ config, flowCheckState = "untested", report, onIm
       </div></details>
 
       {message && <p className="package-message" data-tone={hasError ? "danger" : "success"} role={hasError ? "alert" : "status"}>{message}</p>}
+      {fallback?.fingerprint === fingerprint && <PackageFallbackFiles files={fallback.files} />}
+
+      {confirmationOpen && (
+        <DownloadConfirmationDialog
+          description="策略包包含目前設定、JavaScript 原始碼、歷史行情回測資料、說明與版本資訊。"
+          id="package-confirmation-title"
+          onCancel={() => setConfirmationOpen(false)}
+          onConfirm={() => void confirmExport()}
+          restoreFocusOnConfirm={false}
+          title="確認下載完整策略包"
+          triggerRef={exportTriggerRef}
+        />
+      )}
     </section>
   );
 }

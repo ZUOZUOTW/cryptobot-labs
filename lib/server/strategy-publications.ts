@@ -1,4 +1,8 @@
-import type { StrategyPublicationRecord } from "../../db/repositories";
+import type {
+  StrategyPublicationCursor,
+  StrategyPublicationListOptions,
+  StrategyPublicationRecord,
+} from "../../db/repositories";
 import type { BotConfig } from "../types";
 import type {
   PublicStrategyEquityPoint,
@@ -7,11 +11,166 @@ import type {
 } from "../strategy-publications";
 import { validateConfig } from "../strategy-validation";
 import { resolvedTradeDirection } from "../trade-direction";
-import { HttpProblem } from "./http";
+import {
+  hasFormalBacktestEvidence,
+  InvalidFormalBacktestEvidenceError,
+  type FormalEvidenceGateRow,
+} from "./formal-evidence-gate";
+import {
+  validatePublicPublicationDescription,
+  validatePublicPublisherName,
+  validatePublicStrategyName,
+} from "../publication-moderation";
+import { HttpProblem, errorResponse } from "./http";
+import {
+  normalizeDiscoverySearch,
+  STRATEGY_DISCOVERY_SORTS,
+  type StrategyDiscoverySort,
+} from "../strategy-discovery-query";
+import type { Market, RiskLevel } from "../types";
+
+export const publicStrategyFreshnessHeaders = Object.freeze({
+  "cache-control": "no-store, max-age=0",
+  "netlify-cdn-cache-control": "no-store",
+});
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
 const DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const CURSOR = /^[A-Za-z0-9_-]{16,384}$/;
+const INTEGER = /^(?:0|[1-9]\d*)$/;
+
+export const PUBLICATION_LIST_DEFAULT_LIMIT = 12;
+export const PUBLICATION_LIST_MAX_LIMIT = 24;
+export const PUBLICATION_LIST_MAX_EQUITY_POINTS = 120;
+export const PUBLICATION_LIST_MAX_SCAN_PAGES = 5;
+export const PUBLIC_STRATEGY_CACHE_VERSION = "v4";
+
+export class InvalidPublicStrategyTrustMetadataError extends Error {
+  constructor() {
+    super("published strategy trust metadata is invalid");
+    this.name = "InvalidPublicStrategyTrustMetadataError";
+  }
+}
+
+export function publicStrategyPublicationCacheTag(slug: string): string {
+  if (!SLUG.test(slug)) throw new Error("publication slug is invalid");
+  return `public-strategy-publication:${PUBLIC_STRATEGY_CACHE_VERSION}:${slug}`;
+}
+
+const plainObject = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+  && Object.getPrototypeOf(value) === Object.prototype
+);
+
+const base64UrlEncode = (value: string): string => btoa(value)
+  .replace(/\+/g, "-")
+  .replace(/\//g, "_")
+  .replace(/=+$/, "");
+
+const base64UrlDecode = (value: string): string => atob(value
+  .replace(/-/g, "+")
+  .replace(/_/g, "/")
+  .padEnd(Math.ceil(value.length / 4) * 4, "="));
+
+export function encodePublicationCursor(cursor: StrategyPublicationCursor): string {
+  if (!Number.isSafeInteger(cursor.publishedAt) || cursor.publishedAt < 0 || !ID.test(cursor.id)) {
+    throw new Error("publication cursor is invalid");
+  }
+  if (cursor.sort === undefined && cursor.sortValue === undefined) {
+    return base64UrlEncode(JSON.stringify({ v: 1, publishedAt: cursor.publishedAt, id: cursor.id }));
+  }
+  if (cursor.sort === undefined || !STRATEGY_DISCOVERY_SORTS.includes(cursor.sort)
+    || typeof cursor.sortValue !== "number" || !Number.isFinite(cursor.sortValue)) {
+    throw new Error("publication cursor is invalid");
+  }
+  return base64UrlEncode(JSON.stringify({
+    v: 2,
+    sort: cursor.sort,
+    sortValue: cursor.sortValue,
+    publishedAt: cursor.publishedAt,
+    id: cursor.id,
+  }));
+}
+
+export function decodePublicationCursor(value: string): StrategyPublicationCursor {
+  if (!CURSOR.test(value)) throw new HttpProblem(400, "invalid_request");
+  let decoded: unknown;
+  try { decoded = JSON.parse(base64UrlDecode(value)) as unknown; }
+  catch { throw new HttpProblem(400, "invalid_request"); }
+  if (!plainObject(decoded) || !Number.isSafeInteger(decoded.publishedAt) || Number(decoded.publishedAt) < 0
+    || typeof decoded.id !== "string" || !ID.test(decoded.id)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  if (decoded.v === 1 && Object.keys(decoded).sort().join(",") === "id,publishedAt,v") {
+    return { publishedAt: decoded.publishedAt as number, id: decoded.id };
+  }
+  if (decoded.v !== 2 || Object.keys(decoded).sort().join(",") !== "id,publishedAt,sort,sortValue,v"
+    || typeof decoded.sort !== "string" || !STRATEGY_DISCOVERY_SORTS.includes(decoded.sort as StrategyDiscoverySort)
+    || typeof decoded.sortValue !== "number" || !Number.isFinite(decoded.sortValue)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  return {
+    publishedAt: decoded.publishedAt as number,
+    id: decoded.id,
+    sort: decoded.sort as StrategyDiscoverySort,
+    sortValue: decoded.sortValue,
+  };
+}
+
+export function parsePublicationListRequest(request: Request): StrategyPublicationListOptions {
+  const url = new URL(request.url);
+  const allowed = new Set(["limit", "cursor", "q", "market", "timeframe", "risk", "sort", "slugs"]);
+  const seen = new Set<string>();
+  for (const [key] of url.searchParams) {
+    if (!allowed.has(key) || seen.has(key)) throw new HttpProblem(400, "invalid_request");
+    seen.add(key);
+  }
+  const rawLimit = url.searchParams.get("limit");
+  if (rawLimit !== null && !INTEGER.test(rawLimit)) throw new HttpProblem(400, "invalid_request");
+  const limit = rawLimit === null ? PUBLICATION_LIST_DEFAULT_LIMIT : Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > PUBLICATION_LIST_MAX_LIMIT) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const rawCursor = url.searchParams.get("cursor");
+  const rawSearch = url.searchParams.get("q");
+  const search = rawSearch === null ? undefined : normalizeDiscoverySearch(rawSearch);
+  if (rawSearch !== null && (search === undefined || search.length < 1 || rawSearch.length > 80)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const rawMarket = url.searchParams.get("market");
+  if (rawMarket !== null && rawMarket !== "spot" && rawMarket !== "futures") throw new HttpProblem(400, "invalid_request");
+  const rawTimeframe = url.searchParams.get("timeframe");
+  if (rawTimeframe !== null && !/^[A-Za-z0-9]{1,16}$/.test(rawTimeframe)) throw new HttpProblem(400, "invalid_request");
+  const rawRisk = url.searchParams.get("risk");
+  if (rawRisk !== null && rawRisk !== "低" && rawRisk !== "中" && rawRisk !== "高") {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const rawSort = url.searchParams.get("sort");
+  if (rawSort !== null && !STRATEGY_DISCOVERY_SORTS.includes(rawSort as StrategyDiscoverySort)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  const sort = rawSort === null ? "latest" as const : rawSort as StrategyDiscoverySort;
+  const rawSlugs = url.searchParams.get("slugs");
+  const slugs = rawSlugs === null ? undefined : rawSlugs.split(",");
+  if (slugs !== undefined && (slugs.length < 1 || slugs.length > 24 || new Set(slugs).size !== slugs.length
+    || slugs.some((slug) => !SLUG.test(slug)))) throw new HttpProblem(400, "invalid_request");
+  const cursor = rawCursor === null ? undefined : decodePublicationCursor(rawCursor);
+  if ((sort === "latest" && cursor?.sort !== undefined)
+    || (sort !== "latest" && cursor !== undefined && cursor.sort !== sort)) {
+    throw new HttpProblem(400, "invalid_request");
+  }
+  return {
+    limit,
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(search === undefined ? {} : { search }),
+    ...(rawMarket === null ? {} : { market: rawMarket as Market }),
+    ...(rawTimeframe === null ? {} : { timeframe: rawTimeframe }),
+    ...(rawRisk === null ? {} : { risk: rawRisk as RiskLevel }),
+    ...(sort === "latest" ? {} : { sort }),
+    ...(slugs === undefined ? {} : { slugs }),
+  };
+}
 
 const parseJson = (value: unknown, maximumLength: number): unknown => {
   if (typeof value === "string") {
@@ -91,28 +250,35 @@ export function parseWeexReferralUrl(value: unknown): string {
   return url.toString();
 }
 
+export function parseWeexReferralUpdateInput(value: unknown): { action: "activate-approved-referral" } {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype) throw new HttpProblem(400, "invalid_request");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).join(",") !== "action"
+    || record.action !== "activate-approved-referral") throw new HttpProblem(400, "invalid_request");
+  return { action: "activate-approved-referral" };
+}
+
 export function parsePublicationInput(value: unknown): {
   strategyVersionId: string;
   backtestJobId: string;
   description: string;
-  weexReferralUrl: string;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.getPrototypeOf(value) !== Object.prototype) throw new HttpProblem(400, "invalid_request");
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join(",") !== "backtestJobId,description,strategyVersionId,weexReferralUrl"
+  if (Object.keys(record).sort().join(",") !== "backtestJobId,description,strategyVersionId"
     || typeof record.strategyVersionId !== "string" || !ID.test(record.strategyVersionId)
     || typeof record.backtestJobId !== "string" || !ID.test(record.backtestJobId)
     || typeof record.description !== "string") throw new HttpProblem(400, "invalid_request");
-  const description = record.description.trim();
-  if (description.length < 20 || description.length > 400 || /[\u0000-\u001f\u007f]/.test(description)) {
+  const description = validatePublicPublicationDescription(record.description);
+  if (!description.valid) {
     throw new HttpProblem(422, "invalid_publication_description");
   }
   return {
     strategyVersionId: record.strategyVersionId,
     backtestJobId: record.backtestJobId,
-    description,
-    weexReferralUrl: parseWeexReferralUrl(record.weexReferralUrl),
+    description: description.value,
   };
 }
 
@@ -123,21 +289,43 @@ export function publicationSlug(id: string): string {
   return slug;
 }
 
-export function toPublicStrategyPublication(record: StrategyPublicationRecord): PublicStrategyPublication {
+export function toPublicStrategyPublication(record: StrategyPublicationRecord, options: {
+  maxEquityPoints?: number;
+} = {}): PublicStrategyPublication {
+  if (!hasFormalBacktestEvidence(record as FormalEvidenceGateRow)) {
+    throw new InvalidFormalBacktestEvidenceError();
+  }
   const config = configOf(record.configJson);
+  const strategyName = validatePublicStrategyName(config.name);
+  const description = validatePublicPublicationDescription(record.description);
+  const publisherName = validatePublicPublisherName(record.publisherName);
+  if (!strategyName.valid || !description.valid || !publisherName.valid) {
+    throw new InvalidPublicStrategyTrustMetadataError();
+  }
   if (config.name !== record.name || config.market !== record.market || config.symbol !== record.symbol) {
     throw new Error("published strategy identity mismatch");
   }
+  const equityCurve = equityOf(record.equityCurveJson);
+  const maximum = options.maxEquityPoints;
+  if (maximum !== undefined && (!Number.isSafeInteger(maximum) || maximum < 2 || maximum > 2_000)) {
+    throw new Error("published strategy equity point limit is invalid");
+  }
+  const sampledEquityCurve = maximum !== undefined && equityCurve.length > maximum
+    ? Array.from({ length: maximum }, (_, index) => (
+        equityCurve[Math.round(index * (equityCurve.length - 1) / (maximum - 1))]!
+      ))
+    : equityCurve;
   return {
     slug: record.slug,
-    name: record.name,
-    description: record.description,
-    publisherName: record.publisherName,
-    weexReferralUrl: parseWeexReferralUrl(record.weexReferralUrl),
+    name: strategyName.value,
+    description: description.value,
+    publisherName: publisherName.value,
+    weexReferralUrl: record.weexReferralUrl === null ? null : parseWeexReferralUrl(record.weexReferralUrl),
     market: config.market,
     symbol: config.symbol,
     timeframe: config.timeframe,
     leverage: config.leverage,
+    risk: record.discoveryRisk,
     logicMode: config.logicMode,
     tradeDirection: resolvedTradeDirection(config),
     hasPrivateSource: config.source !== undefined,
@@ -146,10 +334,143 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord): 
       parameters: block.parameters.map((parameter) => ({ ...parameter })),
     })),
     metrics: metricsOf(record.metricsJson),
-    equityCurve: equityOf(record.equityCurveJson),
+    equityCurve: sampledEquityCurve,
     actualStartAt: record.actualStartAt,
     actualEndAt: record.actualEndAt,
     publishedAt: record.publishedAt,
     updatedAt: record.updatedAt,
   };
+}
+
+type PublicPublicationListRepository = {
+  listPage(options: StrategyPublicationListOptions): Promise<{
+    items: StrategyPublicationRecord[];
+    nextCursor: StrategyPublicationCursor | null;
+  }>;
+};
+
+const sortValueOf = (record: StrategyPublicationRecord, sort: StrategyDiscoverySort): number => {
+  const value = ({
+    recommended: record.discoveryRecommended,
+    "return-desc": record.discoveryTotalReturn,
+    "drawdown-asc": record.discoveryMaxDrawdown,
+    "win-rate-desc": record.discoveryWinRate,
+    "stability-desc": record.discoveryStability,
+  })[sort];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("publication discovery sort projection is invalid");
+  }
+  return value;
+};
+
+const cursorOfRecord = (
+  record: StrategyPublicationRecord,
+  sort: StrategyDiscoverySort | "latest",
+): StrategyPublicationCursor => {
+  const cursor = {
+    publishedAt: record.publishedAt,
+    id: record.id,
+    ...(sort === "latest" ? {} : { sort, sortValue: sortValueOf(record, sort) }),
+  };
+  encodePublicationCursor(cursor);
+  return cursor;
+};
+
+const cursorKey = (cursor: StrategyPublicationCursor): string => (
+  `${cursor.sort ?? "latest"}:${cursor.sortValue ?? ""}:${cursor.publishedAt}:${cursor.id}`
+);
+
+const isStrictlyLaterInPublicationOrder = (
+  candidate: StrategyPublicationCursor,
+  previous: StrategyPublicationCursor,
+): boolean => {
+  if (candidate.sort !== previous.sort || (candidate.sortValue === undefined) !== (previous.sortValue === undefined)) {
+    return false;
+  }
+  if (candidate.sortValue !== undefined && previous.sortValue !== undefined && candidate.sortValue !== previous.sortValue) {
+    return candidate.sort === "drawdown-asc"
+      ? candidate.sortValue > previous.sortValue
+      : candidate.sortValue < previous.sortValue;
+  }
+  return candidate.publishedAt < previous.publishedAt
+    || (candidate.publishedAt === previous.publishedAt && candidate.id < previous.id);
+};
+
+const sameCursor = (left: StrategyPublicationCursor, right: StrategyPublicationCursor): boolean => (
+  left.publishedAt === right.publishedAt && left.id === right.id
+  && left.sort === right.sort && left.sortValue === right.sortValue
+);
+
+const publicationListResponse = (
+  publications: PublicStrategyPublication[],
+  nextCursor: StrategyPublicationCursor | null,
+): Response => Response.json({
+  publications,
+  nextCursor: nextCursor === null ? null : encodePublicationCursor(nextCursor),
+}, { status: 200, headers: publicStrategyFreshnessHeaders });
+
+export async function servePublicStrategyPublicationList(
+  request: Request,
+  repository: PublicPublicationListRepository,
+): Promise<Response> {
+  try {
+    const options = parsePublicationListRequest(request);
+    const sort = options.sort ?? "latest";
+    const publications: PublicStrategyPublication[] = [];
+    let cursor = options.cursor;
+    const visited = new Set(cursor === undefined ? [] : [cursorKey(cursor)]);
+    for (let scan = 0; scan < PUBLICATION_LIST_MAX_SCAN_PAGES; scan += 1) {
+      const page = await repository.listPage({
+        ...options,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      if (page.items.length > options.limit
+        || (page.nextCursor !== null && page.items.length !== options.limit)) {
+        throw new Error("publication repository returned an invalid page");
+      }
+      const itemCursors = page.items.map((record) => cursorOfRecord(record, sort));
+      let previous = cursor;
+      for (const itemCursor of itemCursors) {
+        if (previous !== undefined && !isStrictlyLaterInPublicationOrder(itemCursor, previous)) {
+          throw new Error("publication repository order did not advance");
+        }
+        previous = itemCursor;
+      }
+      const lastCursor = itemCursors.at(-1);
+      if (page.nextCursor !== null && (lastCursor === undefined || !sameCursor(page.nextCursor, lastCursor))) {
+        throw new Error("publication repository cursor does not match its page");
+      }
+
+      for (const [index, record] of page.items.entries()) {
+        try {
+          publications.push(toPublicStrategyPublication(record, {
+            maxEquityPoints: PUBLICATION_LIST_MAX_EQUITY_POINTS,
+          }));
+        } catch (error) {
+          console.error("[strategy-publications] skipped invalid public record", {
+            slug: record.slug,
+            name: error instanceof Error ? error.name : "Error",
+          });
+        }
+        if (publications.length === options.limit) {
+          const nextCursor = index < page.items.length - 1 ? itemCursors[index]! : page.nextCursor;
+          return publicationListResponse(publications, nextCursor);
+        }
+      }
+
+      if (page.nextCursor === null) return publicationListResponse(publications, null);
+      const nextKey = cursorKey(page.nextCursor);
+      if (visited.has(nextKey)) throw new Error("publication repository cursor did not advance");
+      visited.add(nextKey);
+      cursor = page.nextCursor;
+    }
+    return publicationListResponse(publications, cursor ?? null);
+  } catch (error) {
+    if (error instanceof HttpProblem) return errorResponse(error, { status: error.status, code: error.code });
+    console.error("[strategy-publications] list failed", { name: error instanceof Error ? error.name : "Error" });
+    return Response.json({ error: "publication_service_unavailable" }, {
+      status: 503,
+      headers: publicStrategyFreshnessHeaders,
+    });
+  }
 }

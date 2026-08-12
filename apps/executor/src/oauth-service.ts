@@ -67,14 +67,15 @@ export class ExecutorOAuthService {
     const nonceHash = await sha256Base64Url(handoff.nonce);
     await this.options.repository.reserveHandoff({ handoff, nonceHash, now });
 
-    const connectionId = await this.options.repository.prepareConnection({ candidateId: id("conn"),
+    const connection = await this.options.repository.prepareConnection({ candidateId: id("conn"),
       userId: handoff.userId, shardId: this.options.shardId, credentialSource: "oauth", now });
     const stateId = id("woauth");
     const transaction = await createWeexOAuthTransaction();
     const context = Object.freeze({ purpose: "weex_oauth_pkce", oauth_state_id: stateId,
-      connection_id: connectionId, user_id: handoff.userId });
+      connection_id: connection.id, connection_version: String(connection.version), user_id: handoff.userId });
     const envelope = await encryptBackendSecret({ plaintext: transaction.codeVerifier, context, kms: this.options.kms });
-    await this.options.repository.createState({ id: stateId, connectionId, userId: handoff.userId,
+    await this.options.repository.createState({ id: stateId, connectionId: connection.id,
+      connectionVersion: connection.version, userId: handoff.userId,
       stateHash: transaction.stateHash, sessionHash: handoff.sessionHash, redirectUri: this.options.redirectUri,
       expiresAt: now + 600_000, now, envelope, context });
     return buildWeexAuthorizationUrl({ clientId: this.options.clientId!, redirectUri: this.options.redirectUri,
@@ -86,7 +87,7 @@ export class ExecutorOAuthService {
     const stateHash = await sha256Base64Url(input.state);
     const stored = await this.options.repository.findState(stateHash);
     if (!stored || !sameHash(stored.stateHash, stateHash) || stored.expiresAt <= now
-      || !await this.options.repository.consumeState(stored.id, stateHash, now)) {
+      || !await this.options.repository.consumeState(stored.id, stateHash, stored.connectionVersion, now)) {
       return this.result("error", "state_invalid");
     }
     if (input.error || !input.code || !this.options.oauthClient) {
@@ -100,7 +101,7 @@ export class ExecutorOAuthService {
         redirectUri: stored.redirectUri, codeVerifier });
       const api = await this.options.oauthClient.createApiCredentials(token.accessToken);
       const credentialContext = Object.freeze({ purpose: "weex_api_credentials", connection_id: stored.connectionId,
-        user_id: stored.userId, version: "1" });
+        connection_version: String(stored.connectionVersion), user_id: stored.userId, version: "1" });
       const credentials = new WeexCredentials(api.apiKey, api.secret, api.passphrase);
       const credentialEnvelope = await encryptWeexCredentials({ credentials, context: credentialContext, kms: this.options.kms });
       await this.options.repository.completeState({ state: stored, credentialEnvelope, credentialContext,

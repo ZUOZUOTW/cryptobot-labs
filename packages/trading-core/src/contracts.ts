@@ -60,6 +60,12 @@ export interface StrategyInput {
 
 export interface StrategyEvaluator {
   evaluate(input: Readonly<StrategyInput>): Promise<StrategySignal>;
+  /**
+   * Historical engines normally preserve a run when one signal evaluation is
+   * malformed. Sandboxed source code is untrusted executable input, so its
+   * runtime/resource failures must invalidate the entire evidence run instead.
+   */
+  readonly evaluationErrorPolicy?: "reject-signal" | "abort-backtest";
   readonly maximumLookback?: number;
   readonly riskPolicy?: Readonly<{ maximumDailyLossRate?: number }>;
 }

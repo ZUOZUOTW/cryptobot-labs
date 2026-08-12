@@ -6,6 +6,7 @@ import LeaderboardPage from "../app/leaderboard/page";
 import { BOT_CATALOG } from "../data/bots";
 import type { WeexHistoricalPerformance } from "../lib/types";
 import { clearWeexBotPerformanceCache } from "../lib/weex-historical-client";
+import { verifiedHistoricalPerformance } from "./fixtures/verified-historical-performance";
 
 const REAL_RETURNS: Record<string, number> = {
   "momentum-forge": 15.4,
@@ -21,29 +22,16 @@ const REAL_RETURNS: Record<string, number> = {
 };
 const historicalReturn = (botId: string) => REAL_RETURNS[botId] ?? 1;
 
-const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id, {
-  metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
-  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + ((point.value - 100) * 0.1) + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)) })),
-  generatedAt: "2026-07-13T12:00:00.000Z",
-  disclaimer: "WEEX 歷史行情回測，不代表未來績效",
-  evidence: {
-    level: "historical",
-    provider: "WEEX",
-    market: bot.market,
-    symbol: bot.symbol,
-    interval: bot.timeframe,
-    startTime: 1_751_846_400_000,
-    endTime: 1_754_438_400_000,
-    collectedAt: 1_754_438_400_000,
-    candleCount: bot.market === "spot" ? 180 : 720,
-    complete: true,
-    feeRate: "0.001",
-    slippageRate: "0.0005",
-    fundingIncluded: false,
-    datasetDigest: "d".repeat(64),
-    engineVersion: "test",
-  },
-}]));
+const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id,
+  verifiedHistoricalPerformance(bot, {
+    metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
+    equityCurve: bot.equityCurve.map((point, index) => ({
+      ...point,
+      value: 100 + ((point.value - 100) * 0.1)
+        + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)),
+    })),
+  }),
+]));
 
 beforeEach(() => {
   clearWeexBotPerformanceCache();

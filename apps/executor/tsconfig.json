@@ -5,6 +5,7 @@
     "baseUrl": ".",
     "paths": {
       "@cryptobot-labs/weex-client": ["../../packages/weex-client/src/index.ts"],
+      "@cryptobot-labs/weex-client/symbol": ["../../packages/weex-client/src/symbol.ts"],
       "@cryptobot-labs/trading-core": ["../../packages/trading-core/src/index.ts"]
     }
   },

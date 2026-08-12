@@ -1,18 +1,24 @@
 import { existsSync } from "node:fs";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import BotDetailPage, { generateStaticParams } from "../app/bots/[id]/page";
 import { benchmarkSeries } from "../lib/benchmark-series";
 import BotsPage from "../app/bots/page";
 import FavoritesPage from "../app/favorites/page";
+import { PlatformAuthProvider } from "../components/PlatformAuthProvider";
+import { I18nProvider } from "../components/I18nProvider";
 import NotFoundPage from "../app/not-found";
 import Home from "../app/page";
 import { StrategyShareActions } from "../components/StrategyShareActions";
+import { BotDownloadButton } from "../components/BotCard";
 import { BOT_CATALOG } from "../data/bots";
+import { STRATEGY_PRESETS } from "../data/strategies";
 import { signInDemo } from "../lib/demo-auth";
+import type { PublicStrategyPublication } from "../lib/strategy-publications";
 import type { WeexHistoricalPerformance } from "../lib/types";
 import { clearWeexBotPerformanceCache } from "../lib/weex-historical-client";
+import { verifiedHistoricalPerformance } from "./fixtures/verified-historical-performance";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -31,18 +37,48 @@ const REAL_RETURNS: Record<string, number> = {
 };
 const historicalReturn = (botId: string) => REAL_RETURNS[botId] ?? 1;
 
-const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id, {
-  metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
-  equityCurve: bot.equityCurve.map((point, index) => ({ ...point, value: 100 + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)) })),
-  generatedAt: "2026-07-13T12:00:00.000Z",
-  disclaimer: "WEEX 歷史行情回測，不代表未來績效",
-  evidence: {
-    level: "historical", provider: "WEEX", market: bot.market, symbol: bot.symbol, interval: bot.timeframe,
-    startTime: 1_751_846_400_000, endTime: 1_754_438_400_000, collectedAt: 1_754_438_400_000,
-    candleCount: bot.market === "spot" ? 180 : 720, complete: true, feeRate: "0.001", slippageRate: "0.0005",
-    fundingIncluded: false, datasetDigest: "d".repeat(64), engineVersion: "test",
+const performanceFixture = (): Record<string, WeexHistoricalPerformance> => Object.fromEntries(BOT_CATALOG.map((bot) => [bot.id,
+  verifiedHistoricalPerformance(bot, {
+    metrics: { ...bot.metrics, totalReturn: historicalReturn(bot.id) },
+    equityCurve: bot.equityCurve.map((point, index) => ({
+      ...point,
+      value: 100 + (historicalReturn(bot.id) * index / Math.max(bot.equityCurve.length - 1, 1)),
+    })),
+  }),
+]));
+
+const ownedPublication: PublicStrategyPublication = {
+  slug: "strategy-ownedrelease",
+  name: "我的公開雙向策略",
+  description: "這是目前會員發布並完成公開歷史行情驗證的策略版本。",
+  publisherName: "會員 A",
+  weexReferralUrl: null,
+  market: STRATEGY_PRESETS[0].market,
+  symbol: STRATEGY_PRESETS[0].symbol,
+  timeframe: STRATEGY_PRESETS[0].timeframe,
+  leverage: STRATEGY_PRESETS[0].leverage,
+  logicMode: STRATEGY_PRESETS[0].logicMode,
+  tradeDirection: "both",
+  hasPrivateSource: false,
+  blocks: STRATEGY_PRESETS[0].blocks,
+  metrics: {
+    totalReturn: "0.12",
+    annualizedReturn: "0.24",
+    maxDrawdown: "-0.08",
+    winRate: "0.56",
+    profitFactor: "1.4",
+    sharpe: "1.2",
+    trades: 18,
   },
-}]));
+  equityCurve: [
+    { timestamp: 1_700_000_000_000, equity: "10000" },
+    { timestamp: 1_700_086_400_000, equity: "11200" },
+  ],
+  actualStartAt: 1_700_000_000_000,
+  actualEndAt: 1_700_086_400_000,
+  publishedAt: 1_700_086_400_000,
+  updatedAt: 1_700_086_400_000,
+};
 
 beforeEach(() => {
   localStorage.clear();
@@ -109,8 +145,53 @@ describe("landing page", () => {
     expect(within(featured).getAllByRole("link", { name: /查看策略/ })).toHaveLength(3);
     expect(within(featured).getAllByRole("link", { name: /直接套用/ })).toHaveLength(3);
     expect(within(featured).getAllByRole("button", { name: /啟動策略/ })).toHaveLength(3);
-    expect(within(featured).queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
+    expect(within(featured).getAllByRole("button", { name: /下載策略/ })).toHaveLength(3);
     expect(within(featured).getAllByText("公開歷史行情回測，不代表未來績效")).toHaveLength(3);
+  });
+
+  it("downloads an importable official package only after verified historical evidence and confirmation", async () => {
+    const bot = BOT_CATALOG[0]!;
+    const performance = performanceFixture()[bot.id]!;
+    const objectUrl = "blob:verified-official-package";
+    let downloadedBlob: Blob | undefined;
+    let filename = "";
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn((blob: Blob) => {
+      downloadedBlob = blob;
+      return objectUrl;
+    }) });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filename = this.download; });
+    const user = userEvent.setup();
+    render(<BotDownloadButton bot={bot} historicalPerformance={performance} />);
+
+    const trigger = screen.getByRole("button", { name: `下載策略：${bot.name}` });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: `確認下載 ${bot.name}` });
+    expect(dialog).toHaveTextContent("已驗證的 WEEX 歷史行情回測證據");
+    await user.click(within(dialog).getByRole("button", { name: "確認下載" }));
+
+    await waitFor(() => expect(downloadedBlob).toBeDefined());
+    expect(filename).toBe(`${bot.id}-weex-strategy.zip`);
+    const imported = await import("../lib/bot-package").then(({ importBotPackage }) =>
+      importBotPackage(new File([downloadedBlob!], filename, { type: "application/zip" })));
+    expect(imported.config.id).toBe(bot.id);
+    expect(imported.report).toBeNull();
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith(objectUrl));
+    expect(trigger).toHaveFocus();
+  });
+
+  it("does not expose an official package download without verified performance", () => {
+    const { container } = render(<BotDownloadButton bot={BOT_CATALOG[0]!} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("does not expose an official download for the same market identity with a different exact config hash", () => {
+    const bot = BOT_CATALOG[0]!;
+    const performance = verifiedHistoricalPerformance(bot);
+    const changed = { ...bot, leverage: bot.leverage + 1 };
+    const { container } = render(<BotDownloadButton bot={changed} historicalPerformance={performance} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("keeps the removed ranking preview off the homepage", async () => {
@@ -212,7 +293,183 @@ describe("bot catalog route", () => {
     expect(screen.getAllByRole("article")).toHaveLength(20);
     expect(screen.queryByRole("heading", { name: "登入後，繼續探索完整策略庫" })).not.toBeInTheDocument();
     expect(screen.getByText("顯示 20 / 20 組符合策略")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /啟動策略/ })).toHaveLength(20);
+    expect(screen.getAllByRole("button", { name: /啟動策略/ }))
+      .toHaveLength(BOT_CATALOG.filter(({ market }) => market === "futures").length);
+  });
+
+  it("shows newly published community strategies with an uncached index request", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/strategy-publications?sort=recommended") {
+        return new Response(JSON.stringify({ publications: [ownedPublication] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看公開策略" }))
+      .toHaveAttribute("href", "/strategies/strategy-ownedrelease");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/strategy-publications?sort=recommended",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("applies search and market filters to official and server-paginated member strategies", async () => {
+    const user = userEvent.setup();
+    const requests: string[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith("/api/strategy-publications")) {
+        const query = new URL(url, "https://app.example.test").searchParams;
+        const matches = query.get("q") === "會員 A" && query.get("market") === "futures";
+        return new Response(JSON.stringify({ publications: matches ? [{ ...ownedPublication, market: "futures" }] : [], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ performances: performanceFixture(), updatedAt: "2026-07-13T12:00:00.000Z" }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    await user.type(screen.getByRole("searchbox", { name: "搜尋官方與會員策略" }), "會員 A");
+    await user.click(screen.getByRole("button", { name: /^合約/ }));
+
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(requests).toContain("/api/strategy-publications?q=%E6%9C%83%E5%93%A1+A&market=futures&sort=recommended");
+    expect(screen.getByText("沒有符合條件的策略")).toBeInTheDocument();
+  });
+
+  it("favorites a member publication locally and discloses that favorites do not sync across devices", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (String(input).startsWith("/api/strategy-publications")) {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ performances: performanceFixture(), updatedAt: "2026-07-13T12:00:00.000Z" }), { status: 200 });
+    });
+    const user = userEvent.setup();
+    const { unmount } = render(<BotsPage />);
+    await user.click(await screen.findByRole("button", { name: "收藏 我的公開雙向策略" }));
+    expect(JSON.parse(localStorage.getItem("cryptobot-labs:discovery:v1") ?? "{}")).toMatchObject({
+      communityFavorites: ["strategy-ownedrelease"],
+    });
+    unmount();
+
+    render(<FavoritesPage />);
+    expect(screen.getByText(/收藏不會跨裝置同步/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "取消收藏 我的公開雙向策略" }));
+    expect(screen.queryByRole("heading", { name: "我的公開雙向策略" })).not.toBeInTheDocument();
+  });
+
+  it("loads cursor pages once, removes duplicate publications, and announces the end", async () => {
+    const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6MTIzfQ";
+    const nextPublication: PublicStrategyPublication = {
+      ...ownedPublication,
+      slug: "strategy-secondrelease",
+      name: "第二頁公開策略",
+      publishedAt: ownedPublication.publishedAt - 1,
+      updatedAt: ownedPublication.updatedAt - 1,
+    };
+    let resolveMore: (response: Response) => void = () => undefined;
+    const moreResponse = new Promise<Response>((resolve) => { resolveMore = resolve; });
+    let moreRequests = 0;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications?sort=recommended") {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: cursor }), { status: 200 });
+      }
+      if (url === `/api/strategy-publications?sort=recommended&cursor=${cursor}`) {
+        moreRequests += 1;
+        return moreResponse;
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    const loadMore = await screen.findByRole("button", { name: "載入更多會員策略" });
+    fireEvent.click(loadMore);
+    fireEvent.click(loadMore);
+    expect(moreRequests).toBe(1);
+    expect(screen.getByRole("button", { name: "正在載入更多會員策略…" })).toBeDisabled();
+    resolveMore(new Response(JSON.stringify({
+      publications: [ownedPublication, nextPublication],
+      nextCursor: null,
+    }), { status: 200 }));
+
+    expect(await screen.findByRole("heading", { name: "第二頁公開策略" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "我的公開雙向策略" })).toHaveLength(1);
+    expect(screen.getByText("已顯示全部會員公開策略")).toHaveAttribute("role", "status");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      `/api/strategy-publications?sort=recommended&cursor=${cursor}`,
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("keeps pagination reachable when the first public page is empty but has a continuation", async () => {
+    const user = userEvent.setup();
+    const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6Nzg5fQ";
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications?sort=recommended") {
+        return new Response(JSON.stringify({ publications: [], nextCursor: cursor }), { status: 200 });
+      }
+      if (url === `/api/strategy-publications?sort=recommended&cursor=${cursor}`) {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    expect(await screen.findByRole("heading", { name: "會員公開策略" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "載入更多會員策略" }));
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(screen.getByText("已顯示全部會員公開策略")).toBeInTheDocument();
+  });
+
+  it("keeps the cursor available when loading more fails and supports an explicit retry", async () => {
+    const user = userEvent.setup();
+    const cursor = "eyJ2IjoxLCJwdWJsaXNoZWRBdCI6NDU2fQ";
+    const nextPublication: PublicStrategyPublication = {
+      ...ownedPublication,
+      slug: "strategy-retriedpage",
+      name: "重試後載入策略",
+      publishedAt: ownedPublication.publishedAt - 1,
+      updatedAt: ownedPublication.updatedAt - 1,
+    };
+    let moreAttempts = 0;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/strategy-publications?sort=recommended") {
+        return new Response(JSON.stringify({ publications: [ownedPublication], nextCursor: cursor }), { status: 200 });
+      }
+      if (url === `/api/strategy-publications?sort=recommended&cursor=${cursor}`) {
+        moreAttempts += 1;
+        return moreAttempts === 1
+          ? new Response(JSON.stringify({ publications: [], nextCursor: null }), { status: 503 })
+          : new Response(JSON.stringify({ publications: [nextPublication], nextCursor: null }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+
+    render(<BotsPage />);
+    await user.click(await screen.findByRole("button", { name: "載入更多會員策略" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("無法載入更多會員策略，請稍後重試。");
+    await user.click(screen.getByRole("button", { name: "重試載入更多會員策略" }));
+    expect(await screen.findByRole("heading", { name: "重試後載入策略" })).toBeInTheDocument();
+    expect(moreAttempts).toBe(2);
+    expect(screen.getByText("已顯示全部會員公開策略")).toBeInTheDocument();
   });
 
   it("sorts visible bots from derived catalog data", async () => {
@@ -317,6 +574,36 @@ describe("favorite strategies route", () => {
     expect(await screen.findByRole("heading", { name: "尚未收藏任何策略" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "探索策略" })).toHaveAttribute("href", "/bots");
   });
+
+  it("lists only the signed-in member's public releases under My Strategies", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/strategy-publications/mine") {
+        return new Response(JSON.stringify({ publications: [ownedPublication] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        performances: performanceFixture(),
+        updatedAt: "2026-07-13T12:00:00.000Z",
+      }), { status: 200 });
+    });
+    const user = userEvent.setup();
+    render(
+      <PlatformAuthProvider
+        initialUser={{ id: "usr_a", email: "member@example.test", displayName: "會員 A" }}
+        mode="production"
+      >
+        <FavoritesPage />
+      </PlatformAuthProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /我的策略/ }));
+    expect(await screen.findByRole("heading", { name: "我的公開雙向策略" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看公開策略" }))
+      .toHaveAttribute("href", "/strategies/strategy-ownedrelease");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/strategy-publications/mine",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+  });
 });
 
 describe("bot detail route", () => {
@@ -348,10 +635,21 @@ describe("bot detail route", () => {
       const { unmount } = render(view);
       expect(screen.getByRole("heading", { level: 1, name: bot.name })).toBeInTheDocument();
       expect(screen.getAllByRole("link", { name: "直接套用" }).every((link) => link.getAttribute("href") === `/workshop?bot=${bot.id}&version=1`)).toBe(true);
-      expect(screen.getAllByRole("button", { name: `啟動策略：${bot.name}` })).toHaveLength(2);
-      expect(screen.queryByRole("button", { name: /下載/ })).not.toBeInTheDocument();
+      expect(screen.queryAllByRole("button", { name: `啟動策略：${bot.name}` }))
+        .toHaveLength(bot.market === "futures" ? 2 : 0);
+      expect(screen.queryByRole("button", { name: /下載策略/ })).not.toBeInTheDocument();
       unmount();
     }
+  });
+
+  it("localizes each label in an official strategy parameter summary", async () => {
+    localStorage.setItem("cryptobot-locale", "en");
+    const view = await BotDetailPage({ params: Promise.resolve({ id: "breakout-hunter" }) });
+    render(<I18nProvider initialLocale="en">{view}</I18nProvider>);
+
+    expect(await screen.findByText("Fast line period 5 · Slow line period 13 · Signal period 4"))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/快線週期 5|慢線週期 13/u)).not.toBeInTheDocument();
   });
 
   it("opens the safe cloud launcher from a futures strategy detail page", async () => {
@@ -362,22 +660,17 @@ describe("bot detail route", () => {
     await user.click(screen.getAllByRole("button", { name: "啟動策略：動能鍛造者" })[0]!);
 
     expect(await screen.findByRole("dialog", { name: "啟動 動能鍛造者" })).toBeInTheDocument();
-    expect(screen.getByText("WEEX LIVE / USDT")).toBeInTheDocument();
-    expect(await screen.findByText(/尚未完成合約真倉權限驗證/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
+    expect(screen.getByText("WEEX FUTURES DEMO / SUSDT")).toBeInTheDocument();
+    expect(await screen.findByText(/尚未完成合約 Demo 權限驗證/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "啟動 SUSDT 合約 Demo" })).toBeDisabled();
   });
 
-  it("opens the real-funds spot cloud launcher without misrouting it to futures execution", async () => {
-    const user = userEvent.setup();
+  it("does not expose unsupported spot cloud execution", async () => {
     const view = await BotDetailPage({ params: Promise.resolve({ id: "orbit-dca" }) });
     render(view);
 
-    await user.click(screen.getAllByRole("button", { name: "啟動策略：軌道定投" })[0]!);
-
-    expect(screen.getByRole("dialog", { name: "啟動 軌道定投" })).toBeInTheDocument();
-    expect(screen.getByText("WEEX LIVE / USDT")).toBeInTheDocument();
-    expect(await screen.findByText(/尚未完成現貨真倉權限驗證/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "同意風險並啟動 USDT 真倉" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "啟動策略：軌道定投" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "直接套用" })).toHaveLength(2);
   });
 
   it("renders full metrics, equity, monthly performance, and strategy guidance", async () => {

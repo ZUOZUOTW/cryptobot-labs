@@ -5,25 +5,39 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { BotDetailPerformance } from "../../../components/BotDetailPerformance";
 import { StrategyLaunchButton } from "../../../components/StrategyLaunchButton";
+import { StrategyParameterSummary } from "../../../components/StrategyParameterSummary";
 import { StrategyShareActions } from "../../../components/StrategyShareActions";
 import { BOT_CATALOG } from "../../../data/bots";
 import type { BotDefinition, StrategyGroup } from "../../../lib/types";
-import { resolveRequestLocale } from "../../../lib/i18n/locales";
+import {
+  isLocale,
+  resolveRequestLocale,
+  SUPPORTED_LOCALES,
+  type Locale,
+} from "../../../lib/i18n/locales";
 import { translateMessage } from "../../../lib/i18n/messages";
+import { strategyPosterPath } from "../../../lib/strategy-sharing";
 
 interface BotDetailPageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export async function generateMetadata({ params }: Pick<BotDetailPageProps, "params">): Promise<Metadata> {
-  const [{ id }, requestHeaders] = await Promise.all([params, headers()]);
+export async function generateMetadata({ params, searchParams }: BotDetailPageProps): Promise<Metadata> {
+  const emptyQuery: Record<string, string | string[] | undefined> = {};
+  const [{ id }, query, requestHeaders] = await Promise.all([params, searchParams ?? Promise.resolve(emptyQuery), headers()]);
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
   if (!bot) return {};
-  const locale = resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
+  const requestedLocale = Array.isArray(query.locale) ? query.locale[0] : query.locale;
+  const locale = isLocale(requestedLocale)
+    ? requestedLocale
+    : resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
   const title = translateMessage(locale, `${bot.name}｜公開自動交易策略`);
   const description = translateMessage(locale, `${bot.description}。${bot.market === "spot" ? "現貨" : "合約"} ${bot.timeframe}，${bot.risk}風險；查看模擬績效、最大回撤與策略規則。`);
   const imageAlt = translateMessage(locale, `${bot.name} 公開策略預覽`);
-  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: "/og.png", width: 1672, height: 941, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: ["/og.png"] } };
+  const localizedPath = `/bots/${bot.id}?locale=${encodeURIComponent(locale)}`;
+  const image = strategyPosterPath(localizedPath, locale);
+  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: localizedPath, images: [{ url: image, width: 1200, height: 630, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: [image] } };
 }
 
 export function generateStaticParams() {
@@ -32,9 +46,6 @@ export function generateStaticParams() {
 
 const marketLabel = (bot: BotDefinition) => bot.market === "spot" ? "現貨" : "USDT-M 合約";
 const groupLabel: Record<StrategyGroup, string> = { entry: "進場", confirm: "確認", exit: "離場", position: "倉位", risk: "風控" };
-const parameterSummary = (bot: BotDefinition["blocks"][number]) => bot.parameters
-  .map((parameter) => `${parameter.label} ${parameter.value}${parameter.suffix ?? ""}`)
-  .join(" · ");
 
 export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const { id } = await params;
@@ -43,6 +54,15 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
   if (!bot) notFound();
   const workshopHref = `/workshop?bot=${encodeURIComponent(bot.id)}&version=1`;
   const mascot = bot.risk === "高" ? "/mascots/ai-guardian.webp" : bot.market === "spot" ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp";
+  const shareDetails = {
+    localizedBotNames: Object.fromEntries(SUPPORTED_LOCALES.map(({ code }) => [
+      code,
+      translateMessage(code, bot.name),
+    ])) as Record<Locale, string>,
+    marketKind: bot.market,
+    riskLevel: bot.risk,
+    timeframe: bot.timeframe,
+  };
 
   return (
     <article className="bot-detail-page">
@@ -59,9 +79,9 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
             <p className="bot-detail-hero__lead">{bot.description}</p>
             <div className="tag-row">{bot.tags.map((tag) => <span className="strategy-tag" key={tag}>{tag}</span>)}</div>
             <div className="bot-detail-hero__actions">
-              <StrategyLaunchButton bot={bot} />
+              {bot.market === "futures" && <StrategyLaunchButton bot={bot} />}
               <Link className="button button--primary" href={workshopHref}>直接套用</Link>
-              <StrategyShareActions botId={bot.id} botName={bot.name} />
+              <StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} />
             </div>
           </div>
           <aside className="bot-detail-snapshot glass-panel" aria-label="策略摘要">
@@ -90,7 +110,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
             <li className="bot-detail-flow__item glass-panel" key={`${block.id}-${index}`}>
               <span>{String(index + 1).padStart(2, "0")}</span>
               <div><small>{groupLabel[block.group]}</small><h3>{block.name}</h3><p>{block.description}</p></div>
-              <strong>{parameterSummary(block) || "無額外參數"}</strong>
+              <strong><StrategyParameterSummary parameters={block.parameters} /></strong>
             </li>
           ))}
         </ol>
@@ -108,7 +128,7 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
 
       <section className="detail-section detail-cta site-container glass-panel">
         <div><p className="eyebrow">COPY THIS VERSION</p><h2>以這個固定版本開始組裝。</h2><p>套用後可調整參數、快速回測並開始模擬運行；原分享版本不會因後續修改而改變。</p></div>
-        <div className="button-row"><StrategyLaunchButton bot={bot} /><Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} /></div>
+        <div className="button-row">{bot.market === "futures" && <StrategyLaunchButton bot={bot} />}<Link className="button button--primary" href={workshopHref}>直接套用</Link><StrategyShareActions botId={bot.id} botName={bot.name} {...shareDetails} /></div>
       </section>
     </article>
   );

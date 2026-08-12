@@ -3,11 +3,18 @@
 import { useMemo } from "react";
 import { validateJavaScript } from "../../lib/strategy-validation";
 import type { BotConfig } from "../../lib/types";
+import type { Locale } from "../../lib/i18n/locales";
+import { localizedWorkshopTemplateCopy } from "../../lib/i18n/workshop-template";
 
-export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | "symbol" | "timeframe">) => [
+export const createWeexJavaScriptTemplate = (
+  config: Pick<BotConfig, "market" | "symbol" | "timeframe">,
+  locale: Locale = "zh-Hant",
+) => {
+  const copy = localizedWorkshopTemplateCopy(locale);
+  return [
   "/**",
-  " * CryptoBot Labs 的模擬策略範例。",
-  " * 回測與雲端執行器只會在隔離沙箱中執行此函式。",
+  ` * ${copy.sample}`,
+  ` * ${copy.sandbox}`,
   " */",
   "export const strategy = {",
   "  exchange: \"WEEX\",",
@@ -27,7 +34,8 @@ export const createWeexJavaScriptTemplate = (config: Pick<BotConfig, "market" | 
   "  return { action: \"hold\", reason: \"close-unchanged\" };",
   "}",
   "",
-].join("\n");
+  ].join("\n");
+};
 
 interface JavaScriptEditorProps {
   source: string;
@@ -58,7 +66,7 @@ export function JavaScriptEditor({ source, onChange }: JavaScriptEditorProps) {
         </span>
       </div>
 
-      <p className="javascript-editor__lead">此頁不執行程式碼；歷史回測與雲端執行器只會在無網路、無檔案及無 API Key 權限的隔離沙箱中執行，輸出只能是交易訊號。</p>
+      <p className="javascript-editor__lead">此頁不執行程式碼；歷史回測只會在無網路、無檔案及無 API Key 權限的隔離沙箱中執行，輸出只能是交易訊號。</p>
       <label className="javascript-editor__field" htmlFor="javascript-strategy-source">
         <span>JavaScript 策略原始碼</span>
         <textarea

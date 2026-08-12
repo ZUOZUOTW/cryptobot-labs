@@ -8,6 +8,9 @@ import { runWeexHistoricalBacktest, type PublicHistoricalBacktestAssumptions } f
 import { PerformanceChart } from "../PerformanceChart";
 import { useI18n } from "../I18nProvider";
 import { tradeDirectionLabel } from "../../lib/trade-direction";
+import { BacktestRequestForm, type BacktestRequestState } from "../backtests/BacktestRequestForm";
+import { isVerifiedHistoricalReportForConfig } from "../../lib/historical-evidence";
+import type { FormalBacktestEvidence } from "../../lib/formal-backtest-report";
 
 type BacktestState = "idle" | "validating" | "running" | "complete" | "error";
 
@@ -40,6 +43,8 @@ interface BacktestPanelProps {
   executeBacktest?: (config: BotConfig, assumptions: PublicHistoricalBacktestAssumptions) => BacktestReport | Promise<BacktestReport>;
   restoredReport?: BacktestReport | null;
   onReport?: (report: BacktestReport) => void;
+  onFormalReport?: (evidence: FormalBacktestEvidence) => void;
+  onFormalStateChange?: (state: BacktestRequestState) => void;
   onRun?: () => void;
 }
 
@@ -62,8 +67,14 @@ export function BacktestPanel({
   executeBacktest = runWeexHistoricalBacktest,
   restoredReport = null,
   onReport,
+  onFormalReport,
+  onFormalStateChange,
   onRun,
 }: BacktestPanelProps) {
+  if (config.source !== undefined) {
+    return <BacktestRequestForm compact config={config} onRun={onRun}
+      onStateChange={onFormalStateChange} onVerifiedReport={onFormalReport} />;
+  }
   const configFingerprint = backtestConfigFingerprint(config);
   const sessionKey = `${configFingerprint}:${restoredReport ? JSON.stringify(restoredReport) : ""}`;
 
@@ -105,6 +116,7 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
   const [fundingMode, setFundingMode] = useState<"none" | "historical">(config.market === "futures" ? "historical" : "none");
   const [gapPolicy, setGapPolicy] = useState<"fail" | "disclose">("fail");
   const report = completedReport?.configFingerprint === configFingerprint ? completedReport.report : null;
+  const verifiedEvidence = report !== null && isVerifiedHistoricalReportForConfig(report, config);
   const reportKey = useMemo(() => report ? JSON.stringify(report) : "", [report]);
 
   useEffect(() => {
@@ -240,7 +252,9 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
 
       {report && state === "complete" && (
         <section className="backtest-result" aria-label="回測結果" data-report-key={reportKey}>
-          {!report.evidence && <p className="simulation-disclosure" role="note"><strong>非行情證據：</strong>這份舊回測沒有 WEEX 歷史行情證據，請重新執行行情回測。</p>}
+          {!verifiedEvidence && <p className="simulation-disclosure" role="note"><strong>未驗證回測：</strong>{report.evidence
+            ? "這份回測未通過目前策略、結果與行情證據的完整性綁定，請重新執行行情回測。"
+            : "這份舊回測沒有 WEEX 歷史行情證據，請重新執行行情回測。"}</p>}
           <PerformanceChart label="歷史行情資產曲線" points={report.equityCurve} tone="cyan" variant="smooth" />
           <div className="backtest-metrics">
             {METRICS.map((metric) => (
@@ -270,7 +284,7 @@ function BacktestPanelSession({ config, configFingerprint, validation, executeBa
             </div>
           )}
           <p className="simulation-disclosure" role="note">{report.disclaimer}</p>
-          {report.evidence && (
+          {verifiedEvidence && report.evidence && (
             <p className="backtest-seed">
               VERIFIED MARKET DATA / {report.evidence.symbol} / {report.evidence.interval} / {report.evidence.candleCount} KLINES / {new Date(report.evidence.startTime).toLocaleDateString(locale)}–{new Date(report.evidence.endTime).toLocaleDateString(locale)}
               {report.evidence.fundingIncluded ? " / FUNDING INCLUDED" : " / FUNDING NOT INCLUDED"}
