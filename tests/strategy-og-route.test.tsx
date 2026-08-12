@@ -62,11 +62,11 @@ describe("member strategy Open Graph route", () => {
 
     const metadata = await generateMetadata({ params: Promise.resolve({ slug: "member-strategy" }) });
     expect(metadata.openGraph).toMatchObject({
-      url: "/strategies/member-strategy?v=1707004800000",
-      images: [{ url: "/strategies/member-strategy/opengraph-image?v=1707004800000" }],
+      url: "/strategies/member-strategy?v=1707004800000&locale=zh-Hant",
+      images: [{ url: "/api/strategy-posters/strategies/member-strategy/zh-Hant?v=1707004800000" }],
     });
     expect(metadata.twitter).toMatchObject({
-      images: ["/strategies/member-strategy/opengraph-image?v=1707004800000"],
+      images: ["/api/strategy-posters/strategies/member-strategy/zh-Hant?v=1707004800000"],
     });
   });
 

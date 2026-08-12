@@ -71,3 +71,41 @@ Browser geometry confirmed `flex-direction: column` for every featured-card risk
 - Production build: passed.
 
 final result: passed
+
+## 2026-08-12 — mobile sharing, discovery, and control-center acceptance
+
+- Source captures: `pr34-auto-audit/10-share-dialog-mobile-en.png`,
+  `pr34-auto-audit/12-discovery-mobile-en.png`, and
+  `/tmp/pr34-a11y-audit/04-control-center-mobile-table.png`.
+- Production-build captures: `/tmp/cryptobot-pr34-share-mobile-en.png`,
+  `/tmp/cryptobot-pr34-discovery-mobile-en.png`, and
+  `/tmp/cryptobot-pr34-runs-mobile-en.png`.
+- Viewport: 390 × 844. State: signed-out demo mode, English locale.
+
+### Full-view and focused comparison evidence
+
+- Share dialog: the official strategy name, dialog title, generated caption,
+  metric labels, risk label, and 1200 × 630 poster now render in English. The
+  former mixed Chinese/English poster and mismatched closing quote are gone.
+- Discovery: the fixed mobile navigation fits exactly within 390px and keeps
+  complete labels such as `Favorite strategies`; no label is broken in the
+  middle of a word. The document and navigation both reported zero horizontal
+  overflow.
+- Control center: the signed-out mobile state reported no overflowing
+  descendants. The responsive table disclosure styles now permit wrapping for
+  authenticated data-heavy states, with regression coverage for the affected
+  cells.
+
+### Interaction, image, and console checks
+
+- Switched from Russian to English through the visible language selector.
+- Opened the share dialog through the visible `Share poster` control; focus
+  landed on its close button and all expected share/download/copy controls were
+  available.
+- The poster preview loaded from the locale-keyed API route with a natural size
+  of 1200 × 630 and an English accessible name.
+- Dialog width matched its scroll width (372px); document width matched the
+  viewport; browser console contained no warnings or errors.
+- Final production build and Edge bundle validation passed.
+
+final result: passed

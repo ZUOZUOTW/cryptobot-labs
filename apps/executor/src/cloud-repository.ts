@@ -1,5 +1,6 @@
 import postgres, { type Sql } from "postgres";
 import type { EncryptedWeexCredentials } from "@cryptobot-labs/weex-client";
+import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client/symbol";
 
 type Database = Sql<Record<string, never>>;
 type Row = Record<string, unknown>;
@@ -95,6 +96,27 @@ const signedDecimal = (value: unknown): string => {
 };
 const CONFIGURATION_HASH = /^[a-f0-9]{64}$/;
 const LEASE_DURATION_MS = 180_000;
+
+const canonicalRunTarget = (
+  configValue: unknown,
+  riskValue: unknown,
+): { config: Record<string, unknown>; risk: Record<string, unknown> } => {
+  const config = object(configValue, "strategy config");
+  const risk = object(riskValue, "risk policy");
+  const symbol = canonicalizeWeexSymbol(config.symbol);
+  if ((config.market !== "spot" && config.market !== "futures") || !symbol
+    || !Array.isArray(risk.allowedSymbols) || risk.allowedSymbols.length < 1 || risk.allowedSymbols.length > 20) {
+    throw new Error("Cloud run target is invalid");
+  }
+  const canonicalAllowed = risk.allowedSymbols.map(canonicalizeWeexSymbol);
+  if (canonicalAllowed.some((candidate) => candidate === null)) throw new Error("Cloud run target is invalid");
+  const allowedSymbols = [...new Set(canonicalAllowed as string[])];
+  if (!allowedSymbols.includes(symbol)) throw new Error("Cloud run target is inconsistent");
+  return {
+    config: { ...config, symbol },
+    risk: { ...risk, allowedSymbols },
+  };
+};
 
 export class CloudRuntimeRepository {
   readonly #sql: Database;
@@ -208,10 +230,11 @@ export class CloudRuntimeRepository {
         || typeof value.user_id !== "string" || typeof value.connection_id !== "string"
         || typeof value.configuration_hash !== "string"
         || !CONFIGURATION_HASH.test(value.configuration_hash)) throw new Error("Cloud run is invalid");
+      const target = canonicalRunTarget(value.config_json, value.risk_json);
       return { id: value.id, userId: value.user_id, connectionId: value.connection_id, mode: value.mode,
         version: integer(value.version), configurationHash: value.configuration_hash,
-        config: object(value.config_json, "strategy config"),
-        risk: object(value.risk_json, "risk policy"),
+        config: target.config,
+        risk: target.risk,
         lastCandleAt: value.last_candle_at === null ? null : integer(value.last_candle_at),
         lastEvaluatedAt: value.last_evaluated_at === null ? null : integer(value.last_evaluated_at),
         consecutiveFailures: integer(value.consecutive_failures),

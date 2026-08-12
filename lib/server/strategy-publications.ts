@@ -7,6 +7,10 @@ import type {
 } from "../strategy-publications";
 import { validateConfig } from "../strategy-validation";
 import { resolvedTradeDirection } from "../trade-direction";
+import {
+  validatePublicPublicationDescription,
+  validatePublicPublisherName,
+} from "../publication-moderation";
 import { HttpProblem, errorResponse } from "./http";
 
 export const publicStrategyFreshnessHeaders = Object.freeze({
@@ -24,10 +28,18 @@ export const PUBLICATION_LIST_DEFAULT_LIMIT = 12;
 export const PUBLICATION_LIST_MAX_LIMIT = 24;
 export const PUBLICATION_LIST_MAX_EQUITY_POINTS = 120;
 export const PUBLICATION_LIST_MAX_SCAN_PAGES = 5;
+export const PUBLIC_STRATEGY_CACHE_VERSION = "v2";
+
+export class InvalidPublicStrategyTrustMetadataError extends Error {
+  constructor() {
+    super("published strategy trust metadata is invalid");
+    this.name = "InvalidPublicStrategyTrustMetadataError";
+  }
+}
 
 export function publicStrategyPublicationCacheTag(slug: string): string {
   if (!SLUG.test(slug)) throw new Error("publication slug is invalid");
-  return `public-strategy-publication:${slug}`;
+  return `public-strategy-publication:${PUBLIC_STRATEGY_CACHE_VERSION}:${slug}`;
 }
 
 const plainObject = (value: unknown): value is Record<string, unknown> => (
@@ -187,14 +199,14 @@ export function parsePublicationInput(value: unknown): {
     || typeof record.strategyVersionId !== "string" || !ID.test(record.strategyVersionId)
     || typeof record.backtestJobId !== "string" || !ID.test(record.backtestJobId)
     || typeof record.description !== "string") throw new HttpProblem(400, "invalid_request");
-  const description = record.description.trim();
-  if (description.length < 20 || description.length > 400 || /[\u0000-\u001f\u007f]/.test(description)) {
+  const description = validatePublicPublicationDescription(record.description);
+  if (!description.valid) {
     throw new HttpProblem(422, "invalid_publication_description");
   }
   return {
     strategyVersionId: record.strategyVersionId,
     backtestJobId: record.backtestJobId,
-    description,
+    description: description.value,
   };
 }
 
@@ -209,6 +221,11 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord, o
   maxEquityPoints?: number;
 } = {}): PublicStrategyPublication {
   const config = configOf(record.configJson);
+  const description = validatePublicPublicationDescription(record.description);
+  const publisherName = validatePublicPublisherName(record.publisherName);
+  if (!description.valid || !publisherName.valid) {
+    throw new InvalidPublicStrategyTrustMetadataError();
+  }
   if (config.name !== record.name || config.market !== record.market || config.symbol !== record.symbol) {
     throw new Error("published strategy identity mismatch");
   }
@@ -225,8 +242,8 @@ export function toPublicStrategyPublication(record: StrategyPublicationRecord, o
   return {
     slug: record.slug,
     name: record.name,
-    description: record.description,
-    publisherName: record.publisherName,
+    description: description.value,
+    publisherName: publisherName.value,
     weexReferralUrl: record.weexReferralUrl === null ? null : parseWeexReferralUrl(record.weexReferralUrl),
     market: config.market,
     symbol: config.symbol,

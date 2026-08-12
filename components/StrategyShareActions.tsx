@@ -6,12 +6,16 @@ import { createPortal } from "react-dom";
 import { FiCopy, FiDownload, FiExternalLink, FiImage, FiLink, FiShare2, FiX } from "react-icons/fi";
 import {
   buildStrategyShareText,
+  localizeStrategyPosterPath,
   socialShareUrl,
+  strategyPosterPreviewAlt,
   strategyPosterFilename,
   strategyPosterPath,
+  strategyShareDialogTitle,
   type StrategyShareNetwork,
   type VerifiedSharePerformance,
 } from "../lib/strategy-sharing";
+import type { Locale } from "../lib/i18n/locales";
 import { sanitizeStrategyDisplayText } from "../lib/strategy-name";
 import type { Market, RiskLevel } from "../lib/types";
 import { useI18n } from "./I18nProvider";
@@ -20,6 +24,7 @@ import styles from "./StrategyShareActions.module.css";
 export interface StrategyShareActionsProps {
   botId: string;
   botName: string;
+  localizedBotNames?: Partial<Record<Locale, string>>;
   sharePath?: string;
   posterPath?: string;
   via?: string;
@@ -47,6 +52,7 @@ const isAbortError = (error: unknown): boolean => (
 export function StrategyShareActions({
   botId,
   botName,
+  localizedBotNames,
   sharePath,
   posterPath,
   via,
@@ -57,7 +63,7 @@ export function StrategyShareActions({
   riskLevel,
   verifiedPerformance,
 }: StrategyShareActionsProps) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const [message, setMessage] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
@@ -67,8 +73,13 @@ export function StrategyShareActions({
   const dialogRef = useRef<HTMLElement>(null);
   const preparedPosterRef = useRef<File | null>(null);
   const resolvedSharePath = sharePath ?? `/bots/${encodeURIComponent(botId)}`;
-  const resolvedPosterPath = posterPath ?? strategyPosterPath(resolvedSharePath);
-  const safeBotName = useMemo(() => sanitizeStrategyDisplayText(botName), [botName]);
+  const resolvedPosterPath = posterPath
+    ? localizeStrategyPosterPath(posterPath, locale)
+    : strategyPosterPath(resolvedSharePath, locale);
+  const safeBotName = useMemo(
+    () => sanitizeStrategyDisplayText(localizedBotNames?.[locale] ?? botName),
+    [botName, locale, localizedBotNames],
+  );
   const shareText = useMemo(() => buildStrategyShareText({
     name: safeBotName,
     market,
@@ -81,6 +92,7 @@ export function StrategyShareActions({
 
   const shareUrl = () => {
     const url = new URL(resolvedSharePath, window.location.origin);
+    url.searchParams.set("locale", locale);
     if (via) url.searchParams.set("via", via);
     return url.toString();
   };
@@ -178,10 +190,10 @@ export function StrategyShareActions({
   const copyValue = async (value: string, successMessage: string) => {
     try {
       await navigator.clipboard.writeText(value);
-      setMessage(successMessage);
+      setMessage(t(successMessage));
       return true;
     } catch {
-      setMessage("無法自動複製，請在海報視窗中手動選取文案或連結。");
+      setMessage(t("無法自動複製，請在海報視窗中手動選取文案或連結。"));
       return false;
     }
   };
@@ -197,7 +209,7 @@ export function StrategyShareActions({
   const openSocialShare = (network: StrategyShareNetwork) => {
     const target = socialShareUrl(network, { text: shareText, url: shareUrl() });
     window.open(target, "_blank", "noopener,noreferrer");
-    setMessage(`已開啟 ${NETWORK_LABELS[network]}；文案與動態海報預覽會由分享連結帶入。`);
+    setMessage(t(`已開啟 ${NETWORK_LABELS[network]}；文案與動態海報預覽會由分享連結帶入。`));
   };
 
   const shareWithSystem = () => {
@@ -227,14 +239,14 @@ export function StrategyShareActions({
       setIsBusy(true);
       shareRequest = navigator.share(shareData);
     } catch (error) {
-      setMessage(isAbortError(error) ? "已取消分享。" : "系統分享未完成，請改用下方社群按鈕。");
+      setMessage(t(isAbortError(error) ? "已取消分享。" : "系統分享未完成，請改用下方社群按鈕。"));
       setIsBusy(false);
       return;
     }
     void shareRequest.then(() => {
-      setMessage(shareData.files?.length ? "已完成分享，海報 PNG 已一併附上。" : "已完成系統分享。");
+      setMessage(t(shareData.files?.length ? "已完成分享，海報 PNG 已一併附上。" : "已完成系統分享。"));
     }).catch((error: unknown) => {
-      setMessage(isAbortError(error) ? "已取消分享。" : "系統分享未完成，請改用下方社群按鈕。");
+      setMessage(t(isAbortError(error) ? "已取消分享。" : "系統分享未完成，請改用下方社群按鈕。"));
     }).finally(() => setIsBusy(false));
   };
 
@@ -248,9 +260,9 @@ export function StrategyShareActions({
       anchor.href = objectUrl;
       anchor.download = strategyPosterFilename(botId);
       anchor.click();
-      setMessage("1200 × 630 海報已下載。");
+      setMessage(t("1200 × 630 海報已下載。"));
     } catch {
-      setMessage("海報暫時無法下載，請稍後再試或開啟原圖儲存。");
+      setMessage(t("海報暫時無法下載，請稍後再試或開啟原圖儲存。"));
     } finally {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setIsBusy(false);
@@ -275,7 +287,7 @@ export function StrategyShareActions({
         <header className={styles.dialogHeader}>
           <div>
             <p>STRATEGY SHARE STUDIO</p>
-            <h2 id={titleId}>分享「{safeBotName || "Strategy"}」</h2>
+            <h2 data-i18n-ignore id={titleId}>{strategyShareDialogTitle(safeBotName, locale)}</h2>
             <small>海報與安全文案已自動產生，可直接分享或下載使用。</small>
           </div>
           <button aria-label="關閉分享海報" autoFocus className={styles.closeButton} onClick={closeDialog} type="button">
@@ -287,7 +299,7 @@ export function StrategyShareActions({
           <div className={styles.posterColumn}>
             <div className={styles.posterFrame}>
               <Image
-                alt={`${safeBotName || "Strategy"} 社群分享海報預覽`}
+                alt={strategyPosterPreviewAlt(safeBotName, locale)}
                 className={styles.posterImage}
                 height={630}
                 priority

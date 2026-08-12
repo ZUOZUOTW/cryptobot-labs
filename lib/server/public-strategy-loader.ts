@@ -3,6 +3,8 @@ import { createControlPlaneDatabase } from "@/db";
 import { createStrategyPublicationRepository } from "@/db/repositories";
 import { env } from "@/lib/server/platform-env";
 import {
+  InvalidPublicStrategyTrustMetadataError,
+  PUBLIC_STRATEGY_CACHE_VERSION,
   publicStrategyPublicationCacheTag,
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
@@ -20,10 +22,11 @@ const loadCachedPublication = (slug: string) => unstable_cache(
         slug,
         name: error instanceof Error ? error.name : "Error",
       });
+      if (error instanceof InvalidPublicStrategyTrustMetadataError) return null;
       throw error;
     }
   },
-  ["public-strategy-publication", slug],
+  ["public-strategy-publication", PUBLIC_STRATEGY_CACHE_VERSION, slug],
   { revalidate: 3600, tags: [publicStrategyPublicationCacheTag(slug)] },
 )();
 

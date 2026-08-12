@@ -16,6 +16,8 @@ export interface StrategyPosterCardProps {
   mascotSrc: string;
   metrics: StrategyPosterMetric[];
   disclosure: string;
+  publisherPrefix?: string;
+  publisherSuffix?: string;
   callToAction?: string;
 }
 
@@ -59,6 +61,8 @@ export function StrategyPosterCard({
   mascotSrc,
   metrics,
   disclosure,
+  publisherPrefix = "由 ",
+  publisherSuffix = " 發布 · 公開固定版本",
   callToAction = "查看策略與完整證據 →",
 }: StrategyPosterCardProps) {
   const safeName = fitStrategyPosterText(name, 44);
@@ -136,7 +140,7 @@ export function StrategyPosterCard({
             wordBreak: "break-all",
           }}>{safeName}</div>
           <div style={{ color: "#bdced9", display: "flex", fontSize: 19, marginTop: 12, maxWidth: 748, overflow: "hidden", whiteSpace: "nowrap" }}>
-            由 {safePublisher} 發布 · 公開固定版本
+            {publisherPrefix}{safePublisher}{publisherSuffix}
           </div>
         </div>
         <div style={{

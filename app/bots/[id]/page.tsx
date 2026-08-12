@@ -8,23 +8,35 @@ import { StrategyLaunchButton } from "../../../components/StrategyLaunchButton";
 import { StrategyShareActions } from "../../../components/StrategyShareActions";
 import { BOT_CATALOG } from "../../../data/bots";
 import type { BotDefinition, StrategyGroup } from "../../../lib/types";
-import { resolveRequestLocale } from "../../../lib/i18n/locales";
+import {
+  isLocale,
+  resolveRequestLocale,
+  SUPPORTED_LOCALES,
+  type Locale,
+} from "../../../lib/i18n/locales";
 import { translateMessage } from "../../../lib/i18n/messages";
+import { strategyPosterPath } from "../../../lib/strategy-sharing";
 
 interface BotDetailPageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export async function generateMetadata({ params }: Pick<BotDetailPageProps, "params">): Promise<Metadata> {
-  const [{ id }, requestHeaders] = await Promise.all([params, headers()]);
+export async function generateMetadata({ params, searchParams }: BotDetailPageProps): Promise<Metadata> {
+  const emptyQuery: Record<string, string | string[] | undefined> = {};
+  const [{ id }, query, requestHeaders] = await Promise.all([params, searchParams ?? Promise.resolve(emptyQuery), headers()]);
   const bot = BOT_CATALOG.find((candidate) => candidate.id === id);
   if (!bot) return {};
-  const locale = resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
+  const requestedLocale = Array.isArray(query.locale) ? query.locale[0] : query.locale;
+  const locale = isLocale(requestedLocale)
+    ? requestedLocale
+    : resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
   const title = translateMessage(locale, `${bot.name}｜公開自動交易策略`);
   const description = translateMessage(locale, `${bot.description}。${bot.market === "spot" ? "現貨" : "合約"} ${bot.timeframe}，${bot.risk}風險；查看模擬績效、最大回撤與策略規則。`);
   const imageAlt = translateMessage(locale, `${bot.name} 公開策略預覽`);
-  const image = `/bots/${bot.id}/opengraph-image`;
-  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: `/bots/${bot.id}`, images: [{ url: image, width: 1200, height: 630, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: [image] } };
+  const localizedPath = `/bots/${bot.id}?locale=${encodeURIComponent(locale)}`;
+  const image = strategyPosterPath(localizedPath, locale);
+  return { title, description, alternates: { canonical: `/bots/${bot.id}` }, openGraph: { title, description, type: "article", url: localizedPath, images: [{ url: image, width: 1200, height: 630, alt: imageAlt }] }, twitter: { card: "summary_large_image", title, description, images: [image] } };
 }
 
 export function generateStaticParams() {
@@ -45,6 +57,10 @@ export default async function BotDetailPage({ params }: BotDetailPageProps) {
   const workshopHref = `/workshop?bot=${encodeURIComponent(bot.id)}&version=1`;
   const mascot = bot.risk === "高" ? "/mascots/ai-guardian.webp" : bot.market === "spot" ? "/mascots/ai-observer.webp" : "/mascots/ai-builder.webp";
   const shareDetails = {
+    localizedBotNames: Object.fromEntries(SUPPORTED_LOCALES.map(({ code }) => [
+      code,
+      translateMessage(code, bot.name),
+    ])) as Record<Locale, string>,
     marketKind: bot.market,
     riskLevel: bot.risk,
     timeframe: bot.timeframe,

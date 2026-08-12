@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { STRATEGY_BLOCKS, STRATEGY_PRESETS } from "../data/strategies";
-import { validateConfig, validateJavaScript } from "../lib/strategy-validation";
+import { canonicalizeBotConfig, validateConfig, validateJavaScript } from "../lib/strategy-validation";
 import type { BotConfig, StrategyBlock } from "../lib/types";
 
 const cloneBlock = (id: string): StrategyBlock => {
@@ -101,6 +101,13 @@ describe("validateConfig", () => {
   it("accepts a valid WEEX config", () => {
     expect(validateConfig(validConfig).valid).toBe(true);
   });
+
+  it.each(["BTCUSDT", "BTC_USDT", "BTC/USDT", "CMT_BTCUSDT"])(
+    "persists %s as the canonical strategy and executor target",
+    (symbol) => {
+      expect(canonicalizeBotConfig({ ...validConfig, symbol }).symbol).toBe("BTCUSDT");
+    },
+  );
 
   it.each([
     null,

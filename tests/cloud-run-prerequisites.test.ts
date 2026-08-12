@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createCloudRunRepository,
   isRecentLiveConfirmation,
+  parseCloudRisk,
   type CloudRiskInput,
 } from "../lib/server/cloud-runs";
 
@@ -27,6 +28,14 @@ describe("cloud strategy launch prerequisites", () => {
     expect(isRecentLiveConfirmation({ acknowledged: false, acceptedAt: now }, now)).toBe(false);
     expect(isRecentLiveConfirmation({ acknowledged: true, acceptedAt: now - 600_001 }, now)).toBe(false);
     expect(isRecentLiveConfirmation({ acknowledged: true, acceptedAt: now, extra: true }, now)).toBe(false);
+  });
+
+  it("canonicalizes and deduplicates risk symbols before persistence", () => {
+    expect(parseCloudRisk({
+      ...risk,
+      allowedSymbols: ["BTC_USDT", "CMT_BTCUSDT", "ETH/USDT"],
+    })).toMatchObject({ allowedSymbols: ["BTCUSDT", "ETHUSDT"] });
+    expect(parseCloudRisk({ ...risk, allowedSymbols: ["ALL"] })).toBeNull();
   });
 
   it("requires futures permissions and complete matching historical evidence", async () => {
@@ -57,16 +66,21 @@ describe("cloud strategy launch prerequisites", () => {
     expect(sql).toMatch(/r\.configuration_hash=s\.config_hash/);
     expect(sql).toMatch(/\?::text::jsonb/);
     expect(sql).not.toMatch(/\?::jsonb/);
-    expect(sql).toMatch(/configuration_hash,market,symbol,version/);
-    expect(sql).toMatch(/active\.market=t\.market and active\.symbol=t\.symbol/);
+    expect(sql).toMatch(/configuration_hash,version/);
+    expect(sql).not.toMatch(/configuration_hash,market,symbol,version/);
+    expect(sql).toMatch(/active\.config_json->>'market'=t\.market/);
+    expect(sql).toMatch(/active\.config_json->>'symbol'/);
+    expect(sql).toMatch(/regexp_replace/);
+    expect(sql).toMatch(/jsonb_array_elements_text\(\?::text::jsonb->'allowedSymbols'\)/);
     expect(sql).toMatch(/active\.state<>'stopped'/);
     expect(sql).toMatch(/on conflict do nothing/i);
     expect(sql).not.toMatch(/insert\s+or\s+ignore/i);
     expect(JSON.parse(String(bindings[2]))).toEqual(risk);
+    expect(JSON.parse(String(bindings.at(-1)))).toEqual(risk);
     expect(first).toHaveBeenCalledOnce();
   });
 
-  it("selects the persisted market and symbol target for every dashboard run", async () => {
+  it("selects the rollback-compatible config target for every dashboard run", async () => {
     let sql = "";
     const all = vi.fn().mockResolvedValue({ results: [] });
     const database = {
@@ -78,7 +92,7 @@ describe("cloud strategy launch prerequisites", () => {
 
     await createCloudRunRepository(database as never).list("user_1");
 
-    expect(sql).toMatch(/select[\s\S]*state,market,symbol,version[\s\S]*from cloud_strategy_runs/i);
+    expect(sql).toMatch(/select[\s\S]*state,config_json->>'market' as market[\s\S]*config_json->>'symbol' as symbol[\s\S]*from cloud_strategy_runs/i);
     expect(all).toHaveBeenCalledOnce();
   });
 
@@ -104,8 +118,9 @@ describe("cloud strategy launch prerequisites", () => {
     })).resolves.toBe(true);
 
     expect(sql).toMatch(/active\.connection_id=requested_connection\.id/);
-    expect(sql).toMatch(/active\.market=requested_strategy\.market/);
-    expect(sql).toMatch(/active\.symbol=requested_strategy\.symbol/);
+    expect(sql).toMatch(/active\.config_json->>'market'=requested_version\.config_json::jsonb->>'market'/);
+    expect(sql).toMatch(/active\.config_json->>'symbol'/);
+    expect(sql).toMatch(/requested_version\.config_json::jsonb->>'symbol'/);
     expect(sql).toMatch(/active\.id<>\?/);
     expect(sql).toMatch(/active\.state<>'stopped'/);
     expect(sql).not.toMatch(/json_extract|insert\s+or\s+ignore/i);
@@ -138,7 +153,9 @@ describe("cloud strategy launch prerequisites", () => {
     expect(sql).toMatch(/lease_owner=null,lease_expires_at=null/);
     expect(sql).toMatch(/\?<>'running' or not exists/);
     expect(sql).toMatch(/active\.connection_id=target\.connection_id/);
-    expect(sql).toMatch(/active\.market=target\.market and active\.symbol=target\.symbol/);
+    expect(sql).toMatch(/active\.config_json->>'market'=target\.config_json->>'market'/);
+    expect(sql).toMatch(/active\.config_json->>'symbol'/);
+    expect(sql).toMatch(/target\.config_json->>'symbol'/);
     expect(bindings).toEqual([
       "running",
       1_700_000_000_000,

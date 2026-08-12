@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FALLBACK_WEEX_MARKET_CATALOG,
   WEEX_HELP_ARTICLE_SYMBOLS,
+  canonicalizeWeexSymbol,
   isWeexApiTradingSymbol,
   isWeexMarketCatalog,
   parseWeexMarketCatalog,
@@ -42,5 +43,10 @@ describe("WEEX market catalog", () => {
     expect(isWeexApiTradingSymbol("futures", "cmt_btcusdt")).toBe(true);
     expect(isWeexApiTradingSymbol("spot", "NOTAPIUSDT")).toBe(false);
     expect(isWeexApiTradingSymbol("futures", "NOTAPIUSDT")).toBe(false);
+  });
+
+  it("uses one canonical identity for every WEEX symbol spelling accepted by the catalog", () => {
+    expect(["BTCUSDT", "BTC_USDT", "BTC/USDT", "CMT_BTCUSDT", "cmt_btc_usdt"]
+      .map(canonicalizeWeexSymbol)).toEqual(Array(5).fill("BTCUSDT"));
   });
 });

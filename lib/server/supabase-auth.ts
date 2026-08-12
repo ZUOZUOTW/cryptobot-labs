@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { canonicalDisplayName } from "../display-name";
 
 export const AUTH_ACCESS_COOKIE = "__Host-cbl_access";
 export const AUTH_REFRESH_COOKIE = "__Host-cbl_refresh";
@@ -252,11 +253,11 @@ function parseUser(value: unknown): PlatformUser | null {
     ? body.user_metadata as Record<string, unknown> : {};
   const id = typeof body.id === "string" ? body.id : "";
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-  const candidate = [metadata.full_name, metadata.name, metadata.user_name, email.split("@")[0]]
-    .find((item) => typeof item === "string" && item.trim().length > 0);
-  const displayName = typeof candidate === "string" ? candidate.trim().slice(0, 100) : "會員";
+  const displayName = [metadata.full_name, metadata.name, metadata.user_name, email.split("@")[0], "會員"]
+    .map(canonicalDisplayName)
+    .find((candidate): candidate is string => candidate !== null);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)
-    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /[\u0000-\u001f\u007f]/.test(displayName)) return null;
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !displayName) return null;
   return { id, email, displayName };
 }
 

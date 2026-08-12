@@ -1,7 +1,7 @@
 import { parse } from "acorn";
 import { STRATEGY_BLOCKS } from "../data/strategies";
 import type { BotConfig } from "./types";
-import { isWeexApiTradingSymbol } from "./weex-market-catalog";
+import { canonicalizeWeexSymbol, isWeexApiTradingSymbol } from "./weex-market-catalog";
 import { validateStrategyName } from "./strategy-name";
 
 export interface ValidationResult {
@@ -441,7 +441,9 @@ const sourceConfigErrors = (source: string, config: BotConfig): string[] => {
   const errors: string[] = [];
   for (const field of Object.keys(SOURCE_CONFIG_FIELDS) as Array<keyof typeof SOURCE_CONFIG_FIELDS>) {
     for (const sourceValue of found.get(field) ?? []) {
-      if (sourceValue !== config[field]) {
+      const sourceIdentity = field === "symbol" ? canonicalizeWeexSymbol(sourceValue) : sourceValue;
+      const configIdentity = field === "symbol" ? canonicalizeWeexSymbol(config[field]) : config[field];
+      if (sourceIdentity === null || sourceIdentity !== configIdentity) {
         errors.push(`JavaScript 的${SOURCE_CONFIG_FIELDS[field]}（${sourceValue}）與策略設定（${config[field]}）不一致`);
       }
     }
@@ -452,6 +454,7 @@ const sourceConfigErrors = (source: string, config: BotConfig): string[] => {
 export const canonicalizeBotConfig = (config: BotConfig): BotConfig => ({
   ...config,
   name: config.name.trim(),
+  symbol: canonicalizeWeexSymbol(config.symbol) ?? config.symbol,
   blocks: config.blocks.map((block) => {
     const canonical = STRATEGY_BLOCKS.find((item) => item.id === block.id)!;
     const values = new Map(block.parameters.map((parameter) => [parameter.key, parameter.value]));

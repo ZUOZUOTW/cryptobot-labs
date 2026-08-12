@@ -1,4 +1,9 @@
-import { DEFAULT_LOCALE, type Locale } from "./i18n/locales";
+import { DEFAULT_LOCALE, isLocale, type Locale } from "./i18n/locales";
+import {
+  STRATEGY_POSTER_COPY,
+  STRATEGY_SHARE_COPY,
+  type StrategyPosterLocaleCopy,
+} from "./i18n/strategy-sharing-copy";
 import { sanitizeStrategyDisplayText } from "./strategy-name";
 import type { Market, RiskLevel } from "./types";
 
@@ -8,10 +13,7 @@ export interface VerifiedSharePerformance {
   kind: "total-return";
   value: string;
   verified: true;
-  historicalPeriod?: {
-    startAt: number;
-    endAt: number;
-  };
+  historicalPeriod?: { startAt: number; endAt: number };
 }
 
 export interface StrategyShareCopyInput {
@@ -23,52 +25,6 @@ export interface StrategyShareCopyInput {
   riskLevel?: RiskLevel;
   verifiedPerformance?: VerifiedSharePerformance;
 }
-
-interface ShareLocaleCopy {
-  spot: string;
-  futures: string;
-  risks: Record<RiskLevel, string>;
-  text: (input: { name: string; profile: string; performance: string | null; period: string | null }) => string;
-}
-
-const SHARE_COPY: Record<Locale, ShareLocaleCopy> = {
-  "zh-Hant": {
-    spot: "WEEX 現貨",
-    futures: "WEEX USDT-M 合約",
-    risks: { 低: "低風險", 中: "中風險", 高: "高風險" },
-    text: ({ name, profile, performance, period }) => `我在 CryptoBot Labs 發現「${name}」${profile ? `：${profile}` : ""}。${performance ? `固定版本${period ? `在 ${period} 歷史區間` : ""}的 WEEX 歷史回測總報酬為 ${performance}。` : "查看完整策略規則、風控與回測證據。"}歷史回測不代表未來績效。`,
-  },
-  "zh-Hans": {
-    spot: "WEEX 现货",
-    futures: "WEEX USDT-M 合约",
-    risks: { 低: "低风险", 中: "中风险", 高: "高风险" },
-    text: ({ name, profile, performance, period }) => `我在 CryptoBot Labs 发现“${name}”${profile ? `：${profile}` : ""}。${performance ? `固定版本${period ? `在 ${period} 历史区间` : ""}的 WEEX 历史回测总收益为 ${performance}。` : "查看完整策略规则、风控和回测证据。"}历史回测不代表未来表现。`,
-  },
-  en: {
-    spot: "WEEX spot",
-    futures: "WEEX USDT-M futures",
-    risks: { 低: "low risk", 中: "medium risk", 高: "high risk" },
-    text: ({ name, profile, performance, period }) => `I found “${name}” on CryptoBot Labs${profile ? `: ${profile}` : ""}. ${performance ? `This fixed version's verified WEEX historical backtest return${period ? ` for ${period}` : ""} is ${performance}. ` : "Review the complete strategy rules, risk controls, and backtest evidence. "}Historical backtests do not guarantee future results.`,
-  },
-  ar: {
-    spot: "سوق WEEX الفوري",
-    futures: "عقود WEEX USDT-M الآجلة",
-    risks: { 低: "مخاطر منخفضة", 中: "مخاطر متوسطة", 高: "مخاطر مرتفعة" },
-    text: ({ name, profile, performance, period }) => `وجدت «${name}» على CryptoBot Labs${profile ? `: ${profile}` : ""}. ${performance ? `عائد الاختبار التاريخي الموثّق على WEEX لهذه النسخة الثابتة${period ? ` للفترة ${period}` : ""} هو ${performance}. ` : "اطّلع على قواعد الاستراتيجية وضوابط المخاطر وأدلة الاختبار التاريخي. "}لا تضمن نتائج الاختبارات التاريخية النتائج المستقبلية.`,
-  },
-  ru: {
-    spot: "спот WEEX",
-    futures: "фьючерсы WEEX USDT-M",
-    risks: { 低: "низкий риск", 中: "средний риск", 高: "высокий риск" },
-    text: ({ name, profile, performance, period }) => `Я нашёл стратегию «${name}» в CryptoBot Labs${profile ? `: ${profile}` : ""}. ${performance ? `Доходность подтверждённого исторического бэктеста WEEX для этой фиксированной версии${period ? ` за период ${period}` : ""}: ${performance}. ` : "Посмотрите полные правила, управление рисками и результаты бэктеста. "}Исторический бэктест не гарантирует будущих результатов.`,
-  },
-  ja: {
-    spot: "WEEX 現物",
-    futures: "WEEX USDT-M 先物",
-    risks: { 低: "低リスク", 中: "中リスク", 高: "高リスク" },
-    text: ({ name, profile, performance, period }) => `CryptoBot Labsで「${name}」を見つけました${profile ? `：${profile}` : ""}。${performance ? `固定版${period ? `（履歴期間：${period}）` : ""}の検証済みWEEX過去データバックテスト総収益率は${performance}です。` : "戦略ルール、リスク管理、バックテスト根拠を確認できます。"}過去のバックテスト結果は将来の成果を保証しません。`,
-  },
-};
 
 const compact = (value: string | undefined): string | null => {
   const normalized = sanitizeStrategyDisplayText(value);
@@ -103,21 +59,36 @@ export function buildMemberStrategyPosterMetrics(metrics: {
   maxDrawdown: string;
   winRate: string;
   trades: number;
-}) {
+}, locale: Locale = DEFAULT_LOCALE) {
+  const labels = STRATEGY_POSTER_COPY[locale].metricLabels;
   return [
-    { label: "TOTAL RETURN", value: formatSignedReturn(metrics.totalReturn), accent: true },
-    { label: "MAX DRAWDOWN", value: formatDrawdownMagnitude(metrics.maxDrawdown) },
-    { label: "WIN RATE", value: formatRate(metrics.winRate) },
-    { label: "TRADES", value: String(metrics.trades) },
+    { label: labels.totalReturn, value: formatSignedReturn(metrics.totalReturn), accent: true },
+    { label: labels.maxDrawdown, value: formatDrawdownMagnitude(metrics.maxDrawdown) },
+    { label: labels.winRate, value: formatRate(metrics.winRate) },
+    { label: labels.trades, value: new Intl.NumberFormat(locale).format(metrics.trades) },
   ];
+}
+
+export function strategyPosterLocaleCopy(locale: Locale = DEFAULT_LOCALE): StrategyPosterLocaleCopy {
+  return STRATEGY_POSTER_COPY[locale];
+}
+
+export function strategyShareDialogTitle(name: string, locale: Locale = DEFAULT_LOCALE): string {
+  const copy = STRATEGY_SHARE_COPY[locale];
+  return copy.dialogTitle(compact(name) ?? copy.fallbackName);
+}
+
+export function strategyPosterPreviewAlt(name: string, locale: Locale = DEFAULT_LOCALE): string {
+  const copy = STRATEGY_SHARE_COPY[locale];
+  return copy.posterPreviewAlt(compact(name) ?? copy.fallbackName);
 }
 
 export function buildStrategyShareText(
   input: StrategyShareCopyInput,
   locale: Locale = DEFAULT_LOCALE,
 ): string {
-  const copy = SHARE_COPY[locale];
-  const name = compact(input.name) ?? (locale === "en" ? "public strategy" : "公開策略");
+  const copy = STRATEGY_SHARE_COPY[locale];
+  const name = compact(input.name) ?? copy.fallbackName;
   const market = input.marketKind ? copy[input.marketKind] : compact(input.market);
   const risk = input.riskLevel ? copy.risks[input.riskLevel] : compact(input.risk);
   const profile = [market, compact(input.timeframe)?.toUpperCase(), risk]
@@ -140,10 +111,7 @@ export function formatHistoricalPeriod(
   const end = new Date(period.endAt);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return null;
   const formatter = new Intl.DateTimeFormat(locale, {
-    day: "2-digit",
-    month: "short",
-    timeZone: "UTC",
-    year: "numeric",
+    day: "2-digit", month: "short", timeZone: "UTC", year: "numeric",
   });
   return `${formatter.format(start)}–${formatter.format(end)}`;
 }
@@ -157,12 +125,30 @@ export function formatIsoHistoricalPeriod(startAt: number | null, endAt: number 
   return `${start.toISOString().slice(0, 10)}–${end.toISOString().slice(0, 10)}`;
 }
 
-export function strategyPosterPath(sharePath: string): string {
+export function strategyPosterPath(sharePath: string, locale?: Locale): string {
   const url = new URL(sharePath, "https://cryptobot.invalid");
   const pathname = url.pathname.replace(/\/+$/, "");
   const version = url.searchParams.get("v");
   const versionQuery = version !== null && /^(?:0|[1-9]\d{0,15})$/.test(version) ? `?v=${version}` : "";
+  const queryLocale = url.searchParams.get("locale");
+  const requestedLocale = locale ?? (isLocale(queryLocale) ? queryLocale : undefined);
+  if (requestedLocale && /^\/(?:bots|strategies)\/[^/]+$/u.test(pathname)) {
+    return `/api/strategy-posters${pathname}/${requestedLocale}${versionQuery}`;
+  }
   return `${`${pathname || "/"}/opengraph-image`.replace(/^\/\//, "/")}${versionQuery}`;
+}
+
+export function localizeStrategyPosterPath(posterPath: string, locale: Locale): string {
+  const url = new URL(posterPath, "https://cryptobot.invalid");
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (segments[0] === "api" && segments[1] === "strategy-posters") {
+    segments.splice(-1, 1, locale);
+    return `/${segments.join("/")}${url.search}`;
+  }
+  const imageIndex = segments.lastIndexOf("opengraph-image");
+  if (imageIndex < 0) return posterPath;
+  const strategySegments = segments.slice(0, imageIndex);
+  return `/api/strategy-posters/${strategySegments.join("/")}/${locale}${url.search}`;
 }
 
 export function socialShareUrl(

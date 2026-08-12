@@ -185,7 +185,7 @@ describe("strategy share copy", () => {
       totalReturn: "0.08",
       trades: 42,
       winRate: "0.08",
-    })).toEqual([
+    }, "en")).toEqual([
       { accent: true, label: "TOTAL RETURN", value: "+8.0%" },
       { label: "MAX DRAWDOWN", value: "8.0%" },
       { label: "WIN RATE", value: "8.0%" },
@@ -227,6 +227,10 @@ describe("strategy share copy", () => {
       .toBe("/strategies/member-alpha/opengraph-image?v=1707080400000");
     expect(strategyPosterPath("/strategies/member-alpha?v=unsafe-version"))
       .toBe("/strategies/member-alpha/opengraph-image");
+    expect(strategyPosterPath("/bots/orbit-dca?locale=en", "en"))
+      .toBe("/api/strategy-posters/bots/orbit-dca/en");
+    expect(strategyPosterPath("/strategies/member-alpha?v=1707080400000&locale=ja"))
+      .toBe("/api/strategy-posters/strategies/member-alpha/ja?v=1707080400000");
     expect(strategyPosterFilename("Member Alpha!")).toBe("cryptobot-member-alpha-poster.png");
     expect(socialShareUrl("line", { text: "策略文案", url: "https://example.test/bots/a" }))
       .toContain("https://line.me/R/share?text=");
@@ -253,7 +257,7 @@ describe("strategy poster share dialog", () => {
 
     const dialog = screen.getByRole("dialog", { name: "分享「軌道定投」" });
     expect(within(dialog).getByRole("img", { name: "軌道定投 社群分享海報預覽" }))
-      .toHaveAttribute("src", "/bots/orbit-dca/opengraph-image");
+      .toHaveAttribute("src", "/api/strategy-posters/bots/orbit-dca/zh-Hant");
     expect(within(dialog).getByRole("button", { name: "下載海報" })).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "複製文案" })).toBeInTheDocument();
     expect(within(dialog).getByText(/WEEX 現貨 · 4H · 低風險/)).toBeInTheDocument();
@@ -296,7 +300,7 @@ describe("strategy poster share dialog", () => {
     await user.click(screen.getByRole("button", { name: "系統分享（支援時附上 PNG）" }));
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "http://localhost:3000/strategies/member-alpha/opengraph-image?v=1707080400000",
+      "http://localhost:3000/api/strategy-posters/strategies/member-alpha/zh-Hant?v=1707080400000",
       { cache: "force-cache", credentials: "same-origin" },
     );
     expect(canShare).toHaveBeenCalledTimes(2);
@@ -304,7 +308,7 @@ describe("strategy poster share dialog", () => {
     const shareData = share.mock.calls[0]?.[0] as ShareData;
     expect(shareData.text).toContain("WEEX 歷史回測總報酬為 +12.00%");
     expect(shareData.text).toContain("2024");
-    expect(shareData.url).toBe("http://localhost:3000/strategies/member-alpha?v=1707080400000");
+    expect(shareData.url).toBe("http://localhost:3000/strategies/member-alpha?v=1707080400000&locale=zh-Hant");
     expect(shareData.files).toHaveLength(1);
     expect(shareData.files?.[0]).toMatchObject({ name: "cryptobot-member-alpha-poster.png", type: "image/png" });
     expect(await screen.findByRole("status")).toHaveTextContent("海報 PNG 已一併附上");
@@ -333,7 +337,7 @@ describe("strategy poster share dialog", () => {
     expect(share).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.any(String),
       title: "SAFEgpj.exe｜CryptoBot Labs",
-      url: "http://localhost:3000/bots/orbit-dca",
+      url: "http://localhost:3000/bots/orbit-dca?locale=zh-Hant",
     }));
     const sharePayload = share.mock.calls[0]?.[0] as ShareData;
     expect(sharePayload.files).toBeUndefined();
@@ -373,5 +377,35 @@ describe("strategy poster share dialog", () => {
     expect(target).toContain("CryptoBot Labsで「Atlas」を見つけました");
     expect(target).toContain("WEEX 現物 · 4H · 低リスク");
     expect(target).not.toContain("我在");
+  });
+
+  it("uses the real official bot's English display name, paired quotes, and isolated poster cache path", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    localStorage.setItem("cryptobot-labs.locale", "en");
+    document.documentElement.dataset.locale = "en";
+    document.documentElement.lang = "en";
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(
+      <I18nProvider initialLocale="en">
+        <StrategyShareActions
+          botId="orbit-dca"
+          botName="軌道定投"
+          localizedBotNames={{ en: "DCA along the trajectory" }}
+          marketKind="spot"
+          riskLevel="低"
+          timeframe="4h"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Share poster" }));
+    const dialog = screen.getByRole("dialog", { name: "Share “DCA along the trajectory”" });
+    expect(within(dialog).getByRole("heading")).toHaveTextContent(/^Share “DCA along the trajectory”$/u);
+    expect(within(dialog).getByRole("img", { name: "DCA along the trajectory social sharing poster preview" }))
+      .toHaveAttribute("src", "/api/strategy-posters/bots/orbit-dca/en");
+    await user.click(within(dialog).getByRole("button", { name: "Copy caption" }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("I found “DCA along the trajectory”"));
+    expect(String(writeText.mock.calls[0]?.[0])).not.toContain("軌道定投");
   });
 });

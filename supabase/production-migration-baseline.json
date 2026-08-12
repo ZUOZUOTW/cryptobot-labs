@@ -1,6 +1,6 @@
 {
   "projectRef": "production-project-redacted",
-  "capturedAt": "2026-08-12",
+  "capturedAt": "2026-07-28",
   "migrations": [
     {
       "version": "20260713032333",
@@ -98,11 +98,6 @@
       "normalizedSha256": "7731d8ea7de2523cfc98d48185eb17f78ecb433920c3aefcf45cd4f14edbc2f3"
     },
     {
-      "version": "20260727045707",
-      "name": "make_strategy_referral_optional",
-      "normalizedSha256": "60cfeeaf25fb179d530f3aa455a67a31f5ea4f5929d25e8c1dfbb944e8937a1b"
-    },
-    {
       "version": "20260727051432",
       "name": "make_strategy_referral_optional",
       "normalizedSha256": "60cfeeaf25fb179d530f3aa455a67a31f5ea4f5929d25e8c1dfbb944e8937a1b"
@@ -116,11 +111,13 @@
       "version": "20260728164403",
       "name": "add_weex_credential_source",
       "normalizedSha256": "88a61d4465471133639122d8ca1e242d636df7e8b102782e886010210ddf5219"
-    },
+    }
+  ],
+  "pendingMigrations": [
     {
       "version": "20260812090000",
       "name": "enforce_cloud_run_target_exclusivity",
-      "normalizedSha256": "48ad6d6a12a89766e693a323232c6d1c6930d847aceac37b70dd3a6778c792d1"
+      "normalizedSha256": "e90fb12db95b9178787ae94aa6818532923d0fc6a763172c524054d66deaa1a3"
     }
   ]
 }

@@ -44,7 +44,17 @@ describe("mobile layout safeguards", () => {
 
   it("allows longer translated tab labels to wrap instead of truncating", () => {
     expect(globals).toMatch(
-      /html:is\(\[data-locale="en"\],[\s\S]*?\.mobile-tab-bar span\s*\{[\s\S]*?text-overflow:\s*clip;[\s\S]*?white-space:\s*normal;/,
+      /html:is\(\[data-locale="en"\],[\s\S]*?\.mobile-tab-bar span\s*\{[\s\S]*?overflow-wrap:\s*normal;[\s\S]*?white-space:\s*normal;[\s\S]*?word-break:\s*normal;/,
     );
+  });
+
+  it("keeps short discovery labels on word boundaries and stacks the 390px summary", () => {
+    expect(globals).toMatch(/\.catalog-summary, \.catalog-summary \*, \.catalog-favorites-link span\)\s*\{[\s\S]*?overflow-wrap:\s*normal;[\s\S]*?word-break:\s*normal;/);
+    expect(globals).toMatch(/@media \(max-width: 38rem\)[\s\S]*?\.catalog-summary\s*\{[\s\S]*?flex-direction:\s*column;/);
+  });
+
+  it("lets control-center card values and empty risk text wrap at small widths", () => {
+    expect(workshop).toMatch(/@media \(max-width: 42rem\)[\s\S]*?\.control-center-table-shell tbody td\s*\{[\s\S]*?overflow-wrap:\s*anywhere;[\s\S]*?white-space:\s*normal;/);
+    expect(workshop).toMatch(/\.control-center-table-shell tbody td \.risk-usage-empty\s*\{[\s\S]*?overflow-wrap:\s*anywhere;[\s\S]*?white-space:\s*normal;/);
   });
 });

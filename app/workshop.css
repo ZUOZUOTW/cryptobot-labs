@@ -2707,6 +2707,15 @@ html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
     min-width: 0;
     padding: 0;
     border: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .control-center-table-shell tbody td > strong,
+  .control-center-table-shell tbody td > small,
+  .control-center-table-shell tbody td .risk-usage-empty {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
   .control-center-table-shell tbody td::before {
     display: block;

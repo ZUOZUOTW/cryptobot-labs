@@ -83,7 +83,8 @@ const createRunsTable = (database: Database) => database.raw.exec(`create table 
   unrealized_pnl text,
   positions_json text not null default '[]',
   evaluation_count integer not null default 0,
-  signal_count integer not null default 0
+  signal_count integer not null default 0,
+  config_json text not null default '{"market":"futures","symbol":"BTCUSDT"}'
 );`);
 
 describe("cloud run read repository", () => {

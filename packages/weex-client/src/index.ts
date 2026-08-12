@@ -12,5 +12,6 @@ export * from "./private-client";
 export * from "./redaction";
 export * from "./schemas";
 export * from "./signing";
+export * from "./symbol";
 export * from "./transport";
 export * from "./websocket";

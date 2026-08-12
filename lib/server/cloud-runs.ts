@@ -1,9 +1,9 @@
 import type { ControlPlaneDatabase } from "@/db";
+import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client/symbol";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const DECIMAL = /^(?:0|[1-9]\d{0,23})(?:\.\d{1,18})?$/;
-const SYMBOL = /^[A-Z0-9_]{3,32}$/;
 
 export const CLOUD_RUN_TARGET_CONFLICT = Object.freeze({
   error: "cloud_run_target_conflict",
@@ -86,8 +86,10 @@ export function parseCloudRisk(value: unknown): CloudRiskInput | null {
     "maxSimultaneousPositions", "maxDailyLoss", "maxLeverage", "maxSlippageBps",
     "minSignalCooldownMs", "maxConsecutiveFailures", "operationMode"];
   if (!exact(risk, keys) || !Array.isArray(risk.allowedSymbols) || risk.allowedSymbols.length < 1
-    || risk.allowedSymbols.length > 20 || risk.allowedSymbols.some((symbol) => typeof symbol !== "string"
-      || !SYMBOL.test(symbol)) || new Set(risk.allowedSymbols).size !== risk.allowedSymbols.length) return null;
+    || risk.allowedSymbols.length > 20) return null;
+  const allowedSymbols = risk.allowedSymbols.map(canonicalizeWeexSymbol);
+  if (allowedSymbols.some((symbol) => symbol === null)) return null;
+  const uniqueAllowedSymbols = [...new Set(allowedSymbols as string[])];
   for (const key of ["maxOrderNotional", "maxPositionNotional", "maxTotalExposure", "maxDailyLoss", "maxLeverage"]) {
     if (typeof risk[key] !== "string" || !DECIMAL.test(risk[key] as string) || Number(risk[key]) <= 0) return null;
   }
@@ -97,10 +99,11 @@ export function parseCloudRisk(value: unknown): CloudRiskInput | null {
       || Number(risk[key]) > maximum) return null;
   }
   if (risk.operationMode !== "automatic") return null;
-  return risk as unknown as CloudRiskInput;
+  return { ...risk, allowedSymbols: uniqueAllowedSymbols } as unknown as CloudRiskInput;
 }
 
-const columns = `id,name,mode,state,market,symbol,version,last_candle_at as lastCandleAt,
+const columns = `id,name,mode,state,config_json->>'market' as market,config_json->>'symbol' as symbol,
+  version,last_candle_at as lastCandleAt,
   last_evaluated_at as lastEvaluatedAt,last_signal_json as lastSignalJson,last_error_code as lastErrorCode,
   consecutive_failures as consecutiveFailures,created_at as createdAt,updated_at as updatedAt,
   risk_json->'allowedSymbols' as allowedSymbols,account_asset as accountAsset,
@@ -108,6 +111,14 @@ const columns = `id,name,mode,state,market,symbol,version,last_candle_at as last
   account_observed_at as accountObservedAt,account_equity::text as accountEquity,
   available_equity::text as availableEquity,unrealized_pnl::text as unrealizedPnl,
   positions_json as positionsJson,evaluation_count as evaluationCount,signal_count as signalCount`;
+
+const normalizeCloudRunRow = (row: CloudRunRow): CloudRunRow => {
+  const symbol = canonicalizeWeexSymbol(row.symbol);
+  const allowedSymbols = Array.isArray(row.allowedSymbols)
+    ? [...new Set(row.allowedSymbols.map(canonicalizeWeexSymbol).filter((item): item is string => item !== null))]
+    : row.allowedSymbols;
+  return { ...row, ...(symbol ? { symbol } : {}), allowedSymbols };
+};
 
 export function createCloudRunRepository(database: ControlPlaneDatabase) {
   return {
@@ -124,7 +135,7 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         union all
         select * from stopped_history
         order by "createdAt" desc,id desc`).bind(userId, userId).all<CloudRunRow>();
-      return result.results;
+      return result.results.map(normalizeCloudRunRow);
     },
     account(userId: string): Promise<CloudAccountRow | null> {
       return database.prepare(`select c.id as connectionId,c.status as connectionStatus,
@@ -176,17 +187,24 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
       configurationHash: string; mode: "live"; risk: CloudRiskInput; now: number }): Promise<CloudRunRow | null> {
       if (!ID.test(input.id) || !ID.test(input.userId) || !ID.test(input.strategyVersionId)
         || input.name.trim().length < 1 || input.name.trim().length > 100 || !HASH.test(input.configurationHash)) return null;
-      return database.prepare(`insert into cloud_strategy_runs
+      const row = await database.prepare(`insert into cloud_strategy_runs
         (id,user_id,connection_id,executor_shard_id,strategy_version_id,name,mode,state,config_json,risk_json,
-         configuration_hash,market,symbol,version,consecutive_failures,created_at,updated_at,started_at)
+         configuration_hash,version,consecutive_failures,created_at,updated_at,started_at)
         select ?,s.user_id,c.id,c.executor_shard_id,s.id,?,'live','running',s.config_json::jsonb,?::text::jsonb,
-          ?,t.market,t.symbol,1,0,?,?,?
+          ?,1,0,?,?,?
         from strategy_versions s
         join strategies t on t.id=s.strategy_id and t.user_id=s.user_id
         join weex_connections c on c.user_id=s.user_id and c.provider='weex'
         where s.user_id=? and s.id=? and s.config_hash=? and c.status='active'
           and t.market in ('spot','futures')
-          and s.config_json::jsonb->>'market'=t.market and s.config_json::jsonb->>'symbol'=t.symbol
+          and s.config_json::jsonb->>'market'=t.market
+          and regexp_replace(regexp_replace(upper(btrim(s.config_json::jsonb->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+            =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+          and exists (
+            select 1 from jsonb_array_elements_text(?::text::jsonb->'allowedSymbols') allowed(symbol)
+            where regexp_replace(regexp_replace(upper(btrim(allowed.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+              =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+          )
           and c.withdrawal_access_absent=true and c.executor_shard_id is not null
           and c.permissions_json @> '{"read":true}'::jsonb
           and (
@@ -208,24 +226,30 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
           and not exists (
             select 1 from cloud_strategy_runs active
             where active.user_id=s.user_id and active.connection_id=c.id
-              and active.market=t.market and active.symbol=t.symbol and active.state<>'stopped'
+              and active.config_json->>'market'=t.market
+              and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+                =regexp_replace(regexp_replace(upper(btrim(t.symbol)), '^CMT_', ''), '[/_-]', '', 'g')
+              and active.state<>'stopped'
           )
         on conflict do nothing
         returning ${columns}`).bind(input.id, input.name.trim(), JSON.stringify(input.risk), input.configurationHash,
-          input.now, input.now, input.now, input.userId, input.strategyVersionId, input.configurationHash)
+          input.now, input.now, input.now, input.userId, input.strategyVersionId, input.configurationHash,
+          JSON.stringify(input.risk))
         .first<CloudRunRow>();
+      return row ? normalizeCloudRunRow(row) : null;
     },
-    findMatching(input: { id: string; userId: string; strategyVersionId: string; name: string;
+    async findMatching(input: { id: string; userId: string; strategyVersionId: string; name: string;
       configurationHash: string; mode: "live"; risk: CloudRiskInput }): Promise<CloudRunRow | null> {
       if (!ID.test(input.id) || !ID.test(input.userId) || !ID.test(input.strategyVersionId)
         || input.name.trim().length < 1 || input.name.trim().length > 100 || !HASH.test(input.configurationHash)) {
         return Promise.resolve(null);
       }
-      return database.prepare(`select ${columns} from cloud_strategy_runs
+      const row = await database.prepare(`select ${columns} from cloud_strategy_runs
         where id=? and user_id=? and strategy_version_id=? and name=? and configuration_hash=?
           and mode='live' and risk_json=?::text::jsonb limit 1`)
         .bind(input.id, input.userId, input.strategyVersionId, input.name.trim(), input.configurationHash,
           JSON.stringify(input.risk)).first<CloudRunRow>();
+      return row ? normalizeCloudRunRow(row) : null;
     },
     async hasActiveTargetConflict(input: { id: string; userId: string; strategyVersionId: string;
       configurationHash: string }): Promise<boolean> {
@@ -241,7 +265,9 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
         join cloud_strategy_runs active
           on active.user_id=requested_version.user_id
           and active.connection_id=requested_connection.id
-          and active.market=requested_strategy.market and active.symbol=requested_strategy.symbol
+          and active.config_json->>'market'=requested_version.config_json::jsonb->>'market'
+          and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+            =regexp_replace(regexp_replace(upper(btrim(requested_version.config_json::jsonb->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
         where requested_version.user_id=? and requested_version.id=? and requested_version.config_hash=?
           and active.id<>? and active.state<>'stopped' limit 1`)
         .bind(input.userId, input.strategyVersionId, input.configurationHash, input.id).first<{ conflict: number }>();
@@ -252,17 +278,19 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
       const conflict = await database.prepare(`select 1 as conflict
         from cloud_strategy_runs target join cloud_strategy_runs active
           on active.user_id=target.user_id and active.connection_id=target.connection_id
-          and active.market=target.market and active.symbol=target.symbol
+          and active.config_json->>'market'=target.config_json->>'market'
+          and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+            =regexp_replace(regexp_replace(upper(btrim(target.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
         where target.user_id=? and target.id=? and active.id<>target.id
           and active.state<>'stopped' limit 1`)
         .bind(input.userId, input.id).first<{ conflict: number }>();
       return conflict !== null;
     },
-    transition(input: { userId: string; id: string; state: "running" | "paused" | "stopped";
+    async transition(input: { userId: string; id: string; state: "running" | "paused" | "stopped";
       expectedVersion: number; now: number }): Promise<CloudRunRow | null> {
       if (!ID.test(input.userId) || !ID.test(input.id) || !Number.isSafeInteger(input.expectedVersion)
         || input.expectedVersion < 1) return Promise.resolve(null);
-      return database.prepare(`update cloud_strategy_runs as target set state=?,version=version+1,updated_at=?,
+      const row = await database.prepare(`update cloud_strategy_runs as target set state=?,version=version+1,updated_at=?,
         started_at=case when ?='running' then ? else started_at end,
         stopped_at=case when ?='stopped' then ? else stopped_at end,
         last_error_code=case when ?='running' then null else last_error_code end,
@@ -272,11 +300,14 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
           and (?<>'running' or not exists (
             select 1 from cloud_strategy_runs active
             where active.user_id=target.user_id and active.connection_id=target.connection_id
-              and active.market=target.market and active.symbol=target.symbol
+              and active.config_json->>'market'=target.config_json->>'market'
+              and regexp_replace(regexp_replace(upper(btrim(active.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
+                =regexp_replace(regexp_replace(upper(btrim(target.config_json->>'symbol')), '^CMT_', ''), '[/_-]', '', 'g')
               and active.id<>target.id and active.state<>'stopped'
           )) returning ${columns}`)
         .bind(input.state, input.now, input.state, input.now, input.state, input.now, input.state, input.state,
           input.userId, input.id, input.expectedVersion, input.state).first<CloudRunRow>();
+      return row ? normalizeCloudRunRow(row) : null;
     },
   };
 }

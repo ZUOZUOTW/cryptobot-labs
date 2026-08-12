@@ -9,10 +9,12 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/clean-next-build.mjs && next build --webpack && node scripts/check-next-edge-bundle.mjs",
+    "build": "node scripts/check-deployment-env.mjs && node scripts/clean-next-build.mjs && next build --webpack && node scripts/check-next-edge-bundle.mjs",
     "licenses:check": "node scripts/check-dependency-licenses.mjs",
     "start": "next start",
     "test": "vitest run",
+    "test:postgres": "vitest run tests/postgres-cloud-run-migration.test.ts --maxWorkers=1",
+    "test:deployment-env": "vitest run tests/deployment-env.test.ts --maxWorkers=1",
     "test:watch": "vitest",
     "lint": "eslint . --ignore-pattern '**/dist/**' --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

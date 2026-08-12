@@ -3839,10 +3839,18 @@ html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
 html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
   .mobile-tab-bar span {
   overflow: visible;
+  overflow-wrap: normal;
   text-overflow: clip;
   white-space: normal;
+  word-break: normal;
   line-height: 1.15;
   text-wrap: balance;
+}
+
+html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
+  :is(.catalog-summary, .catalog-summary *, .catalog-favorites-link span) {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 html:is([data-locale="en"], [data-locale="ru"], [data-locale="ja"])
@@ -4046,6 +4054,9 @@ html[data-locale="ru"] :is(.eyebrow, .site-footer__label) {
 @media (max-width: 38rem) {
   .catalog-filter-toggle { width: 100%; display: flex; }
   .catalog-controls[data-mobile-open="false"] { display: none; }
+  .catalog-summary { align-items: flex-start; flex-direction: column; }
+  .catalog-summary__actions { width: 100%; justify-content: space-between; }
+  .catalog-favorites-link span { white-space: nowrap; }
 }
 
 /* Cursor-paginated community discovery */

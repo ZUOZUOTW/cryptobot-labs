@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { StrategyShareActions } from "@/components/StrategyShareActions";
 import { loadPublicStrategyPublication } from "@/lib/server/public-strategy-loader";
+import { isLocale, resolveRequestLocale } from "@/lib/i18n/locales";
+import { translateMessage } from "@/lib/i18n/messages";
 import {
   formatDrawdownMagnitude,
   formatRate,
@@ -16,16 +19,36 @@ export const revalidate = 3600;
 
 interface StrategyPageProps {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export async function generateMetadata({ params }: StrategyPageProps): Promise<Metadata> {
-  const { slug } = await params;
+const interpolateMetadata = (template: string, values: readonly string[]): string => (
+  template.replace(/__(\d+)__/gu, (_, index) => values[Number(index)] ?? "")
+);
+
+export async function generateMetadata({ params, searchParams }: StrategyPageProps): Promise<Metadata> {
+  const emptyQuery: Record<string, string | string[] | undefined> = {};
+  const [{ slug }, query, requestHeaders] = await Promise.all([params, searchParams ?? Promise.resolve(emptyQuery), headers()]);
   const publication = await loadPublicStrategyPublication(slug);
   if (!publication) return {};
-  const title = `${publication.name}｜${publication.publisherName} 的公開策略`;
-  const description = `${publication.description}。${publication.symbol} ${publication.timeframe}，查看經 WEEX 公開歷史行情驗證的績效與完整策略結構。`;
-  const sharePath = `/strategies/${publication.slug}?v=${publication.updatedAt}`;
-  const image = strategyPosterPath(sharePath);
+  const requestedLocale = Array.isArray(query.locale) ? query.locale[0] : query.locale;
+  const locale = isLocale(requestedLocale)
+    ? requestedLocale
+    : resolveRequestLocale(requestHeaders.get("cookie"), requestHeaders.get("accept-language"));
+  const title = interpolateMetadata(
+    translateMessage(locale, "__0__｜__1__ 的公開策略"),
+    [publication.name, publication.publisherName],
+  );
+  const description = interpolateMetadata(
+    translateMessage(locale, "__0__。__1__ __2__，查看經 WEEX 公開歷史行情驗證的績效與完整策略結構。"),
+    [publication.description, publication.symbol, publication.timeframe],
+  );
+  const sharePath = `/strategies/${publication.slug}?v=${publication.updatedAt}&locale=${encodeURIComponent(locale)}`;
+  const image = strategyPosterPath(sharePath, locale);
+  const imageAlt = interpolateMetadata(
+    translateMessage(locale, "__0__ 公開策略績效預覽"),
+    [publication.name],
+  );
   return {
     title,
     description,
@@ -36,7 +59,7 @@ export async function generateMetadata({ params }: StrategyPageProps): Promise<M
       type: "article",
       url: sharePath,
       publishedTime: new Date(publication.publishedAt).toISOString(),
-      images: [{ url: image, width: 1200, height: 630, alt: `${publication.name} 公開策略績效預覽` }],
+      images: [{ url: image, width: 1200, height: 630, alt: imageAlt }],
     },
     twitter: { card: "summary_large_image", title, description, images: [image] },
   };

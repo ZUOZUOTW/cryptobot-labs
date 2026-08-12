@@ -4,6 +4,7 @@ import { normalizeUserEmail } from "../../db/repositories";
 import { errorResponse } from "./http";
 import { demoModeEnabled } from "./demo-mode";
 import { getCurrentSupabaseUser } from "./supabase-auth";
+import { canonicalDisplayName } from "../display-name";
 
 export interface PlatformIdentity { email: string; displayName: string; subject?: string }
 export interface PlatformIdentityProvider { getIdentity(): Promise<PlatformIdentity | null> }
@@ -40,13 +41,6 @@ export async function deriveWorkspaceUserId(email: string): Promise<string> {
   return `usr_${btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
 }
 
-const displayName = (value: string): string => {
-  if (typeof value !== "string") throw new Error("displayName is invalid");
-  const normalized = value.trim();
-  if (normalized.length < 1 || normalized.length > 100 || /[\u0000-\u001f\u007f]/.test(normalized)) throw new Error("displayName is invalid");
-  return normalized;
-};
-
 export async function requireApiUser(_request: Request, dependencies: ApiAuthDependencies): Promise<
   { ok: true; user: UserRecord } | { ok: false; response: Response }
 > {
@@ -58,7 +52,9 @@ export async function requireApiUser(_request: Request, dependencies: ApiAuthDep
   let email: string; let name: string; let userId: string;
   try {
     email = normalizeUserEmail(identity.email);
-    name = displayName(identity.displayName);
+    name = canonicalDisplayName(identity.displayName)
+      ?? canonicalDisplayName(email.split("@")[0])
+      ?? "會員";
     userId = identity.subject ?? await dependencies.deriveUserId(email);
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId)) throw new Error("derived user id is invalid");
   } catch {

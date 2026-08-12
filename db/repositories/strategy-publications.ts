@@ -1,5 +1,9 @@
 import type { ControlPlaneDatabase } from "../index";
 import { displayName, exactInput, id, time } from "./shared";
+import {
+  validatePublicPublicationDescription,
+  validatePublicPublisherName,
+} from "../../lib/publication-moderation";
 
 const SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
 
@@ -96,11 +100,12 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
       const owner = id(input.userId, "userId");
       const versionId = id(input.strategyVersionId, "strategyVersionId");
       const jobId = id(input.backtestJobId, "backtestJobId");
-      const publisher = displayName(input.publisherName, "publisherName");
+      const publisher = validatePublicPublisherName(displayName(input.publisherName, "publisherName"));
       const now = time(input.now, "now");
       if (!SLUG.test(input.slug)) throw new Error("publication slug is invalid");
-      const description = input.description.trim();
-      if (description.length < 20 || description.length > 400 || /[\u0000-\u001f\u007f]/.test(description)) {
+      const description = validatePublicPublicationDescription(input.description);
+      if (!publisher.valid) throw new Error("publication publisher is invalid");
+      if (!description.valid) {
         throw new Error("publication description is invalid");
       }
       return database.prepare(`INSERT INTO strategy_publications
@@ -126,7 +131,7 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
           weex_referral_url AS weexReferralUrl,'' AS market,'' AS symbol,'' AS configJson,
           '' AS metricsJson,'' AS equityCurveJson,NULL AS actualStartAt,NULL AS actualEndAt,
           published_at AS publishedAt,updated_at AS updatedAt`)
-        .bind(publicationId, input.slug, description, publisher, null, now, now,
+        .bind(publicationId, input.slug, description.value, publisher.value, null, now, now,
           jobId, owner, versionId).first<StrategyPublicationRecord>();
     },
 

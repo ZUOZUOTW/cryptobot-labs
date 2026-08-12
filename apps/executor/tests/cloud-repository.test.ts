@@ -31,6 +31,31 @@ describe("CloudRuntimeRepository run scheduling", () => {
       "owner-1", 1_700_000_000_000, "executor-a", 96,
     ]);
   });
+
+  it("canonicalizes legacy WEEX aliases before config and risk reach the executor", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      id: "run_1",
+      user_id: "usr_1",
+      connection_id: "wc_1",
+      mode: "live",
+      version: 1,
+      configuration_hash: "a".repeat(64),
+      config_json: { market: "futures", symbol: "CMT_BTC_USDT" },
+      risk_json: { allowedSymbols: ["BTC_USDT", "CMT_BTCUSDT"] },
+      last_candle_at: null,
+      last_evaluated_at: null,
+      consecutive_failures: 0,
+      positions_json: [],
+    }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.claimRuns("owner-1", 1_700_000_000_000, 96)).resolves.toEqual([
+      expect.objectContaining({
+        config: { market: "futures", symbol: "BTCUSDT" },
+        risk: { allowedSymbols: ["BTCUSDT"] },
+      }),
+    ]);
+  });
 });
 
 describe("CloudRuntimeRepository account projection", () => {

@@ -25,6 +25,7 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   invalid_publication_description: "The public strategy description is invalid.",
   invalid_weex_referral_url: "The WEEX referral URL is invalid.",
   verified_backtest_required: "A complete verified historical backtest is required before publication.",
+  publication_service_unavailable: "The strategy publication service is unavailable.",
   strategy_request_mismatch: "The backtest request does not match the selected strategy version.",
   invalid_economic_parameters: "The requested capital, fees, slippage, or leverage are outside safe backtest limits.",
   historical_funding_requires_futures: "Historical funding is available only for futures backtests.",

@@ -3,6 +3,7 @@
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonicalizeWeexSymbol } from "../packages/weex-client/src/symbol";
 
 const databases: DatabaseSync[] = [];
 
@@ -11,12 +12,12 @@ afterEach(() => {
 });
 
 describe("cloud strategy target exclusivity", () => {
-  it("uses a PostgreSQL and SQLite compatible partial unique index for every non-stopped state", async () => {
+  it("uses a canonical partial unique index for every non-stopped state", async () => {
     const migration = await readFile(
       "supabase/migrations/20260812090000_enforce_cloud_run_target_exclusivity.sql",
       "utf8",
     );
-    const index = migration.match(/create unique index cloud_runs_nonterminal_target_uidx[\s\S]*?;/i)?.[0];
+    const index = migration.match(/create unique index(?: if not exists)? cloud_runs_nonterminal_target_uidx[\s\S]*?;/i)?.[0];
 
     expect(index).toBeTruthy();
     expect(migration).not.toMatch(/\b(?:alter table|update|from|on) cloud_strategy_runs\b/i);
@@ -28,6 +29,17 @@ describe("cloud strategy target exclusivity", () => {
     expect(index).toMatch(/\(user_id, connection_id, market, symbol\)/i);
     expect(index).toMatch(/where state <> 'stopped'/i);
     expect(index).not.toMatch(/json_extract|insert\s+or\s+ignore/i);
+    expect(migration).toMatch(/before insert or update of config_json, risk_json/i);
+    expect(migration).not.toMatch(/update of config_json, risk_json, market, symbol/i);
+    expect(migration).toMatch(/security invoker[\s\S]*set search_path = ''/i);
+    expect(migration).toMatch(/revoke all on function private\.synchronize_cloud_run_target\(\)/i);
+    expect(migration).toMatch(/regexp_replace\([\s\S]*'\^CMT_'[\s\S]*'\[\/_-\]'/i);
+    expect(migration).toMatch(/new\.market := configured_market[\s\S]*new\.symbol := configured_symbol/i);
+    expect(migration).toMatch(/new\.config_json := jsonb_set\([\s\S]*symbol[\s\S]*configured_symbol/i);
+    expect(migration).toMatch(/new\.risk_json := jsonb_set\([\s\S]*allowedSymbols[\s\S]*canonical_allowed_symbols/i);
+    expect(migration).toMatch(/cloud_runs_risk_target_check/i);
+    expect(migration).toMatch(/jsonb_typeof\(allowed_value\) is distinct from 'string'/i);
+    expect(migration).toMatch(/update public\.cloud_strategy_runs[\s\S]*set config_json = config_json,[\s\S]*risk_json = risk_json/i);
 
     const database = new DatabaseSync(":memory:");
     databases.push(database);
@@ -42,20 +54,26 @@ describe("cloud strategy target exclusivity", () => {
     database.exec(index!.replace("public.cloud_strategy_runs", "cloud_strategy_runs"));
     const insert = database.prepare(`insert into cloud_strategy_runs
       (id,user_id,connection_id,market,symbol,state) values (?,?,?,?,?,?)`);
+    const insertAlias = (id: string, market: string, symbol: string, state: string) => insert.run(
+      id,
+      "user_1",
+      "connection_1",
+      market,
+      canonicalizeWeexSymbol(symbol),
+      state,
+    );
 
-    insert.run("run_1", "user_1", "connection_1", "futures", "BTCUSDT", "running");
-    expect(() => insert.run(
-      "run_2", "user_1", "connection_1", "futures", "BTCUSDT", "paused",
-    )).toThrow(/unique constraint failed/i);
+    insertAlias("run_1", "futures", "BTC_USDT", "running");
+    expect(() => insertAlias("run_2", "futures", "CMT_BTCUSDT", "paused"))
+      .toThrow(/unique constraint failed/i);
 
-    insert.run("run_spot", "user_1", "connection_1", "spot", "BTCUSDT", "running");
-    insert.run("run_eth", "user_1", "connection_1", "futures", "ETHUSDT", "running");
-    insert.run("run_stopped", "user_1", "connection_1", "futures", "BTCUSDT", "stopped");
+    insertAlias("run_spot", "spot", "BTC/USDT", "running");
+    insertAlias("run_eth", "futures", "ETHUSDT", "running");
+    insertAlias("run_stopped", "futures", "CMT_BTC_USDT", "stopped");
 
     database.prepare("update cloud_strategy_runs set state='stopped' where id='run_1'").run();
-    insert.run("run_2", "user_1", "connection_1", "futures", "BTCUSDT", "error");
-    expect(() => insert.run(
-      "run_3", "user_1", "connection_1", "futures", "BTCUSDT", "running",
-    )).toThrow(/unique constraint failed/i);
+    insertAlias("run_2", "futures", "BTCUSDT", "error");
+    expect(() => insertAlias("run_3", "futures", "BTC_USDT", "running"))
+      .toThrow(/unique constraint failed/i);
   });
 });
