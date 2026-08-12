@@ -377,7 +377,7 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       values ('run_1',1700000000000,'safe-client-id','{"action":"buy"}',
         '{"symbol":"BTCUSDT","side":"buy","quantity":"0.001","price":"64000"}',
         'acknowledged','exchange-1','exchange_order_filled',1700000000001,1700000000100,
-        $1::jsonb)`, [JSON.stringify({
+        $1::text::jsonb)`, [JSON.stringify({
           schemaVersion: 1,
           provider: "weex",
           observedAt: 1_700_000_000_100,
