@@ -94,6 +94,7 @@ const dependencies = (auth: ApiAuthDependencies = identity()) => {
     getOwned: vi.fn(async (): Promise<OwnedStrategyVersionRecord | null> => ownedVersion()),
   };
   const publications = {
+    hasApprovedReferral: vi.fn(async () => false),
     publish: vi.fn(async (input: {
       id: string; userId: string; strategyVersionId: string; backtestJobId: string;
       slug: string; description: string; publisherName: string; now: number;
@@ -112,8 +113,10 @@ const dependencies = (auth: ApiAuthDependencies = identity()) => {
       return stored;
     }),
     getBySlug: vi.fn(async () => stored),
-    updateReferralUrl: vi.fn(async (input: { weexReferralUrl: string }) => {
-      stored = publicationRecord({ weexReferralUrl: input.weexReferralUrl });
+    activateApprovedReferral: vi.fn(async () => {
+      stored = publicationRecord({
+        weexReferralUrl: "https://www.weex.com/register?inviteCode=SERVER_APPROVED",
+      });
       return true;
     }),
     listByUser: vi.fn(async () => [stored]),
@@ -161,14 +164,15 @@ describe("strategy publication route contracts", () => {
     const { handlers, versions, publications } = dependencies(anonymousIdentity());
     const post = await handlers.post(jsonRequest("/api/strategy-publications", "POST", publicationInput()));
     const patch = await handlers.patch(jsonRequest(`/api/strategy-publications/${slug}`, "PATCH", {
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
+      action: "activate-approved-referral",
     }), { params: Promise.resolve({ slug }) });
     const mine = await handlers.mine(new Request("https://app.example.test/api/strategy-publications/mine"));
 
     expect([post.status, patch.status, mine.status]).toEqual([401, 401, 401]);
     expect(versions.getOwned).not.toHaveBeenCalled();
     expect(publications.publish).not.toHaveBeenCalled();
-    expect(publications.updateReferralUrl).not.toHaveBeenCalled();
+    expect(publications.hasApprovedReferral).not.toHaveBeenCalled();
+    expect(publications.activateApprovedReferral).not.toHaveBeenCalled();
     expect(publications.listByUser).not.toHaveBeenCalled();
   });
 
@@ -211,6 +215,8 @@ describe("strategy publication route contracts", () => {
 
     expect(response.status).toBe(201);
     expect(body.publication).toMatchObject({ slug, publisherName: "Alice" });
+    expect(body.capabilities).toEqual({ canActivateApprovedReferral: false });
+    expect(publications.hasApprovedReferral).toHaveBeenCalledWith("usr_owner");
     expect(publications.publish).toHaveBeenCalledWith(expect.objectContaining({
       userId: "usr_owner",
       publisherName: "Alice",
@@ -234,23 +240,67 @@ describe("strategy publication route contracts", () => {
     expect(publications.publish).not.toHaveBeenCalled();
   });
 
-  it("keeps referral updates and owned listings scoped to the authenticated owner", async () => {
-    const { handlers, publications, revalidate } = dependencies(identity("usr_attacker", "Mallory"));
-    publications.updateReferralUrl.mockResolvedValueOnce(false);
+  it("activates only the server-approved promoter referral from an explicit action intent", async () => {
+    const { handlers, publications, revalidate } = dependencies(identity("usr_owner", "Alice"));
     const patch = await handlers.patch(jsonRequest(`/api/strategy-publications/${slug}`, "PATCH", {
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
+      action: "activate-approved-referral",
     }), { params: Promise.resolve({ slug }) });
     const mine = await handlers.mine(new Request("https://app.example.test/api/strategy-publications/mine"));
 
-    expect(patch.status).toBe(404);
-    expect(publications.updateReferralUrl).toHaveBeenCalledWith(expect.objectContaining({
-      userId: "usr_attacker",
+    expect(patch.status).toBe(200);
+    expect(await patch.json()).toMatchObject({
+      publication: { weexReferralUrl: "https://www.weex.com/register?inviteCode=SERVER_APPROVED" },
+    });
+    expect(publications.activateApprovedReferral).toHaveBeenCalledWith({
+      userId: "usr_owner",
       slug,
-    }));
+      now: 20,
+    });
+    expect(revalidate.tag).toHaveBeenCalledWith(`public-strategy-publication:v3:${slug}`);
+    expect(mine.status).toBe(200);
+    expect(publications.listByUser).toHaveBeenCalledWith("usr_owner", 100);
+  });
+
+  it.each([
+    ["ordinary member", "usr_member"],
+    ["disabled promoter", "usr_disabled"],
+  ])("fails closed for a %s that submits the fixed activation intent", async (_label, userId) => {
+    const { handlers, publications, revalidate } = dependencies(identity(userId, "Member"));
+    publications.activateApprovedReferral.mockResolvedValueOnce(false);
+
+    const response = await handlers.patch(jsonRequest(`/api/strategy-publications/${slug}`, "PATCH", {
+      action: "activate-approved-referral",
+    }), { params: Promise.resolve({ slug }) });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "approved_promoter_required" } });
+    expect(publications.activateApprovedReferral).toHaveBeenCalledWith({ userId, slug, now: 20 });
     expect(publications.getBySlug).not.toHaveBeenCalled();
     expect(revalidate.tag).not.toHaveBeenCalled();
-    expect(mine.status).toBe(200);
-    expect(publications.listByUser).toHaveBeenCalledWith("usr_attacker", 100);
+  });
+
+  it("rejects arbitrary browser referral URLs without touching the promoter repository", async () => {
+    const { handlers, publications } = dependencies(identity("usr_owner", "Alice"));
+    const response = await handlers.patch(jsonRequest(`/api/strategy-publications/${slug}`, "PATCH", {
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=BROWSER_UNTRUSTED",
+    }), { params: Promise.resolve({ slug }) });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "invalid_request" } });
+    expect(publications.activateApprovedReferral).not.toHaveBeenCalled();
+  });
+
+  it("returns the approved-referral capability only when the server store proves it", async () => {
+    const { handlers, publications } = dependencies(identity("usr_promoter", "Promoter"));
+    publications.hasApprovedReferral.mockResolvedValueOnce(true);
+
+    const response = await handlers.post(jsonRequest("/api/strategy-publications", "POST", publicationInput()));
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      capabilities: { canActivateApprovedReferral: true },
+    });
+    expect(publications.hasApprovedReferral).toHaveBeenCalledWith("usr_promoter");
   });
 
   it.each(["ＷＥＥＸ Official", "ᏔЕЕХ Official"])(

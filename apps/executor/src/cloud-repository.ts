@@ -2,6 +2,12 @@ import postgres, { type Sql } from "postgres";
 import type { EncryptedWeexCredentials } from "@cryptobot-labs/weex-client";
 import { canonicalizeWeexSymbol } from "@cryptobot-labs/weex-client";
 import type { SubmitOutcome } from "@cryptobot-labs/trading-core";
+import {
+  assertExecutorDatabaseSchema,
+  assertPostgresRuntimeIdentity,
+  EXECUTOR_DATABASE_SCHEMA_SQL,
+  POSTGRES_RUNTIME_IDENTITY_SQL,
+} from "../../../lib/server/postgres-runtime-readiness.js";
 
 type Database = Sql<Record<string, never>>;
 type Row = Record<string, unknown>;
@@ -153,13 +159,10 @@ export class CloudRuntimeRepository {
   }
 
   async assertReady(): Promise<void> {
-    const rows = await this.#sql.unsafe(`select to_regclass('public.cloud_strategy_runs') as runs,
-      to_regclass('private.cloud_order_intents') as orders,
-      to_regclass('public.weex_account_snapshots') as account_snapshots,
-      to_regclass('public.weex_realized_pnl_ledger') as realized_pnl`);
-    if (!rows[0] || Object.values(rows[0] as Row).some((value) => typeof value !== "string")) {
-      throw new Error("Cloud runtime database schema is not ready");
-    }
+    const identities = await this.#sql.unsafe(POSTGRES_RUNTIME_IDENTITY_SQL);
+    assertPostgresRuntimeIdentity(identities[0], "cryptobot_executor");
+    const rows = await this.#sql.unsafe(EXECUTOR_DATABASE_SCHEMA_SQL);
+    assertExecutorDatabaseSchema(rows[0]);
   }
 
   async claimAccountSnapshots(owner: string, now: number, limit = 20): Promise<ClaimedAccountSnapshot[]> {

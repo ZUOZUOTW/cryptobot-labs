@@ -45,7 +45,7 @@ jobs:
           AUTH_COOKIE_SECRET: "ci-only-auth-cookie-secret-000000000000"
           DEMO_MODE: "false"
           PUBLIC_ORIGIN: "https://ci.cryptobot.invalid"
-          SUPABASE_DATABASE_URL: "postgresql://ci-only.invalid/cryptobot"
+          SUPABASE_DATABASE_URL: "postgresql://cryptobot_netlify@ci-only.invalid/cryptobot"
           SUPABASE_PUBLISHABLE_KEY: "sb_publishable_ci_only_value"
           SUPABASE_URL: "https://ci-only.supabase.invalid"
 

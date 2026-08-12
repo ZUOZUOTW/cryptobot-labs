@@ -8,7 +8,7 @@ import { runWeexHistoricalBacktest, type PublicHistoricalBacktestAssumptions } f
 import { PerformanceChart } from "../PerformanceChart";
 import { useI18n } from "../I18nProvider";
 import { tradeDirectionLabel } from "../../lib/trade-direction";
-import { BacktestRequestForm } from "../backtests/BacktestRequestForm";
+import { BacktestRequestForm, type BacktestRequestState } from "../backtests/BacktestRequestForm";
 import { isVerifiedHistoricalReportForConfig } from "../../lib/historical-evidence";
 import type { FormalBacktestEvidence } from "../../lib/formal-backtest-report";
 
@@ -44,6 +44,7 @@ interface BacktestPanelProps {
   restoredReport?: BacktestReport | null;
   onReport?: (report: BacktestReport) => void;
   onFormalReport?: (evidence: FormalBacktestEvidence) => void;
+  onFormalStateChange?: (state: BacktestRequestState) => void;
   onRun?: () => void;
 }
 
@@ -67,10 +68,12 @@ export function BacktestPanel({
   restoredReport = null,
   onReport,
   onFormalReport,
+  onFormalStateChange,
   onRun,
 }: BacktestPanelProps) {
   if (config.source !== undefined) {
-    return <BacktestRequestForm compact config={config} onRun={onRun} onVerifiedReport={onFormalReport} />;
+    return <BacktestRequestForm compact config={config} onRun={onRun}
+      onStateChange={onFormalStateChange} onVerifiedReport={onFormalReport} />;
   }
   const configFingerprint = backtestConfigFingerprint(config);
   const sessionKey = `${configFingerprint}:${restoredReport ? JSON.stringify(restoredReport) : ""}`;

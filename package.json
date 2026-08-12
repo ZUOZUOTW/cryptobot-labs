@@ -9,7 +9,9 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/check-deployment-env.mjs && node scripts/clean-next-build.mjs && next build --webpack && node scripts/check-next-edge-bundle.mjs",
+    "build": "node scripts/check-deployment-env.mjs && node scripts/check-production-database-readiness.mjs website && node scripts/clean-next-build.mjs && next build --webpack && node scripts/check-next-edge-bundle.mjs",
+    "db:preflight:website": "node scripts/check-production-database-readiness.mjs website",
+    "db:preflight:executor": "node scripts/check-production-database-readiness.mjs executor",
     "licenses:check": "node scripts/check-dependency-licenses.mjs",
     "start": "next start",
     "test": "vitest run",

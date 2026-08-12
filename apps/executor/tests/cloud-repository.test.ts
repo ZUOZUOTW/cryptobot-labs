@@ -15,6 +15,76 @@ import {
   ORDER_SUBMISSION_TIMEOUT_MS,
   ORDER_SUBMISSION_TRANSACTION_TIMEOUT_MS,
 } from "../src/cloud-repository";
+import {
+  EXECUTOR_DATABASE_SCHEMA_SQL,
+  POSTGRES_RUNTIME_IDENTITY_SQL,
+} from "../../../lib/server/postgres-runtime-readiness.js";
+
+const executorIdentity = {
+  current_role: "cryptobot_executor",
+  session_role: "cryptobot_executor",
+  current_superuser: false,
+  current_bypassrls: false,
+  session_superuser: false,
+  session_bypassrls: false,
+};
+const executorSchema = {
+  runs_table_ready: true,
+  orders_table_ready: true,
+  account_snapshots_table_ready: true,
+  realized_pnl_table_ready: true,
+  market_column_ready: true,
+  symbol_column_ready: true,
+  target_index_definition: "CREATE UNIQUE INDEX cloud_runs_nonterminal_target_uidx ON public.cloud_strategy_runs USING btree (user_id, connection_id, market, symbol) WHERE (state <> 'stopped'::text)",
+  target_index_predicate: "(state <> 'stopped'::text)",
+  target_trigger_ready: true,
+  target_function_ready: true,
+  target_function_acl_ready: true,
+  stop_trigger_ready: true,
+  stop_trigger_function_ready: true,
+  stop_trigger_function_acl_ready: true,
+  stop_function_ready: true,
+  stop_function_acl_ready: true,
+};
+
+describe("CloudRuntimeRepository readiness", () => {
+  beforeEach(() => {
+    database.unsafe.mockReset();
+  });
+
+  it("checks executor identity before the complete live-trading schema fence", async () => {
+    database.unsafe
+      .mockResolvedValueOnce([executorIdentity])
+      .mockResolvedValueOnce([executorSchema]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.assertReady()).resolves.toBeUndefined();
+    expect(database.unsafe).toHaveBeenCalledTimes(2);
+    expect(database.unsafe.mock.calls[0]?.[0]).toBe(POSTGRES_RUNTIME_IDENTITY_SQL);
+    expect(database.unsafe.mock.calls[1]?.[0]).toBe(EXECUTOR_DATABASE_SCHEMA_SQL);
+  });
+
+  it("refuses readiness when the stop fence migration is not fully applied", async () => {
+    database.unsafe
+      .mockResolvedValueOnce([executorIdentity])
+      .mockResolvedValueOnce([{ ...executorSchema, stop_function_ready: false }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.assertReady()).rejects.toThrow("Cloud runtime database schema is not ready");
+    expect(database.unsafe).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not inspect schema through a mismatched executor login", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      ...executorIdentity,
+      session_role: "postgres",
+    }]);
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+
+    await expect(repository.assertReady()).rejects.toThrow("Postgres runtime identity is not ready");
+    expect(database.unsafe).toHaveBeenCalledOnce();
+  });
+});
 
 describe("CloudRuntimeRepository run scheduling", () => {
   beforeEach(() => {
@@ -293,6 +363,44 @@ describe("CloudRuntimeRepository atomic order authorization", () => {
     expect(transaction.unsafe.mock.calls[3]?.[1]).toEqual([
       run.id, run.userId, 1_700_000_000_001, "owner-1",
     ]);
+  });
+
+  it("refuses to cross the exchange boundary after an atomic stop wins the run lock", async () => {
+    const transaction = {
+      unsafe: vi.fn()
+        .mockResolvedValueOnce(Object.assign([], { count: 0 }))
+        .mockResolvedValueOnce([{
+          status: "active",
+          permissions_json: { read: true, futuresDemoTrade: true },
+          withdrawal_access_absent: true,
+          credential_version: 3,
+          connection_version: 5,
+        }])
+        .mockResolvedValueOnce([{
+          mode: "futures-demo",
+          market: "futures",
+          state: "stopped",
+          lease_owner: null,
+          order_status: "claimed",
+        }]),
+    };
+    database.begin.mockImplementationOnce(async (callback: (sql: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+    const repository = new CloudRuntimeRepository("postgres://executor.invalid/database", "executor-a");
+    const submit = vi.fn();
+
+    await expect(repository.submitAuthorizedOrder({
+      run,
+      owner: "owner-1",
+      candleCloseAt: 1_700_000_000_000,
+      now: 1_700_000_000_001,
+      credentialVersion: 3,
+      connectionVersion: 5,
+    }, submit)).resolves.toEqual({ authorized: false });
+
+    expect(String(transaction.unsafe.mock.calls[2]?.[0])).toContain("for update of r,o");
+    expect(submit).not.toHaveBeenCalled();
+    expect(transaction.unsafe).toHaveBeenCalledTimes(3);
   });
 
   it("commits durable unknown evidence before surfacing an ambiguous submission failure", async () => {

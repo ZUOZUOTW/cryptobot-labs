@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as schema from "../db/schema";
 
 const expectedTables = [
-  "users", "devices", "deviceCredentials", "deviceConnections", "pairingCodes", "deviceBootstraps", "deviceNonces",
+  "users", "promoters", "devices", "deviceCredentials", "deviceConnections", "pairingCodes", "deviceBootstraps", "deviceNonces",
   "strategies", "strategyVersions", "backtestJobs", "backtestDatasets", "backtestResults", "strategyPublications",
   "deployments", "riskPolicies", "runHeartbeats", "positionSnapshots", "orders", "fills",
   "commands", "commandAcknowledgements", "auditEvents",
@@ -18,6 +18,9 @@ describe("D1 control-plane schema", () => {
   it("defines every planned table with text IDs and integer millisecond timestamps", () => {
     for (const name of expectedTables) expect(schema[name]).toBeDefined();
     expect(columns(schema.users)).toEqual(expect.arrayContaining(["id", "normalized_email", "created_at", "updated_at"]));
+    expect(columns(schema.promoters)).toEqual(expect.arrayContaining([
+      "user_id", "slug", "role", "status", "weex_referral_url", "approved_at", "updated_at",
+    ]));
     expect(columns(schema.pairingCodes)).toEqual(expect.arrayContaining(["id", "user_id", "code_hash", "expires_at", "consumed_at"]));
     expect(columns(schema.backtestResults)).toEqual(expect.arrayContaining(["provenance_json", "metrics_json", "initial_capital", "engine_version"]));
     expect(columns(schema.deployments)).toContain("version");
@@ -33,6 +36,10 @@ describe("D1 control-plane schema", () => {
 
   it("defines ownership, nonce, client-order, and lookup indexes", () => {
     expect(indexes(schema.devices)).toContain("devices_user_status_idx");
+    expect(indexes(schema.promoters)).toEqual(expect.arrayContaining([
+      "promoters_slug_uidx",
+      "promoters_status_role_idx",
+    ]));
     expect(indexes(schema.deviceNonces)).toContain("device_nonces_device_nonce_uidx");
     expect(indexes(schema.orders)).toContain("orders_deployment_client_order_uidx");
     expect(indexes(schema.orders)).toContain("orders_deployment_exchange_order_uidx");

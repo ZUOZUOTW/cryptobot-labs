@@ -1,5 +1,5 @@
 [build]
-  command = "node scripts/check-deployment-env.mjs && node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack && node scripts/check-next-edge-bundle.mjs"
+  command = "node scripts/check-deployment-env.mjs && node scripts/check-production-database-readiness.mjs website && node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack && node scripts/check-next-edge-bundle.mjs"
   publish = ".next"
 
 [build.environment]

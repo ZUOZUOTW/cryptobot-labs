@@ -35,7 +35,11 @@ interface PackagePanelProps {
 
 type WorkState = "idle" | "working" | "complete" | "error";
 interface SavedVersion { id: string; configHash: string }
-interface PublishedPublication { slug: string; updatedAt: number }
+interface PublishedPublication {
+  slug: string;
+  updatedAt: number;
+  canActivateApprovedReferral: boolean;
+}
 
 const ACTION_MASCOTS = {
   save: "/mascots/ai-strategy-vault-v1.webp",
@@ -64,12 +68,17 @@ export function PackagePanel({ config, flowCheckState = "untested", formalEviden
   const [actionState, setActionState] = useState<WorkState>("idle");
   const [publishState, setPublishState] = useState<WorkState>("idle");
   const [shareState, setShareState] = useState<WorkState>("idle");
+  const [referralState, setReferralState] = useState<WorkState>("idle");
   const [importState, setImportState] = useState<WorkState>("idle");
   const [message, setMessage] = useState("");
   const [description, setDescription] = useState("");
-  const [weexReferralUrl, setWeexReferralUrl] = useState("");
   const [fallback, setFallback] = useState<{ fingerprint: string; files: BotPackageFile[] } | null>(null);
-  const [publication, setPublication] = useState<{ fingerprint: string; slug: string; url: string } | null>(null);
+  const [publication, setPublication] = useState<{
+    fingerprint: string;
+    slug: string;
+    url: string;
+    canActivateApprovedReferral: boolean;
+  } | null>(null);
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
   const exportInFlightRef = useRef(false);
   const restoreAfterExportRef = useRef(false);
@@ -176,7 +185,7 @@ export function PackagePanel({ config, flowCheckState = "untested", formalEviden
   };
 
   const hasError = exportState === "error" || backupState === "error" || actionState === "error" || publishState === "error"
-    || shareState === "error" || importState === "error";
+    || shareState === "error" || referralState === "error" || importState === "error";
   const requireLogin = () => { window.location.assign(demoAuthPath(`${window.location.pathname}${window.location.search}`)); };
   const parseSavedVersion = (value: unknown): SavedVersion | null => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -231,23 +240,19 @@ export function PackagePanel({ config, flowCheckState = "untested", formalEviden
     }
   };
 
-  const validReferralUrl = (value: string): boolean => {
-    try {
-      const url = new URL(value);
-      const hostname = url.hostname.toLowerCase();
-      return url.protocol === "https:" && !url.username && !url.password && !url.hash
-        && (url.port === "" || url.port === "443")
-        && (hostname === "weex.com" || hostname.endsWith(".weex.com"));
-    } catch { return false; }
-  };
   const parsePublishedPublication = (value: unknown): PublishedPublication | null => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const candidate = (value as { publication?: unknown }).publication;
+    const response = value as { publication?: unknown; capabilities?: unknown };
+    const candidate = response.publication;
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
     const record = candidate as Record<string, unknown>;
+    const capabilities = response.capabilities;
+    const canActivateApprovedReferral = Boolean(capabilities && typeof capabilities === "object"
+      && !Array.isArray(capabilities)
+      && (capabilities as Record<string, unknown>).canActivateApprovedReferral === true);
     return typeof record.slug === "string" && /^[a-z0-9][a-z0-9-]{7,79}$/.test(record.slug)
       && Number.isSafeInteger(record.updatedAt) && Number(record.updatedAt) >= 0
-      ? { slug: record.slug, updatedAt: record.updatedAt as number }
+      ? { slug: record.slug, updatedAt: record.updatedAt as number, canActivateApprovedReferral }
       : null;
   };
   const publicationUrl = ({ slug, updatedAt }: PublishedPublication): string => {
@@ -344,9 +349,15 @@ export function PackagePanel({ config, flowCheckState = "untested", formalEviden
       const published = parsePublishedPublication(await publicationResponse.json().catch(() => null));
       if (!publicationResponse.ok || !published) throw new Error("publish_failed");
       const url = publicationUrl(published);
-      setPublication({ fingerprint, slug: published.slug, url });
+      setPublication({
+        fingerprint,
+        slug: published.slug,
+        url,
+        canActivateApprovedReferral: published.canActivateApprovedReferral,
+      });
       setPublishState("complete");
       setShareState("idle");
+      setReferralState("idle");
       setMessage("策略已發布到公開策略列表；你現在可以查看公開頁或分享策略連結。");
     } catch {
       setPublishState("error");
@@ -360,44 +371,49 @@ export function PackagePanel({ config, flowCheckState = "untested", formalEviden
       setMessage("請先將目前策略版本發布到公開策略列表，再分享策略連結。");
       return;
     }
-    const referralUrl = weexReferralUrl.trim();
-    if (referralUrl && !validReferralUrl(referralUrl)) {
-      setShareState("error");
-      setMessage("請輸入有效的 WEEX HTTPS 邀請註冊連結；為避免錯誤導流，不接受其他網域。");
-      return;
-    }
     setShareState("working");
-    let shareUrl = publishedUrl;
     try {
-      if (referralUrl) {
-        const response = await fetch(`/api/strategy-publications/${encodeURIComponent(publication.slug)}`, {
-          method: "PATCH",
-          cache: "no-store",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ weexReferralUrl: referralUrl }),
-        });
-        if (response.status === 401) { requireLogin(); return; }
-        const updated = parsePublishedPublication(await response.json().catch(() => null));
-        if (!response.ok || !updated || updated.slug !== publication.slug) {
-          throw new Error("referral_update_failed");
-        }
-        shareUrl = publicationUrl(updated);
-        setPublication({ fingerprint, slug: updated.slug, url: shareUrl });
-      }
-    } catch {
-      setShareState("error");
-      setMessage("邀請連結無法保存；公開策略未變更，請確認網址後重試。");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(publishedUrl);
       setShareState("complete");
-      setMessage(referralUrl ? "邀請連結已保存，策略分享連結已複製。" : "策略分享連結已複製。");
+      setMessage("策略分享連結已複製。");
     } catch {
       setShareState("error");
-      setMessage(referralUrl
-        ? `邀請連結已保存，但無法自動複製；請手動分享此策略連結：${shareUrl}`
-        : `無法自動複製，請手動分享此策略連結：${shareUrl}`);
+      setMessage(`無法自動複製，請手動分享此策略連結：${publishedUrl}`);
+    }
+  };
+
+  const activateApprovedReferral = async () => {
+    if (!publishedUrl || !publication || publication.fingerprint !== fingerprint
+      || !publication.canActivateApprovedReferral) return;
+    setReferralState("working");
+    setMessage("");
+    try {
+      const response = await fetch(`/api/strategy-publications/${encodeURIComponent(publication.slug)}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "activate-approved-referral" }),
+      });
+      if (response.status === 401) { requireLogin(); return; }
+      const updated = parsePublishedPublication(await response.json().catch(() => null));
+      if (!response.ok || !updated || updated.slug !== publication.slug) {
+        if (response.status === 403) {
+          setPublication((current) => current ? { ...current, canActivateApprovedReferral: false } : current);
+        }
+        throw new Error("referral_activation_failed");
+      }
+      const url = publicationUrl(updated);
+      setPublication({
+        fingerprint,
+        slug: updated.slug,
+        url,
+        canActivateApprovedReferral: true,
+      });
+      setReferralState("complete");
+      setMessage("已套用伺服器核准的推薦來源；公開策略頁會顯示推薦揭露。");
+    } catch {
+      setReferralState("error");
+      setMessage("核准的推薦來源無法套用；公開策略未變更。");
     }
   };
   return (
@@ -492,40 +508,33 @@ export function PackagePanel({ config, flowCheckState = "untested", formalEviden
           <h3 id="workshop-share-strategy-title">分享策略連結</h3>
           <p>
             {publishedUrl
-              ? "可選填 WEEX 邀請連結，再複製目前已發布版本的公開網址。"
+              ? "複製目前已發布版本的公開網址；一般會員分享不會加入自訂推薦連結。"
               : "發布完成後，才可複製公開策略網址並分享給其他用戶。"}
           </p>
-          {authMode === "production" && (
-            <label className="workshop-share-action__referral">
-              <span>WEEX 邀請註冊連結（選填）</span>
-              <input
-                aria-label="WEEX 邀請註冊連結（選填）"
-                autoComplete="url"
-                disabled={!publishedUrl || shareState === "working"}
-                inputMode="url"
-                onChange={(event) => setWeexReferralUrl(event.target.value)}
-                placeholder="https://www.weex.com/..."
-                type="url"
-                value={weexReferralUrl}
-              />
-              <small>不填仍可分享；填寫後會顯示在公開策略頁，且只會套用到這個已發布版本。</small>
-            </label>
-          )}
         </div>
         <div className="workshop-share-action__controls">
           {publishedUrl
             ? <a className="button button--secondary" href={publishedUrl}>查看公開策略</a>
             : <span>尚未發布，暫無可分享連結</span>}
+          {publishedUrl && publication?.canActivateApprovedReferral && (
+            <button
+              aria-label="套用已核准推薦來源"
+              className="button button--secondary"
+              disabled={referralState === "working" || shareState === "working"}
+              onClick={() => void activateApprovedReferral()}
+              type="button"
+            >
+              {referralState === "working" ? "正在套用核准來源…" : "套用已核准推薦來源"}
+            </button>
+          )}
           <button
             aria-label="複製策略分享連結"
             className="button button--primary"
-            disabled={!publishedUrl || shareState === "working"}
+            disabled={!publishedUrl || shareState === "working" || referralState === "working"}
             onClick={() => void sharePublishedStrategy()}
             type="button"
           >
-            {shareState === "working"
-              ? weexReferralUrl.trim() ? "正在儲存並複製…" : "正在複製…"
-              : "複製策略連結"}
+            {shareState === "working" ? "正在複製…" : "複製策略連結"}
           </button>
         </div>
       </section>

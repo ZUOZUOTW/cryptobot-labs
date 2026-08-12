@@ -34,7 +34,7 @@ describe("production strategy publication route boundary", () => {
     ["PATCH", () => PATCH(new Request("https://app.example.test/api/strategy-publications/strategy-aaaaaaaa", {
       method: "PATCH",
       headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
-      body: JSON.stringify({ weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE" }),
+      body: JSON.stringify({ action: "activate-approved-referral" }),
     }), { params: Promise.resolve({ slug: "strategy-aaaaaaaa" }) })],
     ["mine", () => MINE(new Request("https://app.example.test/api/strategy-publications/mine"))],
   ] as const)("returns credential-safe no-store JSON when %s dependency initialization fails", async (_name, call) => {

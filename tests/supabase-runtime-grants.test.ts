@@ -73,4 +73,22 @@ describe("Supabase server runtime grants", () => {
     expect(migration).not.toMatch(/grant\s+.*\s+to\s+(anon|authenticated)/i);
     expect(migration).not.toMatch(/grant\s+delete/i);
   });
+
+  it("keeps promoter approvals server-owned and exposes only read access to the Netlify runtime", async () => {
+    const migration = await readFile(resolve(
+      "supabase/migrations/20260812061404_authorize_strategy_referrals.sql",
+    ), "utf8");
+
+    expect(migration).toMatch(/create table public\.promoters/i);
+    expect(migration).toMatch(/check \(role in \('kol', 'bd'\)\)/i);
+    expect(migration).toMatch(/check \(status in \('pending', 'active', 'disabled'\)\)/i);
+    expect(migration).toMatch(/status <> 'active'[\s\S]*weex_referral_url is not null[\s\S]*approved_at is not null/i);
+    expect(migration).toMatch(/alter table public\.promoters enable row level security/i);
+    expect(migration).toMatch(
+      /revoke all on table public\.promoters\s+from public, anon, authenticated, service_role, cryptobot_executor/i,
+    );
+    expect(migration).toMatch(/grant select on table public\.promoters to cryptobot_netlify/i);
+    expect(migration).toMatch(/create policy netlify_server_runtime[\s\S]*to cryptobot_netlify/i);
+    expect(migration).not.toMatch(/grant\s+(insert|update|delete|all)[\s\S]*to cryptobot_netlify/i);
+  });
 });

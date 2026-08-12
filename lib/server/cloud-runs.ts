@@ -9,6 +9,10 @@ export const CLOUD_RUN_TARGET_CONFLICT = Object.freeze({
   error: "cloud_run_target_conflict",
   message: "Another non-stopped cloud strategy already controls this WEEX account, market, and symbol. Stop it before starting this strategy.",
 });
+export const CLOUD_RUN_ORDER_IN_FLIGHT = Object.freeze({
+  error: "cloud_run_order_in_flight",
+  message: "This strategy still has an order awaiting authoritative exchange settlement. It remains non-stopped and retains its trading target.",
+});
 
 export interface CloudRiskInput {
   allowedSymbols: string[];
@@ -306,7 +310,14 @@ export function createCloudRunRepository(database: ControlPlaneDatabase) {
     async transition(input: { userId: string; id: string; state: "running" | "paused" | "stopped";
       expectedVersion: number; allowLiveResume: boolean; now: number }): Promise<CloudRunRow | null> {
       if (!ID.test(input.userId) || !ID.test(input.id) || !Number.isSafeInteger(input.expectedVersion)
-        || input.expectedVersion < 1 || typeof input.allowLiveResume !== "boolean") return Promise.resolve(null);
+        || input.expectedVersion < 1 || typeof input.allowLiveResume !== "boolean"
+        || !Number.isSafeInteger(input.now) || input.now < 0) return Promise.resolve(null);
+      if (input.state === "stopped") {
+        const stopped = await database.prepare(`select ${columns}
+          from private.stop_cloud_strategy_run(?,?,?,?)`)
+          .bind(input.userId, input.id, input.expectedVersion, input.now).first<CloudRunRow>();
+        return stopped ? normalizeCloudRunRow(stopped) : null;
+      }
       const row = await database.prepare(`update cloud_strategy_runs as target set state=?,version=version+1,updated_at=?,
         started_at=case when ?='running' then ? else started_at end,
         stopped_at=case when ?='stopped' then ? else stopped_at end,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { BacktestPanel } from "../../components/workshop/BacktestPanel";
 import { createWeexJavaScriptTemplate, JavaScriptEditor } from "../../components/workshop/JavaScriptEditor";
 import { ParameterPanel } from "../../components/workshop/ParameterPanel";
@@ -16,6 +16,10 @@ import { validateConfig } from "../../lib/strategy-validation";
 import { captureAttribution } from "../../lib/attribution";
 import { resolvedTradeDirection } from "../../lib/trade-direction";
 import type { FormalBacktestEvidence } from "../../lib/formal-backtest-report";
+import type { BacktestRequestState } from "../../components/backtests/BacktestRequestForm";
+import { useI18n } from "../../components/I18nProvider";
+import { isLocale, LOCALE_STORAGE_KEY, resolveInitialLocale } from "../../lib/i18n/locales";
+import { localizedWorkshopTemplateCopy } from "../../lib/i18n/workshop-template";
 
 const cloneBlock = (block: StrategyBlock): StrategyBlock => ({
   ...block,
@@ -42,15 +46,28 @@ const configFromBot = (bot: BotDefinition): BotConfig => ({
 });
 
 const DEFAULT_CONFIG = cloneConfig(STRATEGY_PRESETS[0]);
-const blankConfig = (): BotConfig => ({
+const blankConfig = (locale: Parameters<typeof localizedWorkshopTemplateCopy>[0] = "zh-Hant"): BotConfig => ({
   ...cloneConfig(DEFAULT_CONFIG),
   id: "untitled-strategy",
-  name: "未命名策略",
+  name: localizedWorkshopTemplateCopy(locale).unnamed,
   blocks: [],
 });
 const draftSaveWarning = (reason: string): string => (
   `${reason}；目前內容仍保留在本頁，可調整後再次儲存。`
 );
+
+const resolveWorkshopBootstrapLocale = () => {
+  let storedLocale: string | null = null;
+  try { storedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY); }
+  catch { /* Storage can be unavailable in hardened/private browsing contexts. */ }
+  const documentLocale = isLocale(document.documentElement.dataset.locale)
+    ? document.documentElement.dataset.locale
+    : null;
+  return resolveInitialLocale(
+    storedLocale ?? documentLocale,
+    navigator.languages?.length ? navigator.languages : [navigator.language],
+  );
+};
 
 const configFromPublication = (value: unknown): BotConfig | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -98,6 +115,7 @@ interface AssociatedFlowCheck {
 }
 
 export default function WorkshopPage() {
+  const { locale } = useI18n();
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [draftError, setDraftError] = useState("");
   const [mode, setMode] = useState<WorkshopMode>("visual");
@@ -149,15 +167,16 @@ export default function WorkshopPage() {
         if (!active) return;
         const draft = loadDraft();
         const requestedBot = BOT_CATALOG.find((bot) => bot.id === search.get("bot"));
+        const bootstrappedLocale = resolveWorkshopBootstrapLocale();
         const next = deliberateNew
-          ? blankConfig()
+          ? blankConfig(bootstrappedLocale)
           : requestedBot
             ? configFromBot(requestedBot)
             : draft
               ? cloneConfig(draft)
               : cloneConfig(DEFAULT_CONFIG);
         const requestedJavaScript = search.get("mode") === "javascript";
-        if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next);
+        if (requestedJavaScript && next.source === undefined) next.source = createWeexJavaScriptTemplate(next, bootstrappedLocale);
         setMode(requestedJavaScript || next.source !== undefined ? "javascript" : "visual");
         setConfig(next);
       })();
@@ -180,6 +199,12 @@ export default function WorkshopPage() {
     setAssociatedReport(null);
     setMobileMessage("正在固定策略版本並建立正式歷史回測證據…");
   };
+  const reflectFormalReportState = useCallback((state: BacktestRequestState) => {
+    if (state === "ensuring") setMobileMessage("正在固定策略版本並建立正式歷史回測證據…");
+    else if (state === "running") setMobileMessage("正在取得公開歷史行情並執行回測…");
+    else if (state === "unauthorized") setMobileMessage("請先登入，才能保存並查看自己的歷史回測。");
+    else if (state === "error") setMobileMessage("歷史回測暫時無法執行，請稍後重試。");
+  }, []);
   const mobileStepIndex = MOBILE_WORKSHOP_STEPS.findIndex((step) => step.id === mobileStep);
 
   const updateConfig = (createNext: (current: BotConfig) => BotConfig) => {
@@ -235,7 +260,7 @@ export default function WorkshopPage() {
       return;
     }
     if (nextMode === "javascript" && config.source === undefined) {
-      updateConfig((current) => ({ ...current, source: createWeexJavaScriptTemplate(current) }));
+      updateConfig((current) => ({ ...current, source: createWeexJavaScriptTemplate(current, locale) }));
     }
   };
 
@@ -264,7 +289,7 @@ export default function WorkshopPage() {
   };
 
   const resetToBlank = () => {
-    const next = blankConfig();
+    const next = blankConfig(locale);
     const saved = saveDraft(next);
     setDraftError(saved.ok ? "" : draftSaveWarning(saved.reason));
     setConfig(next);
@@ -370,7 +395,7 @@ export default function WorkshopPage() {
               selected={config.blocks}
             />
           ) : (
-            <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config)} onChange={updateSource} />
+            <JavaScriptEditor source={config.source ?? createWeexJavaScriptTemplate(config, locale)} onChange={updateSource} />
           )}
         </div>
         <div className="workshop-step-panel" data-mobile-active={mobileStep === "parameters"} id="workshop-step-parameters">
@@ -394,6 +419,7 @@ export default function WorkshopPage() {
                 ? () => setMobileMessage("正在取得公開歷史行情並執行回測…")
                 : beginFormalReport}
               onFormalReport={acceptFormalReport}
+              onFormalStateChange={reflectFormalReportState}
               onReport={acceptReport}
               restoredReport={currentReport}
               validation={validation}

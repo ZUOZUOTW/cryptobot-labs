@@ -26,6 +26,13 @@ const interpolateMetadata = (template: string, values: readonly string[]): strin
   template.replace(/__(\d+)__/gu, (_, index) => values[Number(index)] ?? "")
 );
 
+const AffiliateRelationshipDisclosure = () => (
+  <p className="simulation-disclosure public-strategy-affiliate-disclosure" role="note">
+    此連結可能包含推薦關係，您的使用費用不因此增加。{" "}
+    <Link href="/disclosures/affiliate">查看完整推廣揭露</Link>
+  </p>
+);
+
 export async function generateMetadata({ params, searchParams }: StrategyPageProps): Promise<Metadata> {
   const emptyQuery: Record<string, string | string[] | undefined> = {};
   const [{ slug }, query, requestHeaders] = await Promise.all([params, searchParams ?? Promise.resolve(emptyQuery), headers()]);
@@ -127,6 +134,7 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
                 }}
               />
             </div>
+            {publication.weexReferralUrl && <AffiliateRelationshipDisclosure />}
           </div>
           <aside className="bot-detail-snapshot glass-panel public-strategy-snapshot" aria-label="公開策略摘要">
             <Image alt="" aria-hidden="true" height={180} src="/mascots/ai-builder.webp" width={200} />
@@ -148,9 +156,7 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
             ? "公開固定版本 · 自訂程式碼不公開，套用時使用公開積木設定 · Email 不公開"
             : "公開固定版本 · 可建立自己的可編輯副本 · Email 不公開"}</span>
         </div>
-        {publication.weexReferralUrl
-          ? <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效；邀請連結由發布者提供。</p>
-          : <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效</p>}
+        <p className="simulation-disclosure" role="note">WEEX 公開歷史行情回測，不代表未來績效</p>
       </header>
 
       <section className="detail-section site-container public-strategy-performance" aria-labelledby="public-performance-title">
@@ -200,6 +206,7 @@ export default async function StrategyPublicationPage({ params }: StrategyPagePr
           <p>{publication.weexReferralUrl
             ? <>透過 {publication.publisherName} 的專屬邀請連結前往 WEEX 註冊；註冊完成後再回到 CryptoBot Labs 連線並自行設定風險限制。</>
             : "將公開策略帶入組裝車間，檢查模組、方向與風控參數後，再建立自己的固定版本。"}</p>
+          {publication.weexReferralUrl && <AffiliateRelationshipDisclosure />}
         </div>
         <div className="button-row">
           <Link

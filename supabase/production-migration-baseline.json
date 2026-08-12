@@ -115,9 +115,14 @@
   ],
   "pendingMigrations": [
     {
+      "version": "20260812061404",
+      "name": "authorize_strategy_referrals",
+      "normalizedSha256": "000f6e59fd71e553d125dd8f3e73f044c8b002b449f4403be79ad92356e8fba3"
+    },
+    {
       "version": "20260812090000",
       "name": "enforce_cloud_run_target_exclusivity",
-      "normalizedSha256": "2b47b4c3bbb2d8ae75bf3d870a46ad6c8ed1e39baf2ba0e9cf3c5ecb9550d103"
+      "normalizedSha256": "79ac8ab293a407cd149e47bdfe21eb2fafd6dfa47a90c73ef659bd7fe5545d32"
     }
   ]
 }

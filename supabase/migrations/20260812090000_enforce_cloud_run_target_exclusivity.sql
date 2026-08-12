@@ -14,7 +14,6 @@ declare
   allowed_value jsonb;
   allowed_symbol text;
   canonical_allowed_symbol text;
-  canonical_allowed_symbols jsonb := '[]'::jsonb;
   target_is_allowed boolean := false;
 begin
   configured_market := new.config_json->>'market';
@@ -72,9 +71,6 @@ begin
         constraint = 'cloud_runs_risk_target_check',
         message = 'cloud run risk policy contains invalid allowed symbols';
     end if;
-    if not canonical_allowed_symbols @> jsonb_build_array(canonical_allowed_symbol) then
-      canonical_allowed_symbols := canonical_allowed_symbols || jsonb_build_array(canonical_allowed_symbol);
-    end if;
     target_is_allowed := target_is_allowed or canonical_allowed_symbol = configured_symbol;
   end loop;
 
@@ -85,12 +81,11 @@ begin
       message = 'cloud run risk policy does not allow its configured target';
   end if;
 
-  -- Always derive the indexed identity from immutable config_json. This keeps
-  -- pre-migration writers compatible and prevents explicit-column bypasses.
+  -- Derive only the indexed identity from the immutable evidence snapshots.
+  -- Mutating config_json would break its configuration_hash/backtest binding;
+  -- mutating risk_json would silently change the authorized risk snapshot.
   new.market := configured_market;
   new.symbol := configured_symbol;
-  new.config_json := jsonb_set(new.config_json, '{symbol}', to_jsonb(configured_symbol), false);
-  new.risk_json := jsonb_set(new.risk_json, '{allowedSymbols}', canonical_allowed_symbols, false);
   return new;
 end;
 $$;
@@ -165,4 +160,131 @@ comment on index public.cloud_runs_nonterminal_target_uidx is
   'A canonical WEEX account target may be controlled by only one non-stopped cloud strategy run.';
 
 comment on function private.synchronize_cloud_run_target() is
-  'Derives canonical cloud-run target columns from config_json for old and new writers and validates risk target consistency.';
+  'Derives canonical target columns without mutating hash-bound config or authorized risk snapshots, and validates risk target consistency.';
+
+create or replace function private.reject_cloud_run_stop_with_unsettled_order()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.state = 'stopped'
+    and old.state <> 'stopped'
+    and exists (
+      select 1
+      from private.cloud_order_intents order_intent
+      where order_intent.run_id = old.id
+        and (
+          order_intent.status in ('claimed', 'unknown')
+          or (
+            order_intent.status = 'acknowledged'
+            and coalesce(order_intent.error_code, '') not in (
+              'exchange_order_filled',
+              'exchange_order_cancelled_partially_filled'
+            )
+          )
+          or order_intent.candle_close_at > coalesce(old.last_candle_at, -1)
+        )
+    )
+  then
+    raise exception using
+      errcode = '23514',
+      constraint = 'cloud_run_stop_order_in_flight',
+      message = 'cloud run cannot stop while authoritative order settlement is pending';
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.reject_cloud_run_stop_with_unsettled_order()
+  from public, anon, authenticated, service_role, cryptobot_executor, cryptobot_netlify;
+
+drop trigger if exists cloud_runs_reject_unsettled_stop on public.cloud_strategy_runs;
+create trigger cloud_runs_reject_unsettled_stop
+before update of state on public.cloud_strategy_runs
+for each row execute function private.reject_cloud_run_stop_with_unsettled_order();
+
+-- Stopping is the point where the target uniqueness fence is released. Keep
+-- that transition in the database so the website cannot race an executor
+-- submission or inspect private order evidence directly. The run-row lock
+-- serializes with the executor's pre-submit `for update of r,o` lock: a submit
+-- that crossed the boundary becomes visible before this check, while a submit
+-- that arrives after a successful stop observes a non-running run and aborts.
+create or replace function private.stop_cloud_strategy_run(
+  requested_user_id text,
+  requested_run_id text,
+  requested_version bigint,
+  requested_stopped_at bigint
+)
+returns setof public.cloud_strategy_runs
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target public.cloud_strategy_runs%rowtype;
+begin
+  select run.*
+  into target
+  from public.cloud_strategy_runs run
+  where run.user_id = requested_user_id
+    and run.id = requested_run_id
+    and run.version = requested_version
+    and run.state <> 'stopped'
+  for update;
+
+  if not found then
+    return;
+  end if;
+
+  if exists (
+    select 1
+    from private.cloud_order_intents order_intent
+    where order_intent.run_id = target.id
+      and (
+        order_intent.status in ('claimed', 'unknown')
+        or (
+          order_intent.status = 'acknowledged'
+          and coalesce(order_intent.error_code, '') not in (
+            'exchange_order_filled',
+            'exchange_order_cancelled_partially_filled'
+          )
+        )
+        or order_intent.candle_close_at > coalesce(target.last_candle_at, -1)
+      )
+  ) then
+    raise exception using
+      errcode = '23514',
+      constraint = 'cloud_run_stop_order_in_flight',
+      message = 'cloud run cannot stop while authoritative order settlement is pending';
+  end if;
+
+  return query
+  update public.cloud_strategy_runs run
+  set state = 'stopped',
+      version = run.version + 1,
+      updated_at = requested_stopped_at,
+      stopped_at = requested_stopped_at,
+      lease_owner = null,
+      lease_expires_at = null
+  where run.user_id = requested_user_id
+    and run.id = requested_run_id
+    and run.version = requested_version
+    and run.state <> 'stopped'
+  returning run.*;
+end;
+$$;
+
+revoke all on function private.stop_cloud_strategy_run(text, text, bigint, bigint)
+  from public, anon, authenticated, service_role, cryptobot_executor, cryptobot_netlify;
+grant usage on schema private to cryptobot_netlify;
+grant execute on function private.stop_cloud_strategy_run(text, text, bigint, bigint)
+  to cryptobot_netlify;
+
+comment on function private.stop_cloud_strategy_run(text, text, bigint, bigint) is
+  'Atomically refuses to release a cloud-run target until every possibly submitted order has authoritative terminal evidence recorded by the executor.';
+comment on function private.reject_cloud_run_stop_with_unsettled_order() is
+  'Defends every writer against releasing a cloud-run target while possibly submitted order evidence remains nonterminal.';
+comment on role cryptobot_netlify is
+  'NOBYPASSRLS website runtime role with an explicit public control-plane allowlist and execute-only access to audited private control-plane gateways.';

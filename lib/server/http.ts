@@ -24,6 +24,7 @@ const PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
   invalid_strategy_name: "The strategy name is not allowed.",
   invalid_publication_description: "The public strategy description is invalid.",
   invalid_weex_referral_url: "The WEEX referral URL is invalid.",
+  approved_promoter_required: "An active approved KOL or BD promoter is required for referral sharing.",
   verified_backtest_required: "A complete verified historical backtest is required before publication.",
   publication_service_unavailable: "The strategy publication service is unavailable.",
   strategy_request_mismatch: "The backtest request does not match the selected strategy version.",

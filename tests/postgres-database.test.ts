@@ -1,8 +1,68 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCloudRunRepository } from "../lib/server/cloud-runs";
-import { PostgresControlPlaneDatabase } from "../lib/server/postgres-database";
+import { createPostgresControlPlaneDatabase, PostgresControlPlaneDatabase } from "../lib/server/postgres-database";
+import { POSTGRES_RUNTIME_IDENTITY_SQL } from "../lib/server/postgres-runtime-readiness.js";
+
+const websiteIdentity = {
+  current_role: "cryptobot_netlify",
+  session_role: "cryptobot_netlify",
+  current_superuser: false,
+  current_bypassrls: false,
+  session_superuser: false,
+  session_bypassrls: false,
+};
 
 describe("Supabase Postgres D1 compatibility adapter", () => {
+  it("verifies the formal website role before its first control-plane query", async () => {
+    const unsafe = vi.fn()
+      .mockResolvedValueOnce([websiteIdentity])
+      .mockResolvedValueOnce([{ id: "u1" }]);
+    const database = new PostgresControlPlaneDatabase({ unsafe } as never, "cryptobot_netlify");
+
+    await expect(database.prepare("select id from users where id=?").bind("u1").first())
+      .resolves.toEqual({ id: "u1" });
+
+    expect(unsafe).toHaveBeenCalledTimes(2);
+    expect(unsafe.mock.calls[0]?.[0]).toBe(POSTGRES_RUNTIME_IDENTITY_SQL);
+    expect(unsafe.mock.calls[1]).toEqual(["select id from users where id=$1", ["u1"]]);
+  });
+
+  it("fails closed before a website query when its database role is elevated or mismatched", async () => {
+    const unsafe = vi.fn().mockResolvedValueOnce([{
+      ...websiteIdentity,
+      current_role: "postgres",
+      session_role: "postgres",
+      current_superuser: true,
+    }]);
+    const database = new PostgresControlPlaneDatabase({ unsafe } as never, "cryptobot_netlify");
+
+    await expect(database.prepare("select id from users").first())
+      .rejects.toThrow("Postgres runtime identity is not ready");
+    expect(unsafe).toHaveBeenCalledOnce();
+  });
+
+  it("retries identity evidence after a transient database failure", async () => {
+    const unsafe = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary connection failure"))
+      .mockResolvedValueOnce([websiteIdentity]);
+    const database = new PostgresControlPlaneDatabase({ unsafe } as never, "cryptobot_netlify");
+
+    await expect(database.assertReady()).rejects.toThrow("temporary connection failure");
+    await expect(database.assertReady()).resolves.toBeUndefined();
+    expect(unsafe).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a formal runtime URL whose configured login does not match the expected role", () => {
+    expect(() => createPostgresControlPlaneDatabase(
+      "postgresql://postgres:secret@example.test/postgres",
+      "cryptobot_netlify",
+    )).toThrow("cryptobot_netlify runtime role");
+    expect(() => createPostgresControlPlaneDatabase(
+      "postgresql://cryptobot_netlify.project:secret@example.test/postgres",
+      "cryptobot_netlify",
+    )).not.toThrow();
+  });
+
   it("quotes camelCase aliases and translates placeholders", async () => {
     const rows = Object.assign([{ userId: "u1" }], { count: 1 });
     const unsafe = vi.fn(async () => rows);

@@ -5,6 +5,7 @@ import { env } from "@/lib/server/platform-env";
 import {
   InvalidPublicStrategyTrustMetadataError,
   PUBLIC_STRATEGY_CACHE_VERSION,
+  parseWeexReferralUrl,
   publicStrategyPublicationCacheTag,
   toPublicStrategyPublication,
 } from "@/lib/server/strategy-publications";
@@ -16,7 +17,7 @@ const loadCachedPublication = (slug: string) => unstable_cache(
     const record = await createStrategyPublicationRepository(database).getBySlug(slug);
     if (!record) return null;
     try {
-      return toPublicStrategyPublication(record);
+      return { ...toPublicStrategyPublication(record), weexReferralUrl: null };
     } catch (error) {
       console.error("[strategy-publication] invalid public record", {
         slug,
@@ -32,7 +33,18 @@ const loadCachedPublication = (slug: string) => unstable_cache(
 
 const PUBLIC_STRATEGY_SLUG = /^[a-z0-9][a-z0-9-]{7,79}$/;
 
-export const loadPublicStrategyPublication = (slug: string): Promise<PublicStrategyPublication | null> => {
+export const loadPublicStrategyPublication = async (slug: string): Promise<PublicStrategyPublication | null> => {
   if (!PUBLIC_STRATEGY_SLUG.test(slug)) return Promise.resolve(null);
-  return loadCachedPublication(slug);
+  const publication = await loadCachedPublication(slug);
+  if (!publication) return null;
+  const database = createControlPlaneDatabase(env.DB);
+  const currentReferralUrl = await createStrategyPublicationRepository(database)
+    .getApprovedReferralUrlBySlug(slug);
+  if (!currentReferralUrl) return publication;
+  try {
+    return { ...publication, weexReferralUrl: parseWeexReferralUrl(currentReferralUrl) };
+  } catch {
+    console.error("[strategy-publication] invalid approved referral URL", { slug });
+    return publication;
+  }
 };

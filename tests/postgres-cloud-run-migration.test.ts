@@ -52,7 +52,21 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
       connection_id text not null,
       state text not null check (state in ('running', 'paused', 'stopped', 'error')),
       config_json jsonb not null,
-      risk_json jsonb not null
+      risk_json jsonb not null,
+      configuration_hash text not null default repeat('a',64),
+      version bigint not null default 1,
+      last_candle_at bigint,
+      updated_at bigint not null default 0,
+      stopped_at bigint,
+      lease_owner text,
+      lease_expires_at bigint
+    )`);
+    await sql.unsafe(`create table private.cloud_order_intents (
+      run_id text not null references public.cloud_strategy_runs(id) on delete cascade,
+      candle_close_at bigint not null,
+      status text not null check (status in ('claimed', 'risk-rejected', 'acknowledged', 'rejected', 'unknown')),
+      error_code text,
+      primary key (run_id, candle_close_at)
     )`);
   }
 
@@ -71,25 +85,41 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
     ]);
   }
 
-  it("keeps the pre-migration writer compatible and canonicalizes indexed targets", async () => {
+  async function stopRun(id = "run_1", version = 1, stoppedAt = 2_000): Promise<unknown[]> {
+    return sql.unsafe(`select id,state,version,stopped_at,lease_owner,lease_expires_at
+      from private.stop_cloud_strategy_run('user_1',$1,$2,$3)`, [id, version, stoppedAt]);
+  }
+
+  async function replaceOrder(input: {
+    status: "claimed" | "risk-rejected" | "acknowledged" | "rejected" | "unknown";
+    errorCode?: string | null;
+    candleCloseAt?: number;
+  }): Promise<void> {
+    await sql.unsafe("delete from private.cloud_order_intents where run_id='run_1'");
+    await sql.unsafe(`insert into private.cloud_order_intents(run_id,candle_close_at,status,error_code)
+      values ('run_1',$1,$2,$3)`, [input.candleCloseAt ?? 200, input.status, input.errorCode ?? null]);
+  }
+
+  it("derives canonical targets without mutating hash-bound config or authorized risk snapshots", async () => {
     await resetBaseTable();
     await sql.unsafe(migration);
 
     await insertOldWriter("run_1", "BTC_USDT");
-    const rows = await sql.unsafe(`select market,symbol,config_json,risk_json
+    const rows = await sql.unsafe(`select market,symbol,config_json,risk_json,configuration_hash
       from public.cloud_strategy_runs where id='run_1'`);
 
     expect(rows[0]).toMatchObject({ market: "futures", symbol: "BTCUSDT" });
-    expect(rows[0]?.config_json).toMatchObject({ market: "futures", symbol: "BTCUSDT" });
-    expect(rows[0]?.risk_json).toMatchObject({ allowedSymbols: ["BTCUSDT"] });
+    expect(rows[0]?.config_json).toEqual({ market: "futures", symbol: "BTC_USDT" });
+    expect(rows[0]?.risk_json).toEqual({ allowedSymbols: ["BTC_USDT"] });
+    expect(rows[0]?.configuration_hash).toBe("a".repeat(64));
 
     await sql.unsafe("update public.cloud_strategy_runs set state='stopped' where id='run_1'");
     await insertOldWriter("run_hyphen", "BTC-USDT");
     const hyphenRows = await sql.unsafe(`select symbol,config_json,risk_json
       from public.cloud_strategy_runs where id='run_hyphen'`);
     expect(hyphenRows[0]).toMatchObject({ symbol: "BTCUSDT" });
-    expect(hyphenRows[0]?.config_json).toMatchObject({ symbol: "BTCUSDT" });
-    expect(hyphenRows[0]?.risk_json).toMatchObject({ allowedSymbols: ["BTCUSDT"] });
+    expect(hyphenRows[0]?.config_json).toEqual({ market: "futures", symbol: "BTC-USDT" });
+    expect(hyphenRows[0]?.risk_json).toEqual({ allowedSymbols: ["BTC-USDT"] });
   });
 
   it("rejects equivalent aliases under concurrency while allowing a stopped predecessor", async () => {
@@ -140,14 +170,181 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
         'spot','BTCUSDT')`);
     const rows = await sql.unsafe("select market,symbol,config_json,risk_json from public.cloud_strategy_runs");
     expect(rows[0]).toMatchObject({ market: "futures", symbol: "ETHUSDT" });
-    expect(rows[0]?.config_json).toMatchObject({ symbol: "ETHUSDT" });
-    expect(rows[0]?.risk_json).toMatchObject({ allowedSymbols: ["ETHUSDT"] });
+    expect(rows[0]?.config_json).toEqual({ market: "futures", symbol: "ETH_USDT" });
+    expect(rows[0]?.risk_json).toEqual({ allowedSymbols: ["CMT_ETHUSDT"] });
 
     await expect(sql.unsafe(`update public.cloud_strategy_runs
       set market='spot',symbol='BTCUSDT' where id='run_explicit'`)).rejects.toMatchObject({
       code: "23514",
       constraint_name: "cloud_runs_target_from_config_check",
     });
+  });
+
+  it("keeps every possibly submitted or not-yet-completed order from releasing its target", async () => {
+    const blocked = [
+      { label: "claimed", status: "claimed" as const, candleCloseAt: 50 },
+      { label: "unknown", status: "unknown" as const, candleCloseAt: 50 },
+      { label: "acknowledged", status: "acknowledged" as const, candleCloseAt: 50 },
+      { label: "NEW", status: "acknowledged" as const, errorCode: "exchange_order_open", candleCloseAt: 50 },
+      { label: "PARTIALLY_FILLED", status: "acknowledged" as const,
+        errorCode: "exchange_order_partially_filled", candleCloseAt: 50 },
+      { label: "FILLED before completion", status: "acknowledged" as const,
+        errorCode: "exchange_order_filled", candleCloseAt: 200 },
+      { label: "CANCELED with fill before completion", status: "acknowledged" as const,
+        errorCode: "exchange_order_cancelled_partially_filled", candleCloseAt: 200 },
+      { label: "REJECTED before completion", status: "rejected" as const,
+        errorCode: "exchange_order_rejected", candleCloseAt: 200 },
+      { label: "risk-rejected before completion", status: "risk-rejected" as const,
+        errorCode: "risk_limit", candleCloseAt: 200 },
+    ];
+
+    for (const order of blocked) {
+      await resetBaseTable();
+      await sql.unsafe(migration);
+      await insertOldWriter("run_1", "BTCUSDT");
+      await sql.unsafe("update public.cloud_strategy_runs set last_candle_at=100 where id='run_1'");
+      await replaceOrder(order);
+
+      await expect(stopRun(), order.label).rejects.toMatchObject({
+        code: "23514",
+        constraint_name: "cloud_run_stop_order_in_flight",
+      });
+      const rows = await sql.unsafe("select state,version,stopped_at from public.cloud_strategy_runs where id='run_1'");
+      expect(rows[0], order.label).toMatchObject({ state: "running", version: 1, stopped_at: null });
+      await expect(insertOldWriter("run_successor", "CMT_BTC_USDT"), order.label).rejects.toMatchObject({
+        code: "23505",
+        constraint_name: "cloud_runs_nonterminal_target_uidx",
+      });
+    }
+  });
+
+  it("stops only after terminal evidence has been incorporated into run completion", async () => {
+    const terminal = [
+      { label: "FILLED", status: "acknowledged" as const, errorCode: "exchange_order_filled" },
+      { label: "CANCELED after partial fill", status: "acknowledged" as const,
+        errorCode: "exchange_order_cancelled_partially_filled" },
+      { label: "CANCELED", status: "rejected" as const, errorCode: "exchange_order_cancelled" },
+      { label: "REJECTED", status: "rejected" as const, errorCode: "exchange_order_rejected" },
+      { label: "risk-rejected", status: "risk-rejected" as const, errorCode: "risk_limit" },
+    ];
+
+    for (const order of terminal) {
+      await resetBaseTable();
+      await sql.unsafe(migration);
+      await insertOldWriter("run_1", "BTCUSDT");
+      await sql.unsafe("update public.cloud_strategy_runs set last_candle_at=200 where id='run_1'");
+      await replaceOrder({ ...order, candleCloseAt: 200 });
+
+      await expect(stopRun(), order.label).resolves.toEqual([
+        expect.objectContaining({ state: "stopped", version: 2, stopped_at: 2_000 }),
+      ]);
+      await expect(insertOldWriter("run_successor", "CMT_BTC_USDT"), order.label).resolves.toBeUndefined();
+    }
+  });
+
+  it("returns no row for the wrong tenant or version and protects direct legacy stop writers", async () => {
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+
+    await expect(sql.unsafe(`select id from private.stop_cloud_strategy_run(
+      'user_2','run_1',1,2000)`)).resolves.toEqual([]);
+    await expect(stopRun("run_1", 2)).resolves.toEqual([]);
+    await expect(sql.unsafe("select state,version from public.cloud_strategy_runs where id='run_1'"))
+      .resolves.toEqual([expect.objectContaining({ state: "running", version: 1 })]);
+
+    await replaceOrder({ status: "unknown", candleCloseAt: 50 });
+    await expect(sql.unsafe("update public.cloud_strategy_runs set state='stopped' where id='run_1'"))
+      .rejects.toMatchObject({ code: "23514", constraint_name: "cloud_run_stop_order_in_flight" });
+    await expect(sql.unsafe("select state from public.cloud_strategy_runs where id='run_1'"))
+      .resolves.toEqual([expect.objectContaining({ state: "running" })]);
+  });
+
+  it("exposes an execute-only stop gateway without granting private order evidence", async () => {
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+
+    const netlifyCanExecute = await sql.unsafe(`select has_function_privilege(
+      'cryptobot_netlify','private.stop_cloud_strategy_run(text,text,bigint,bigint)','execute') as allowed`);
+    const netlifyCanReadOrders = await sql.unsafe(`select has_table_privilege(
+      'cryptobot_netlify','private.cloud_order_intents','select') as allowed`);
+    const executorCanExecute = await sql.unsafe(`select has_function_privilege(
+      'cryptobot_executor','private.stop_cloud_strategy_run(text,text,bigint,bigint)','execute') as allowed`);
+    const dataApiPrivileges = await sql.unsafe(`select role_name,
+      has_function_privilege(role_name,'private.stop_cloud_strategy_run(text,text,bigint,bigint)','execute') as allowed
+      from unnest(array['anon','authenticated','service_role']) role_name order by role_name`);
+
+    expect(netlifyCanExecute[0]).toMatchObject({ allowed: true });
+    expect(netlifyCanReadOrders[0]).toMatchObject({ allowed: false });
+    expect(executorCanExecute[0]).toMatchObject({ allowed: false });
+    expect(dataApiPrivileges.every((row) => row.allowed === false)).toBe(true);
+  });
+
+  it("serializes stop with the executor run lock in both race directions", async () => {
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+    await sql.unsafe("update public.cloud_strategy_runs set lease_owner='owner-1' where id='run_1'");
+    await replaceOrder({ status: "claimed", candleCloseAt: 200 });
+
+    let releaseSubmission!: () => void;
+    let submissionLocked!: () => void;
+    const holdSubmission = new Promise<void>((resolve) => { releaseSubmission = resolve; });
+    const submissionHasLock = new Promise<void>((resolve) => { submissionLocked = resolve; });
+    const submission = sql.begin(async (transaction) => {
+      await transaction.unsafe(`select r.state,o.status
+        from public.cloud_strategy_runs r
+        join private.cloud_order_intents o on o.run_id=r.id and o.candle_close_at=200
+        where r.id='run_1' for update of r,o`);
+      submissionLocked();
+      await holdSubmission;
+      await transaction.unsafe(`update private.cloud_order_intents
+        set status='unknown',error_code='submission_in_progress' where run_id='run_1'`);
+    });
+    await submissionHasLock;
+    const stopping = stopRun().then(
+      (rows) => ({ status: "fulfilled" as const, rows }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseSubmission();
+    await submission;
+    await expect(stopping).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "23514", constraint_name: "cloud_run_stop_order_in_flight" },
+    });
+
+    await resetBaseTable();
+    await sql.unsafe(migration);
+    await insertOldWriter("run_1", "BTCUSDT");
+    await sql.unsafe("update public.cloud_strategy_runs set lease_owner='owner-1' where id='run_1'");
+
+    let releaseStop!: () => void;
+    let stopLocked!: () => void;
+    const holdStop = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const stopHasLock = new Promise<void>((resolve) => { stopLocked = resolve; });
+    const stoppingFirst = sql.begin(async (transaction) => {
+      const rows = await transaction.unsafe(`select id,state from private.stop_cloud_strategy_run(
+        'user_1','run_1',1,2000)`);
+      stopLocked();
+      await holdStop;
+      return rows;
+    });
+    await stopHasLock;
+    const submissionAfterStop = sql.begin(async (transaction) => {
+      await transaction.unsafe(`insert into private.cloud_order_intents(run_id,candle_close_at,status,error_code)
+        values ('run_1',200,'claimed',null)`);
+      const rows = await transaction.unsafe(`select r.state,r.lease_owner,o.status
+        from public.cloud_strategy_runs r
+        join private.cloud_order_intents o on o.run_id=r.id and o.candle_close_at=200
+        where r.id='run_1' for update of r,o`);
+      return rows[0];
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseStop();
+    await expect(stoppingFirst).resolves.toEqual([expect.objectContaining({ state: "stopped" })]);
+    await expect(submissionAfterStop).resolves.toMatchObject({ state: "stopped", lease_owner: null, status: "claimed" });
   });
 
   it("can safely re-run its compatibility repair after an earlier target schema was applied", async () => {
@@ -159,6 +356,6 @@ describePostgres("PostgreSQL cloud-run target rollout", () => {
     await insertOldWriter("run_rerun", "CMT_SOL_USDT");
     const rows = await sql.unsafe("select market,symbol,config_json from public.cloud_strategy_runs");
     expect(rows[0]).toMatchObject({ market: "futures", symbol: "SOLUSDT" });
-    expect(rows[0]?.config_json).toMatchObject({ symbol: "SOLUSDT" });
+    expect(rows[0]?.config_json).toEqual({ market: "futures", symbol: "CMT_SOL_USDT" });
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { backtestConfigFingerprint } from "../../lib/backtest";
 import { validateConfig } from "../../lib/strategy-validation";
 import type { BotConfig } from "../../lib/types";
@@ -26,6 +26,8 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   invalid_economic_parameters: "初始資金、成本或槓桿設定超出歷史回測可計算範圍。",
   strategy_service_unavailable: "歷史回測儲存服務目前無法連線，請稍後再試。",
 };
+
+export type BacktestRequestState = "idle" | "ensuring" | "running" | "done" | "error" | "unauthorized";
 
 const alignedRecentRange = (config: BotConfig): { startTime: number; endTime: number } => {
   const interval = INTERVAL_MS[config.timeframe] ?? 3_600_000;
@@ -68,22 +70,24 @@ const strategyVersion = (value: unknown): { id: string; configHash: string } | n
     ? { id: record.id, configHash: record.configHash } : null;
 };
 
-export function BacktestRequestForm({ config, compact = false, onRun, onVerifiedReport }: {
+export function BacktestRequestForm({ config, compact = false, onRun, onStateChange, onVerifiedReport }: {
   config: BotConfig;
   compact?: boolean;
   onRun?: () => void;
+  onStateChange?: (state: BacktestRequestState) => void;
   onVerifiedReport?: (evidence: FormalBacktestEvidence) => void;
 }) {
   const fingerprint = backtestConfigFingerprint(config);
   return <BacktestRequestSession compact={compact} config={config} configFingerprint={fingerprint}
-    key={fingerprint} onRun={onRun} onVerifiedReport={onVerifiedReport} />;
+    key={fingerprint} onRun={onRun} onStateChange={onStateChange} onVerifiedReport={onVerifiedReport} />;
 }
 
-function BacktestRequestSession({ config, compact, configFingerprint, onRun, onVerifiedReport }: {
+function BacktestRequestSession({ config, compact, configFingerprint, onRun, onStateChange, onVerifiedReport }: {
   config: BotConfig;
   compact: boolean;
   configFingerprint: string;
   onRun?: () => void;
+  onStateChange?: (state: BacktestRequestState) => void;
   onVerifiedReport?: (evidence: FormalBacktestEvidence) => void;
 }) {
   const configurationValid = validateConfig(config).valid;
@@ -95,11 +99,15 @@ function BacktestRequestSession({ config, compact, configFingerprint, onRun, onV
   const [slippageRate, setSlippageRate] = useState("0.0005");
   const [fundingMode, setFundingMode] = useState<"none" | "historical">(config.market === "futures" ? "historical" : "none");
   const [gapPolicy, setGapPolicy] = useState<"fail" | "disclose">("fail");
-  const [state, setState] = useState<"idle" | "ensuring" | "running" | "done" | "error" | "unauthorized">("idle");
+  const [state, setState] = useState<BacktestRequestState>("idle");
   const [message, setMessage] = useState("");
   const [result, setResult] = useState<HistoricalBacktestRecord | null>(null);
   const strategyAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const backtestAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
+
+  useEffect(() => {
+    onStateChange?.(state);
+  }, [onStateChange, state]);
 
   const clearEvidence = () => { setResult(null); setMessage(""); setState("idle"); };
   const change = <Value,>(setter: (value: Value) => void, value: Value) => {

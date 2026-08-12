@@ -1,7 +1,12 @@
 import { createControlPlaneDatabase } from "@/db";
 import { createUserRepository } from "@/db/repositories";
 import { deriveWorkspaceUserId, platformIdentityProvider, requireApiUser } from "@/lib/server/auth";
-import { CLOUD_RUN_TARGET_CONFLICT, createCloudRunRepository, isRecentLiveConfirmation } from "@/lib/server/cloud-runs";
+import {
+  CLOUD_RUN_ORDER_IN_FLIGHT,
+  CLOUD_RUN_TARGET_CONFLICT,
+  createCloudRunRepository,
+  isRecentLiveConfirmation,
+} from "@/lib/server/cloud-runs";
 import { productionLiveReady } from "@/lib/server/demo-mode";
 import { env } from "@/lib/server/platform-env";
 
@@ -9,6 +14,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TARGET_CONSTRAINT = "cloud_runs_nonterminal_target_uidx";
+const STOP_ORDER_CONSTRAINT = "cloud_run_stop_order_in_flight";
 const response = (status: number, body: unknown): Response => Response.json(body, { status,
   headers: { "cache-control": "no-store" } });
 const databaseError = (error: unknown): { name: string; code: string; constraint: string } => {
@@ -62,6 +68,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return response(409, { error: "version_conflict" });
   } catch (error) {
     const safe = databaseError(error);
+    if (safe.code === "23514" && safe.constraint === STOP_ORDER_CONSTRAINT) {
+      return response(409, CLOUD_RUN_ORDER_IN_FLIGHT);
+    }
     console.error("[cloud-runs] transition failed", safe);
     return safe.code === "23505" && safe.constraint === TARGET_CONSTRAINT
       ? response(409, CLOUD_RUN_TARGET_CONFLICT)

@@ -50,6 +50,10 @@ const conflict = {
   error: "cloud_run_target_conflict",
   message: "Another non-stopped cloud strategy already controls this WEEX account, market, and symbol. Stop it before starting this strategy.",
 };
+const orderInFlight = {
+  error: "cloud_run_order_in_flight",
+  message: "This strategy still has an order awaiting authoritative exchange settlement. It remains non-stopped and retains its trading target.",
+};
 const launchRequest = (overrides: Record<string, unknown> = {}) => new Request("https://cryptobot.example/api/cloud-runs", {
   method: "POST",
   headers: {
@@ -70,6 +74,11 @@ const resumeRequest = () => new Request("https://cryptobot.example/api/cloud-run
   method: "PATCH",
   headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
   body: JSON.stringify({ state: "running", expectedVersion: 3 }),
+});
+const stopRequest = () => new Request("https://cryptobot.example/api/cloud-runs/crun_1", {
+  method: "PATCH",
+  headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+  body: JSON.stringify({ state: "stopped", expectedVersion: 3 }),
 });
 
 beforeEach(() => {
@@ -223,6 +232,52 @@ describe("cloud run target conflict API", () => {
     expect(await response.json()).toEqual({ error: "live_trading_disabled" });
     expect(mocks.repository.transition).not.toHaveBeenCalled();
     expect(mocks.repository.hasTransitionTargetConflict).not.toHaveBeenCalled();
+  });
+
+  it("keeps the run and target non-stopped when authoritative order settlement is pending", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.repository.transition.mockRejectedValue(Object.assign(new Error("user_1 exchange detail"), {
+      name: "PostgresError",
+      code: "23514",
+      constraint_name: "cloud_run_stop_order_in_flight",
+      detail: "user_1",
+    }));
+
+    const response = await PATCH(stopRequest(), { params: Promise.resolve({ id: "crun_1" }) });
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual(orderInFlight);
+    expect(mocks.repository.transition).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "user_1",
+      id: "crun_1",
+      state: "stopped",
+      expectedVersion: 3,
+      allowLiveResume: false,
+    }));
+    expect(mocks.repository.hasTransitionTargetConflict).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("does not misclassify an unrelated check violation as order evidence", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.repository.transition.mockRejectedValue(Object.assign(new Error("sensitive detail"), {
+      name: "PostgresError",
+      code: "23514",
+      constraint_name: "cloud_runs_hash_format",
+      detail: "user_1",
+    }));
+
+    const response = await PATCH(stopRequest(), { params: Promise.resolve({ id: "crun_1" }) });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "cloud_run_service_unavailable" });
+    expect(log).toHaveBeenCalledWith("[cloud-runs] transition failed", {
+      name: "PostgresError",
+      code: "23514",
+      constraint: "cloud_runs_hash_format",
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/sensitive|user_1/);
   });
 
   it("maps a raced target unique violation to the fixed 409 without logging tenant data", async () => {

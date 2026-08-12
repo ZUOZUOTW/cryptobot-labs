@@ -49,6 +49,16 @@ if (demoMode === "false") {
     console.error("Deployment environment check failed: SUPABASE_DATABASE_URL must be a PostgreSQL connection URL.");
     process.exit(1);
   }
+  let databaseUsername = "";
+  try {
+    databaseUsername = decodeURIComponent(new URL(process.env.SUPABASE_DATABASE_URL).username);
+  } catch {
+    // The generic URL error below intentionally avoids echoing the credential.
+  }
+  if (databaseUsername !== "cryptobot_netlify" && !databaseUsername.startsWith("cryptobot_netlify.")) {
+    console.error("Deployment environment check failed: SUPABASE_DATABASE_URL must use the cryptobot_netlify runtime role.");
+    process.exit(1);
+  }
   try {
     canonicalSupabasePublishableKey(process.env.SUPABASE_PUBLISHABLE_KEY);
   } catch {

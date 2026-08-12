@@ -121,6 +121,27 @@ describe("CloudRunDetailPanel", () => {
     expect(screen.getByRole("button", { name: "恢復策略" })).toBeEnabled();
   });
 
+  it("keeps a run and its target active while an exchange order is still settling", async () => {
+    const running = { ...run, state: "running", lastErrorCode: null, consecutiveFailures: 0 };
+    const runningPayload = { ...payload, runs: [running] };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(runningPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "cloud_run_order_in_flight" }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(runningPayload), { status: 200 }));
+    const user = userEvent.setup();
+    render(<CloudRunDetailPanel runId="crun_live_1" />);
+
+    await user.click(await screen.findByRole("button", { name: "停止策略" }));
+
+    expect(await screen.findByText("交易所訂單仍在核對中；策略維持原狀，交易目標尚未釋放。請等待訂單取得最終狀態後再停止。"))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停止策略" })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledWith("/api/cloud-runs/crun_live_1", expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ state: "stopped", expectedVersion: 2 }),
+    }));
+  });
+
   it("uses the exact persisted target instead of a broad risk allowlist and separates account PnL", async () => {
     const selected = {
       ...run,

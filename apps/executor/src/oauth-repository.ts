@@ -4,6 +4,10 @@ import type {
   ExecutorOAuthHandoff,
   WeexCredentialSource,
 } from "@cryptobot-labs/weex-client";
+import {
+  assertPostgresRuntimeIdentity,
+  POSTGRES_RUNTIME_IDENTITY_SQL,
+} from "../../../lib/server/postgres-runtime-readiness.js";
 
 type Database = Sql<Record<string, never>>;
 type Row = Record<string, unknown>;
@@ -83,6 +87,8 @@ export class PostgresOAuthRepository implements OAuthRepository {
   }
 
   async assertReady(): Promise<void> {
+    const identities = await this.#sql.unsafe(POSTGRES_RUNTIME_IDENTITY_SQL);
+    assertPostgresRuntimeIdentity(identities[0], "cryptobot_executor");
     const rows = await this.#sql.unsafe(`select
       to_regclass('public.weex_connections') as connections,
       to_regclass('private.weex_oauth_states') as states,

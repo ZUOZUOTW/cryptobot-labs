@@ -21,6 +21,7 @@ type StrategyVersionReader = {
 };
 
 type StrategyPublicationStore = {
+  hasApprovedReferral(userId: string): Promise<boolean>;
   publish(input: {
     id: string;
     userId: string;
@@ -32,10 +33,9 @@ type StrategyPublicationStore = {
     now: number;
   }): Promise<StrategyPublicationRecord | null>;
   getBySlug(slug: string): Promise<StrategyPublicationRecord | null>;
-  updateReferralUrl(input: {
+  activateApprovedReferral(input: {
     userId: string;
     slug: string;
-    weexReferralUrl: string;
     now: number;
   }): Promise<boolean>;
   listByUser(userId: string, limit?: number): Promise<StrategyPublicationRecord[]>;
@@ -111,11 +111,15 @@ export function createStrategyPublicationRouteHandlers(dependencies: StrategyPub
         const record = await dependencies.publications.getBySlug(saved.slug);
         if (!record) throw new Error("published record could not be loaded");
         const publication = toPublicStrategyPublication(record);
+        const canActivateApprovedReferral = await dependencies.publications.hasApprovedReferral(identity.user.id);
         dependencies.revalidate.tag(publicStrategyPublicationCacheTag(saved.slug));
         dependencies.revalidate.path("/api/strategy-publications");
         dependencies.revalidate.path("/bots");
         dependencies.revalidate.path(`/strategies/${saved.slug}`);
-        return response(saved.id === publicationId ? 201 : 200, { publication });
+        return response(saved.id === publicationId ? 201 : 200, {
+          publication,
+          capabilities: { canActivateApprovedReferral },
+        });
       } catch (error) {
         return failure(error, "publish", 500);
       }
@@ -126,18 +130,17 @@ export function createStrategyPublicationRouteHandlers(dependencies: StrategyPub
         requireSameOrigin(request, dependencies.originPolicy);
         const identity = await requireApiUser(request, dependencies.auth);
         if (!identity.ok) return identity.response;
-        const input = await readStrictJson(request, {
+        await readStrictJson(request, {
           maximumBytes: 4_096,
           parse: parseWeexReferralUpdateInput,
         });
         const { slug } = await context.params;
-        const updated = await dependencies.publications.updateReferralUrl({
+        const updated = await dependencies.publications.activateApprovedReferral({
           userId: identity.user.id,
           slug,
-          weexReferralUrl: input.weexReferralUrl,
           now: dependencies.now(),
         });
-        if (!updated) throw new HttpProblem(404, "not_found");
+        if (!updated) throw new HttpProblem(403, "approved_promoter_required");
         const record = await dependencies.publications.getBySlug(slug);
         if (!record) throw new HttpProblem(404, "not_found");
         const publication = toPublicStrategyPublication(record);

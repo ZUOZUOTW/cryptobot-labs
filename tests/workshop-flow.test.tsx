@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkshopPage from "../app/workshop/page";
+import { I18nProvider } from "../components/I18nProvider";
 import { BacktestPanel } from "../components/workshop/BacktestPanel";
 import { BOT_CATALOG } from "../data/bots";
 import { STRATEGY_BLOCKS, STRATEGY_PRESETS } from "../data/strategies";
@@ -10,6 +11,7 @@ import { runBacktest } from "../lib/backtest";
 import { validateConfig } from "../lib/strategy-validation";
 import type { BacktestReport, BotConfig } from "../lib/types";
 import { historicalConfigurationHash, historicalScriptHash } from "../lib/historical-evidence";
+import { LOCALE_STORAGE_KEY } from "../lib/i18n/locales";
 
 vi.mock("../lib/weex-historical-client", async () => {
   const { runBacktest: runLocalBacktest } = await vi.importActual<typeof import("../lib/backtest")>("../lib/backtest");
@@ -52,6 +54,7 @@ const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, "revokeObje
 beforeEach(() => {
   localStorage.clear();
   window.history.replaceState(null, "", "/workshop");
+  delete document.documentElement.dataset.locale;
 });
 
 afterEach(() => {
@@ -401,6 +404,8 @@ describe("multi-strategy workshop", () => {
 
     await user.click(run);
     expect(await screen.findByRole("link", { name: "登入" })).toHaveAttribute("href", "/auth?return_to=%2Fworkshop");
+    expect(within(screen.getByRole("region", { name: "手機版組裝操作" }))
+      .getByText("請先登入，才能保存並查看自己的歷史回測。")).toBeInTheDocument();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/strategies");
     expect(fetchSpy.mock.calls.some(([url]) => url === "/api/weex/historical-backtest")).toBe(false);
@@ -697,6 +702,24 @@ describe("multi-strategy workshop", () => {
     expect((source as HTMLTextAreaElement).value).toContain("WEEX");
     expect(screen.getByRole("button", { name: "JavaScript 模式" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /^現貨/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uses the persisted production locale before the i18n bootstrap effect finishes", async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, "en");
+    document.documentElement.dataset.locale = "zh-Hant";
+    window.history.replaceState(null, "", "/workshop?new=1&mode=javascript");
+    render(
+      <I18nProvider initialLocale="zh-Hant">
+        <WorkshopPage />
+      </I18nProvider>,
+    );
+
+    const source = await screen.findByRole("textbox", { name: "JavaScript 策略原始碼" });
+    await waitFor(() => expect(document.documentElement.dataset.locale).toBe("en"));
+    expect((source as HTMLTextAreaElement).value).toContain("Example of a simulated strategy for CryptoBot Labs.");
+    expect((source as HTMLTextAreaElement).value).toContain("Historical backtests run this function only in an isolated sandbox.");
+    expect((source as HTMLTextAreaElement).value).not.toContain("模擬策略範例");
+    expect(screen.getByRole("textbox", { name: "策略名稱" })).toHaveValue("Unnamed Strategy");
   });
 
   it("shows named import errors and preserves the current draft on failure", async () => {

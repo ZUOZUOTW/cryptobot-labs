@@ -164,20 +164,6 @@ describe("strategy publications", () => {
       weexReferralUrl: null,
       metrics: { totalReturn: "0.12", trades: 12 },
     });
-    await expect(repository.updateReferralUrl({
-      userId: "usr_b",
-      slug: "strategy-publicationa",
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=OTHER",
-      now: 6,
-    })).resolves.toBe(false);
-    await expect(repository.updateReferralUrl({
-      userId: "usr_a",
-      slug: "strategy-publicationa",
-      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
-      now: 7,
-    })).resolves.toBe(true);
-    expect((await repository.getBySlug("strategy-publicationa"))?.weexReferralUrl)
-      .toBe("https://www.weex.com/register?inviteCode=SAFE");
     await expect(repository.listByUser("usr_a")).resolves.toHaveLength(1);
     await expect(repository.listByUser("usr_b")).resolves.toHaveLength(0);
 
@@ -193,14 +179,74 @@ describe("strategy publications", () => {
     })).resolves.toBeNull();
   });
 
-  it("keeps publication input separate from the optional HTTPS WEEX sharing metadata", () => {
+  it("uses only the current server-approved active promoter referral and hides it immediately when disabled", async () => {
+    const database = new SqliteDatabase();
+    seedVerifiedBacktest(database);
+    const repository = createStrategyPublicationRepository(database);
+    await repository.publish({
+      id: "publication_a",
+      userId: "usr_a",
+      strategyVersionId: "version_a",
+      backtestJobId: "job_a",
+      slug: "strategy-publicationa",
+      description: "這是經完整公開歷史行情驗證的測試策略，適合檢查發布流程。",
+      publisherName: "發布者 A",
+      now: 5,
+    });
+
+    await expect(repository.hasApprovedReferral("usr_a")).resolves.toBe(false);
+    await expect(repository.getApprovedReferralUrlBySlug("strategy-publicationa")).resolves.toBeNull();
+    await expect(repository.activateApprovedReferral({
+      userId: "usr_a",
+      slug: "strategy-publicationa",
+      now: 6,
+    })).resolves.toBe(false);
+
+    database.raw.exec(`INSERT INTO promoters
+      (user_id,slug,role,status,weex_referral_url,approved_at,updated_at)
+      VALUES ('usr_a','publisher-a','kol','disabled',
+        'https://www.weex.com/register?inviteCode=SERVER_APPROVED',5,6)`);
+    await expect(repository.hasApprovedReferral("usr_a")).resolves.toBe(false);
+    await expect(repository.getApprovedReferralUrlBySlug("strategy-publicationa")).resolves.toBeNull();
+    await expect(repository.activateApprovedReferral({
+      userId: "usr_a",
+      slug: "strategy-publicationa",
+      now: 7,
+    })).resolves.toBe(false);
+    expect((await repository.getBySlug("strategy-publicationa"))?.weexReferralUrl).toBeNull();
+
+    database.raw.exec("UPDATE promoters SET status='active',updated_at=8 WHERE user_id='usr_a'");
+    await expect(repository.hasApprovedReferral("usr_a")).resolves.toBe(true);
+    await expect(repository.activateApprovedReferral({
+      userId: "usr_a",
+      slug: "strategy-publicationa",
+      now: 8,
+    })).resolves.toBe(true);
+    expect((await repository.getBySlug("strategy-publicationa"))?.weexReferralUrl)
+      .toBe("https://www.weex.com/register?inviteCode=SERVER_APPROVED");
+    await expect(repository.getApprovedReferralUrlBySlug("strategy-publicationa"))
+      .resolves.toBe("https://www.weex.com/register?inviteCode=SERVER_APPROVED");
+
+    database.raw.exec("UPDATE promoters SET status='disabled',updated_at=9 WHERE user_id='usr_a'");
+    await expect(repository.hasApprovedReferral("usr_a")).resolves.toBe(false);
+    expect((await repository.getBySlug("strategy-publicationa"))?.weexReferralUrl).toBeNull();
+    await expect(repository.getApprovedReferralUrlBySlug("strategy-publicationa")).resolves.toBeNull();
+  });
+
+  it("keeps publication input separate and accepts only the fixed referral activation intent", () => {
     expect(parseWeexReferralUrl("https://www.weex.com/register?inviteCode=SAFE"))
       .toBe("https://www.weex.com/register?inviteCode=SAFE");
     expect(() => parseWeexReferralUrl("https://weex.com.evil.example/register")).toThrow();
     expect(() => parseWeexReferralUrl("http://www.weex.com/register")).toThrow();
-    expect(parseWeexReferralUpdateInput({
+    expect(parseWeexReferralUpdateInput({ action: "activate-approved-referral" }))
+      .toEqual({ action: "activate-approved-referral" });
+    expect(() => parseWeexReferralUpdateInput({
       weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
-    })).toEqual({ weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE" });
+    })).toThrow();
+    expect(() => parseWeexReferralUpdateInput({
+      action: "activate-approved-referral",
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=SAFE",
+    })).toThrow();
     expect(parsePublicationInput({
       strategyVersionId: "version_a",
       backtestJobId: "job_a",

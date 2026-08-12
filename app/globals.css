@@ -3780,7 +3780,7 @@ html[lang="ru"] body {
     line-height: 1.35;
   }
   .header-login { display: none; }
-  .language-switcher select { min-width: 0; width: 5.4rem; }
+  .language-switcher select { min-width: 0; width: 5.8rem; }
   .user-menu summary { max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .account-choice-grid,
   .authorize-summary,

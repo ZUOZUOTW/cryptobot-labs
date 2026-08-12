@@ -11,6 +11,16 @@ vi.mock("postgres", () => ({
 }));
 
 import { PostgresOAuthRepository, type StoredOAuthState } from "../src/oauth-repository";
+import { POSTGRES_RUNTIME_IDENTITY_SQL } from "../../../lib/server/postgres-runtime-readiness.js";
+
+const executorIdentity = {
+  current_role: "cryptobot_executor",
+  session_role: "cryptobot_executor",
+  current_superuser: false,
+  current_bypassrls: false,
+  session_superuser: false,
+  session_bypassrls: false,
+};
 
 const state: StoredOAuthState = {
   id: "woauth_abcdefghijklmnop",
@@ -27,6 +37,41 @@ const state: StoredOAuthState = {
   connectionVersion: 7,
   expiresAt: 1_700_000_600_000,
 };
+
+describe("PostgresOAuthRepository readiness", () => {
+  beforeEach(() => {
+    database.unsafe.mockReset();
+  });
+
+  it("verifies the exact executor identity before checking OAuth schema", async () => {
+    database.unsafe
+      .mockResolvedValueOnce([executorIdentity])
+      .mockResolvedValueOnce([{
+        connections: "weex_connections",
+        states: "weex_oauth_states",
+        credentials: "weex_credential_blobs",
+        handoffs: "weex_oauth_handoffs",
+        credential_source_ready: true,
+      }]);
+    const repository = new PostgresOAuthRepository("postgres://executor.invalid/database");
+
+    await expect(repository.assertReady()).resolves.toBeUndefined();
+    expect(database.unsafe).toHaveBeenCalledTimes(2);
+    expect(database.unsafe.mock.calls[0]?.[0]).toBe(POSTGRES_RUNTIME_IDENTITY_SQL);
+    expect(String(database.unsafe.mock.calls[1]?.[0])).toContain("private.weex_oauth_states");
+  });
+
+  it("never checks schema or registers a shard through an elevated executor connection", async () => {
+    database.unsafe.mockResolvedValueOnce([{
+      ...executorIdentity,
+      current_bypassrls: true,
+    }]);
+    const repository = new PostgresOAuthRepository("postgres://executor.invalid/database");
+
+    await expect(repository.assertReady()).rejects.toThrow("Postgres runtime identity is not ready");
+    expect(database.unsafe).toHaveBeenCalledOnce();
+  });
+});
 
 describe("PostgresOAuthRepository connection lifecycle fencing", () => {
   beforeEach(() => {

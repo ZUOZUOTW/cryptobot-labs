@@ -9,7 +9,7 @@ describe("Netlify production build", () => {
     ]);
 
     expect(config).toContain(
-      'command = "node scripts/check-deployment-env.mjs && node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack && node scripts/check-next-edge-bundle.mjs"',
+      'command = "node scripts/check-deployment-env.mjs && node scripts/check-production-database-readiness.mjs website && node scripts/clean-next-build.mjs && node node_modules/next/dist/bin/next build --webpack && node scripts/check-next-edge-bundle.mjs"',
     );
     expect(config).toContain('SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL"');
     expect(config).not.toContain('SECRETS_SCAN_ENABLED = "false"');
@@ -24,7 +24,9 @@ describe("Netlify production build", () => {
       readFile(".github/workflows/ci.yml", "utf8"),
     ]);
 
-    expect(JSON.parse(manifest).scripts.build).toMatch(/^node scripts\/check-deployment-env\.mjs /);
+    expect(JSON.parse(manifest).scripts.build).toMatch(
+      /^node scripts\/check-deployment-env\.mjs && node scripts\/check-production-database-readiness\.mjs website /,
+    );
     expect(checker).toContain('parsedOrigin.protocol !== "https:"');
     expect(checker).toContain('demoMode !== "true"');
     expect(checker).toContain('"SUPABASE_DATABASE_URL"');

@@ -20,13 +20,20 @@ the target account explicitly.
 5. Build `scripts/build-executor-release.sh`, verify `release/executor/main.js.sha256`, and install the release through SSM Session Manager; do not open SSH. The service reads `AWSCURRENT` directly from Secrets Manager through its instance role, so no plaintext secret file is written to disk.
 6. Configure and verify origin TLS on port 443. Before restricting origin ingress, enable Cloudflare proxying for the API A record and set the zone SSL mode to Full (strict). The production DNS record remains managed outside this Terraform state (`manage_cloudflare_dns=false`) unless it is explicitly imported; if Terraform manages it, the record is always proxied with automatic TTL.
 7. Verify the proxied `/healthz` and `/readyz` responses, then set `enable_public_https=true`. Terraform replaces public `0.0.0.0/0` ingress with one TCP/443 rule per official Cloudflare IPv4 proxy range. Direct requests to the historical origin IP must then fail.
-8. Terminate deployment if the private executor journal cannot prove the expected egress IP, KMS adapter, database, and cloud-runtime readiness. Public probes intentionally expose only aggregate `ok`, `ready`, or `not-ready` status.
+8. Before restarting the service, run `pnpm db:preflight:executor` from the
+   reviewed release workspace with the same Secrets Manager database binding.
+   Terminate deployment if it cannot prove the exact NOBYPASSRLS
+   `cryptobot_executor` identity, canonical target index/trigger, or stop-fence
+   function. Then terminate deployment if the private executor journal cannot
+   prove the expected egress IP, KMS adapter, database, and cloud-runtime
+   readiness. Public probes intentionally expose only aggregate `ok`, `ready`,
+   or `not-ready` status.
 
 The security group permits outbound HTTPS plus TCP 5432 for the Supabase IPv4 Session Pooler. The database runtime role and TLS-required connection string remain the authorization boundary; no inbound database traffic is opened.
 
 The SSM data source intentionally follows the latest Amazon Linux 2023 image for visibility, but routine plans ignore AMI drift and the executor has `prevent_destroy`. An AMI upgrade therefore requires a reviewed maintenance change that explicitly adjusts the lifecycle guard and replaces the instance during a planned window; it cannot silently replace production during an unrelated apply.
 
-The executor uses the official pinned AWS KMS and Secrets Manager SDKs. It refuses readiness unless KMS, fixed egress, database schema, and the credential-envelope adapter validate. Missing WEEX OAuth credentials keep `/oauth/weex/start` disabled with HTTP 503. Public probes do not expose feature flags, revisions, worker state, cache state, counts, or rate-limit data; those diagnostics remain in the private system journal.
+The executor uses the official pinned AWS KMS and Secrets Manager SDKs. It refuses readiness unless KMS, fixed egress, exact low-privilege PostgreSQL identity, the current target-exclusivity and stop-fence schema, and the credential-envelope adapter validate. Missing WEEX OAuth credentials keep `/oauth/weex/start` disabled with HTTP 503. Public probes do not expose feature flags, revisions, worker state, cache state, counts, or rate-limit data; those diagnostics remain in the private system journal.
 
 Before every infrastructure apply, compare `cloudflare_ipv4_cidrs` with Cloudflare's official `https://www.cloudflare.com/ips-v4` list. Cloudflare publishes additions before using them. A mismatch can either expose the origin or block a subset of Cloudflare edge traffic.
 

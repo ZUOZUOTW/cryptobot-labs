@@ -35,12 +35,16 @@ export interface StrategyPublicationCursor {
 
 const projection = `p.id,p.user_id AS userId,p.strategy_version_id AS strategyVersionId,
   p.backtest_job_id AS backtestJobId,p.slug,s.name,p.description,p.publisher_name AS publisherName,
-  p.weex_referral_url AS weexReferralUrl,s.market,s.symbol,v.config_json AS configJson,
+  CASE WHEN p.weex_referral_url IS NOT NULL THEN promoter.weex_referral_url ELSE NULL END AS weexReferralUrl,
+  s.market,s.symbol,v.config_json AS configJson,
   r.metrics_json AS metricsJson,r.equity_curve_json AS equityCurveJson,
   d.actual_start_at AS actualStartAt,d.actual_end_at AS actualEndAt,
   p.published_at AS publishedAt,p.updated_at AS updatedAt`;
 
 const publishedJoin = `FROM strategy_publications p
+  LEFT JOIN promoters promoter ON promoter.user_id=p.user_id
+    AND promoter.status='active' AND promoter.role IN ('kol','bd')
+    AND promoter.weex_referral_url IS NOT NULL AND promoter.approved_at IS NOT NULL
   JOIN strategy_versions v ON v.id=p.strategy_version_id AND v.user_id=p.user_id
   JOIN strategies s ON s.id=v.strategy_id AND s.user_id=v.user_id
   JOIN backtest_jobs j ON j.id=p.backtest_job_id AND j.user_id=p.user_id
@@ -84,6 +88,27 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
   };
 
   return {
+    async hasApprovedReferral(userId: string): Promise<boolean> {
+      const owner = id(userId, "userId");
+      const record = await database.prepare(`SELECT user_id FROM promoters
+        WHERE user_id=? AND status='active' AND role IN ('kol','bd')
+          AND weex_referral_url IS NOT NULL AND approved_at IS NOT NULL
+        LIMIT 1`).bind(owner).first<{ userId: string }>();
+      return record !== null;
+    },
+
+    async getApprovedReferralUrlBySlug(slug: string): Promise<string | null> {
+      if (!SLUG.test(slug)) return null;
+      const record = await database.prepare(`SELECT promoter.weex_referral_url AS weexReferralUrl
+        FROM strategy_publications p
+        JOIN promoters promoter ON promoter.user_id=p.user_id
+          AND promoter.status='active' AND promoter.role IN ('kol','bd')
+          AND promoter.weex_referral_url IS NOT NULL AND promoter.approved_at IS NOT NULL
+        WHERE p.slug=? AND p.weex_referral_url IS NOT NULL
+        LIMIT 1`).bind(slug).first<{ weexReferralUrl: string }>();
+      return record?.weexReferralUrl ?? null;
+    },
+
     async publish(input: {
       id: string;
       userId: string;
@@ -135,24 +160,32 @@ export function createStrategyPublicationRepository(database: ControlPlaneDataba
           jobId, owner, versionId).first<StrategyPublicationRecord>();
     },
 
-    async updateReferralUrl(input: {
+    async activateApprovedReferral(input: {
       userId: string;
       slug: string;
-      weexReferralUrl: string;
       now: number;
     }): Promise<boolean> {
-      exactInput(input, ["userId", "slug", "weexReferralUrl", "now"]);
+      exactInput(input, ["userId", "slug", "now"]);
       const owner = id(input.userId, "userId");
       const now = time(input.now, "now");
       if (!SLUG.test(input.slug)) return false;
-      if (input.weexReferralUrl.length < 12 || input.weexReferralUrl.length > 2_048) {
-        throw new Error("WEEX referral URL is invalid");
-      }
       const updated = await database.prepare(`UPDATE strategy_publications
-        SET weex_referral_url=?,updated_at=?
+        SET weex_referral_url=(
+          SELECT approved.weex_referral_url FROM promoters approved
+          WHERE approved.user_id=? AND approved.status='active'
+            AND approved.role IN ('kol','bd') AND approved.weex_referral_url IS NOT NULL
+            AND approved.approved_at IS NOT NULL
+          LIMIT 1
+        ),updated_at=?
         WHERE user_id=? AND slug=?
+          AND EXISTS (
+            SELECT 1 FROM promoters approved
+            WHERE approved.user_id=? AND approved.status='active'
+              AND approved.role IN ('kol','bd') AND approved.weex_referral_url IS NOT NULL
+              AND approved.approved_at IS NOT NULL
+          )
         RETURNING slug`)
-        .bind(input.weexReferralUrl, now, owner, input.slug).first<{ slug: string }>();
+        .bind(owner, now, owner, input.slug, owner).first<{ slug: string }>();
       return updated !== null;
     },
 

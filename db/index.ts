@@ -34,7 +34,10 @@ export function createControlPlaneDatabase(
   if (binding === null || typeof binding !== "object"
     || typeof (binding as { prepare?: unknown }).prepare !== "function"
     || typeof (binding as { batch?: unknown }).batch !== "function") {
-    return createPostgresControlPlaneDatabase(databaseUrl);
+    return createPostgresControlPlaneDatabase(
+      databaseUrl,
+      env.DEMO_MODE === "true" ? undefined : "cryptobot_netlify",
+    );
   }
   return binding as ControlPlaneDatabase;
 }

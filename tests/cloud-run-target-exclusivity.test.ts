@@ -39,11 +39,21 @@ describe("cloud strategy target exclusivity", () => {
     expect(repository).toContain("'[-/_]'");
     expect(repository).not.toContain("'[/_-]'");
     expect(migration).toMatch(/new\.market := configured_market[\s\S]*new\.symbol := configured_symbol/i);
-    expect(migration).toMatch(/new\.config_json := jsonb_set\([\s\S]*symbol[\s\S]*configured_symbol/i);
-    expect(migration).toMatch(/new\.risk_json := jsonb_set\([\s\S]*allowedSymbols[\s\S]*canonical_allowed_symbols/i);
+    expect(migration).not.toMatch(/new\.(?:config_json|risk_json)\s*:=/i);
+    expect(migration).not.toMatch(/jsonb_set\s*\(/i);
     expect(migration).toMatch(/cloud_runs_risk_target_check/i);
     expect(migration).toMatch(/jsonb_typeof\(allowed_value\) is distinct from 'string'/i);
     expect(migration).toMatch(/update public\.cloud_strategy_runs[\s\S]*set config_json = config_json,[\s\S]*risk_json = risk_json/i);
+    expect(migration).toMatch(/create or replace function private\.stop_cloud_strategy_run\(/i);
+    expect(migration).toMatch(/security definer[\s\S]*set search_path = ''/i);
+    expect(migration).toMatch(/select run\.\*[\s\S]*for update/i);
+    expect(migration).toMatch(/cloud_run_stop_order_in_flight/i);
+    expect(migration).toMatch(/status in \('claimed', 'unknown'\)/i);
+    expect(migration).toMatch(/exchange_order_filled[\s\S]*exchange_order_cancelled_partially_filled/i);
+    expect(migration).toMatch(/create trigger cloud_runs_reject_unsettled_stop/i);
+    expect(migration).toMatch(/revoke all on function private\.stop_cloud_strategy_run\(text, text, bigint, bigint\)[\s\S]*from public, anon, authenticated, service_role, cryptobot_executor, cryptobot_netlify/i);
+    expect(migration).toMatch(/grant execute on function private\.stop_cloud_strategy_run\(text, text, bigint, bigint\)[\s\S]*to cryptobot_netlify/i);
+    expect(migration).not.toMatch(/grant (?:select|insert|update|delete)[^;]*private\.cloud_order_intents[^;]*cryptobot_netlify/i);
 
     const database = new DatabaseSync(":memory:");
     databases.push(database);

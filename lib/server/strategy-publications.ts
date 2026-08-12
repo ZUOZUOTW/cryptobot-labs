@@ -180,12 +180,13 @@ export function parseWeexReferralUrl(value: unknown): string {
   return url.toString();
 }
 
-export function parseWeexReferralUpdateInput(value: unknown): { weexReferralUrl: string } {
+export function parseWeexReferralUpdateInput(value: unknown): { action: "activate-approved-referral" } {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.getPrototypeOf(value) !== Object.prototype) throw new HttpProblem(400, "invalid_request");
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).join(",") !== "weexReferralUrl") throw new HttpProblem(400, "invalid_request");
-  return { weexReferralUrl: parseWeexReferralUrl(record.weexReferralUrl) };
+  if (Object.keys(record).join(",") !== "action"
+    || record.action !== "activate-approved-referral") throw new HttpProblem(400, "invalid_request");
+  return { action: "activate-approved-referral" };
 }
 
 export function parsePublicationInput(value: unknown): {

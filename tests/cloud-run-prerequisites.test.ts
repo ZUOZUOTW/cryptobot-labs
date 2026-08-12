@@ -185,4 +185,33 @@ describe("cloud strategy launch prerequisites", () => {
       "running",
     ]);
   });
+
+  it("routes a stop through the atomic private order-settlement fence", async () => {
+    let sql = "";
+    let bindings: unknown[] = [];
+    const first = vi.fn().mockResolvedValue(null);
+    const database = {
+      prepare: vi.fn((statement: string) => {
+        sql = statement;
+        return { bind: vi.fn((...values: unknown[]) => {
+          bindings = values;
+          return { first };
+        }) };
+      }),
+    };
+
+    await createCloudRunRepository(database as never).transition({
+      userId: "user_1",
+      id: "crun_1",
+      state: "stopped",
+      expectedVersion: 4,
+      allowLiveResume: false,
+      now: 1_700_000_000_000,
+    });
+
+    expect(sql).toMatch(/from private\.stop_cloud_strategy_run\(\?,\?,\?,\?\)/);
+    expect(sql).not.toMatch(/update cloud_strategy_runs/i);
+    expect(bindings).toEqual(["user_1", "crun_1", 4, 1_700_000_000_000]);
+    expect(first).toHaveBeenCalledOnce();
+  });
 });

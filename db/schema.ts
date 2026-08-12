@@ -12,6 +12,21 @@ export const users = sqliteTable("users", {
   uniqueIndex("users_normalized_email_uidx").on(table.normalizedEmail),
 ]);
 
+/** Server-owned promoter approval. Browser identities and user-editable auth
+ * metadata must never be used to authorize referral links. */
+export const promoters = sqliteTable("promoters", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),
+  role: text("role").notNull(),
+  status: text("status").notNull(),
+  weexReferralUrl: text("weex_referral_url"),
+  approvedAt: timestamp("approved_at"),
+  updatedAt: timestamp("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("promoters_slug_uidx").on(table.slug),
+  index("promoters_status_role_idx").on(table.status, table.role),
+]);
+
 export const devices = sqliteTable("devices", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

@@ -170,7 +170,7 @@
   color: #dce8f8;
   padding: 1rem;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 0.72rem;
+  font-size: 0.875rem;
   line-height: 1.65;
   tab-size: 2;
 }
@@ -1099,7 +1099,14 @@
 .historical-feedback { margin: 0 0 1rem; padding: 0.75rem 0.9rem; border: 1px solid rgb(76 221 255 / 22%); border-radius: 0.7rem; background: rgb(76 221 255 / 5%); color: var(--cyan); font-size: 0.72rem; line-height: 1.6; }
 .historical-notice { border-color: rgb(255 107 98 / 24%); background: rgb(255 107 98 / 6%); color: #ffaaa4; }
 .historical-feedback { margin-top: 1rem; }
-.historical-feedback a { text-decoration: underline; text-underline-offset: 0.2rem; }
+.historical-feedback a {
+  display: inline-flex;
+  min-block-size: 2.75rem;
+  align-items: center;
+  padding-inline: 0.25rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
 .historical-feedback--error { border-color: rgb(255 107 98 / 28%); background: rgb(255 107 98 / 6%); color: var(--danger); }
 .historical-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin: 0; padding: 0; border: 0; }
 .historical-fields label,

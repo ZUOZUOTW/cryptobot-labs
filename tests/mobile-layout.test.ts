@@ -5,11 +5,18 @@ import { describe, expect, it } from "vitest";
 const globals = readFileSync(resolve("app/globals.css"), "utf8");
 const workshop = readFileSync(resolve("app/workshop.css"), "utf8");
 const auth = readFileSync(resolve("app/auth/AuthPage.module.css"), "utf8");
+const routeScrollReset = readFileSync(resolve("components/RouteScrollReset.tsx"), "utf8");
 
 describe("mobile layout safeguards", () => {
   it("does not impose a page-wide minimum width", () => {
     expect(globals).toMatch(/html\s*\{[\s\S]*?min-width:\s*0;/);
     expect(globals).toMatch(/\.site-main\s*\{[\s\S]*?min-width:\s*0;/);
+  });
+
+  it("resets retained route scroll without breaking intentional hash navigation", () => {
+    expect(routeScrollReset).toMatch(/usePathname\(\)/);
+    expect(routeScrollReset).toMatch(/if \(window\.location\.hash\) return;/);
+    expect(routeScrollReset).toMatch(/window\.scrollTo\(\{ top: 0, left: 0, behavior: "instant" \}\);/);
   });
 
   it("keeps primary controls at least 44 CSS pixels tall", () => {
@@ -41,12 +48,18 @@ describe("mobile layout safeguards", () => {
 
   it("keeps the secondary auth link touch-friendly", () => {
     expect(auth).toMatch(/\.cardFooter > a\s*\{[\s\S]*?min-height:\s*2\.75rem;/);
+    expect(workshop).toMatch(/\.historical-feedback a\s*\{[\s\S]*?min-block-size:\s*2\.75rem;/);
   });
 
   it("allows longer translated tab labels to wrap instead of truncating", () => {
     expect(globals).toMatch(
       /html:is\(\[data-locale="en"\],[\s\S]*?\.mobile-tab-bar span\s*\{[\s\S]*?overflow-wrap:\s*normal;[\s\S]*?white-space:\s*normal;[\s\S]*?word-break:\s*normal;/,
     );
+  });
+
+  it("keeps the compact language selector and code editor readable", () => {
+    expect(globals).toMatch(/@media \(max-width: 38rem\)[\s\S]*?\.language-switcher select\s*\{[^}]*?width:\s*5\.8rem;/);
+    expect(workshop).toMatch(/\.javascript-editor textarea\s*\{[\s\S]*?font-size:\s*0\.875rem;/);
   });
 
   it("keeps short discovery labels on word boundaries and stacks the 390px summary", () => {

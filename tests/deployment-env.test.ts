@@ -47,7 +47,7 @@ describe("deployment environment gate", () => {
       AUTH_COOKIE_SECRET: "a".repeat(32),
       DEMO_MODE: "false",
       PUBLIC_ORIGIN: "https://www.cryptobotlabs.app",
-      SUPABASE_DATABASE_URL: "postgresql://server-only.example/database",
+      SUPABASE_DATABASE_URL: "postgresql://cryptobot_netlify@server-only.example/database",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example_value",
       SUPABASE_URL: "https://project.supabase.co",
     };
@@ -65,6 +65,7 @@ describe("deployment environment gate", () => {
     }
 
     for (const [key, value] of [
+      ["SUPABASE_DATABASE_URL", "postgresql://postgres@server-only.example/database"],
       ["SUPABASE_URL", "not-a-url"],
       ["SUPABASE_URL", "http://project.supabase.co"],
       ["SUPABASE_URL", "https://project.supabase.co/auth"],
@@ -84,7 +85,7 @@ describe("deployment environment gate", () => {
       AUTH_COOKIE_SECRET: "a".repeat(32),
       DEMO_MODE: "false",
       PUBLIC_ORIGIN: "https://www.cryptobotlabs.app",
-      SUPABASE_DATABASE_URL: "postgresql://server-only.example/database",
+      SUPABASE_DATABASE_URL: "postgresql://cryptobot_netlify@server-only.example/database",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example_value",
       SUPABASE_URL: "https://project.supabase.co",
     };

@@ -258,6 +258,9 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
       if (!response.ok && body.error === "cloud_run_target_conflict") {
         throw new Error("cloud_run_target_conflict");
       }
+      if (!response.ok && body.error === "cloud_run_order_in_flight") {
+        throw new Error("cloud_run_order_in_flight");
+      }
       const updated = parseRun(body.run);
       if (!response.ok || !updated) throw new Error("transition_failed");
       setRun(updated);
@@ -268,7 +271,9 @@ export function CloudRunDetailPanel({ runId }: { runId: string }) {
     } catch (error) {
       setFeedback(error instanceof Error && error.message === "cloud_run_target_conflict"
         ? "此 WEEX 帳戶的同一市場與交易對已有其他未停止策略；目前策略維持原狀，請先停止原策略再恢復。"
-        : "控制命令未被接受；已保留原狀態，正在重新同步最新版本。");
+        : error instanceof Error && error.message === "cloud_run_order_in_flight"
+          ? "交易所訂單仍在核對中；策略維持原狀，交易目標尚未釋放。請等待訂單取得最終狀態後再停止。"
+          : "控制命令未被接受；已保留原狀態，正在重新同步最新版本。");
       await load(true);
     } finally {
       setBusy(false);

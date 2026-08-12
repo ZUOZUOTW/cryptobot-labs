@@ -6,6 +6,7 @@ import { STRATEGY_PRESETS } from "../data/strategies";
 
 const mocks = vi.hoisted(() => ({
   record: null as StrategyPublicationRecord | null,
+  approvedReferralUrl: null as string | null,
   keyParts: [] as string[],
   tags: [] as string[],
 }));
@@ -19,7 +20,10 @@ vi.mock("next/cache", () => ({
 }));
 vi.mock("../db", () => ({ createControlPlaneDatabase: vi.fn(() => ({})) }));
 vi.mock("../db/repositories", () => ({
-  createStrategyPublicationRepository: vi.fn(() => ({ getBySlug: async () => mocks.record })),
+  createStrategyPublicationRepository: vi.fn(() => ({
+    getBySlug: async () => mocks.record,
+    getApprovedReferralUrlBySlug: async () => mocks.approvedReferralUrl,
+  })),
 }));
 vi.mock("../lib/server/platform-env", () => ({ env: { DB: undefined } }));
 
@@ -61,6 +65,7 @@ const record = (overrides: Partial<StrategyPublicationRecord> = {}): StrategyPub
 describe("public strategy loader trust boundary", () => {
   beforeEach(() => {
     mocks.record = null;
+    mocks.approvedReferralUrl = null;
     mocks.keyParts = [];
     mocks.tags = [];
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -89,5 +94,25 @@ describe("public strategy loader trust boundary", () => {
   it("still surfaces non-moderation data corruption instead of caching it as not-found", async () => {
     mocks.record = record({ configJson: "{" });
     await expect(loadPublicStrategyPublication("strategy-memberlegacy")).rejects.toThrow();
+  });
+
+  it("never serves a cached legacy referral and resolves current approval on every load", async () => {
+    mocks.record = record({
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=STALE_MARKER",
+    });
+
+    await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toMatchObject({
+      weexReferralUrl: null,
+    });
+
+    mocks.approvedReferralUrl = "https://www.weex.com/register?inviteCode=CURRENT_APPROVED";
+    await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toMatchObject({
+      weexReferralUrl: "https://www.weex.com/register?inviteCode=CURRENT_APPROVED",
+    });
+
+    mocks.approvedReferralUrl = null;
+    await expect(loadPublicStrategyPublication("strategy-memberlegacy")).resolves.toMatchObject({
+      weexReferralUrl: null,
+    });
   });
 });

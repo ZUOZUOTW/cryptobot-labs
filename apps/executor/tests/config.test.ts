@@ -7,7 +7,7 @@ const env = {
   AWS_REGION: "ap-northeast-1",
   AWS_KMS_KEY_ID: "arn:aws:kms:ap-northeast-1:123456789012:key/12345678-1234-1234-1234-123456789abc",
   EXPECTED_EGRESS_IP: "203.0.113.10",
-  SUPABASE_DATABASE_URL: "postgresql://user:password@example.com/postgres?sslmode=require",
+  SUPABASE_DATABASE_URL: "postgresql://cryptobot_executor:password@example.com/postgres?sslmode=require",
   PUBLIC_ORIGIN: "https://cryptobot-labs.netlify.app",
   WEEX_BROKER_ID: "WEEX111162",
   WEEX_CLIENT_ID: "client-id",
@@ -62,6 +62,9 @@ describe("cloud executor production gates", () => {
   it("rejects missing KMS, insecure database, and invalid callback configuration", () => {
     expect(() => loadExecutorConfig({ ...env, AWS_KMS_KEY_ID: "alias/not-a-production-arn" })).toThrow(/KMS/);
     expect(() => loadExecutorConfig({ ...env, SUPABASE_DATABASE_URL: "postgres://u:p@example.com/db" })).toThrow(/TLS/);
+    expect(() => loadExecutorConfig({ ...env,
+      SUPABASE_DATABASE_URL: "postgresql://postgres:password@example.com/postgres?sslmode=require",
+    })).toThrow(/cryptobot_executor/);
     expect(() => loadExecutorConfig({ ...env, WEEX_OAUTH_REDIRECT_URI: "https://api.example.com/callback" })).toThrow(/path/);
   });
 

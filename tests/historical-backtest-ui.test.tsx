@@ -154,12 +154,15 @@ describe("historical backtest UI", () => {
 
   it("offers sign-in recovery and blocks invalid JavaScript before persistence", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 401 }));
+    const onStateChange = vi.fn();
     const user = userEvent.setup();
-    const { rerender } = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} />);
+    const { rerender } = render(<BacktestRequestForm config={STRATEGY_PRESETS[0]} onStateChange={onStateChange} />);
     await user.click(screen.getByRole("button", { name: "執行進階歷史回測" }));
     expect(await screen.findByRole("link", { name: "登入" })).toHaveAttribute("href", "/auth?return_to=%2Fbacktests");
+    expect(onStateChange).toHaveBeenCalledWith("ensuring");
+    expect(onStateChange).toHaveBeenLastCalledWith("unauthorized");
 
-    rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], source: "fetch('https://example.com')" }} />);
+    rerender(<BacktestRequestForm config={{ ...STRATEGY_PRESETS[0], source: "fetch('https://example.com')" }} onStateChange={onStateChange} />);
     const button = screen.getByRole("button", { name: "執行進階歷史回測" });
     expect(button).toBeDisabled();
     expect(screen.getByText(/回測結果會記錄程式碼雜湊/)).toBeInTheDocument();

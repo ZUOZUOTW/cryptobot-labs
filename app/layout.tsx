@@ -8,6 +8,7 @@ import { PlatformAuthProvider } from "@/components/PlatformAuthProvider";
 import { I18nProvider } from "@/components/I18nProvider";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { PwaRegistrar } from "@/components/PwaRegistrar";
+import { RouteScrollReset } from "@/components/RouteScrollReset";
 import { demoModeEnabled } from "@/lib/server/demo-mode";
 import { DEFAULT_LOCALE, localeDirection } from "@/lib/i18n/locales";
 import {
@@ -61,6 +62,7 @@ export default async function RootLayout({
           <PlatformAuthProvider mode={demoMode ? "demo" : "production"} initialUser={null}>
             <DemoModeBanner />
             <SiteHeader />
+            <RouteScrollReset />
             <main className="site-main" id="main-content" tabIndex={-1}>
               <RouteCompanion />
               {children}
